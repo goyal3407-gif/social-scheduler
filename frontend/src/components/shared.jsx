@@ -11,8 +11,8 @@ export function PlatformBadge({ platform }) {
 
 export function Thumb({ post }) {
   if (post?.mediaUrl) {
-    if (post.mediaType === 'image') return <img className="thumb" src={post.mediaUrl} alt="" loading="lazy" />
-    return <video className="thumb" src={post.mediaUrl} muted playsInline preload="metadata" />
+    if (post.mediaType === 'image') return <img className="thumb" src={post.mediaUrl} alt="" loading="lazy" decoding="async" />
+    return <video className="thumb" src={post.mediaUrl} muted playsInline preload="none" />
   }
   return <div className="thumb-ph"><IconPlay size={22} /></div>
 }

@@ -35,9 +35,9 @@ const CONTENT_BANK = [
   { title: 'Behind the scenes', text: 'Show the messy middle — the setup, the outtakes, the real work.' },
   { title: 'Quick tutorial', text: 'Teach one thing in under 60 seconds. End with “save this for later”.' }
 ]
-// Illustrative engagement pattern (best times) — labelled as a guide, not
-// measured analytics, until the server reports real insights.
-const HEATMAP = [
+// Illustrative best-times guide — shown ONLY when the user has too few
+// of their own timed posts to build a real pattern from.
+const GUIDE_HEATMAP = [
   // rows: Mon..Sun, cols: 6a 9a 12p 3p 5p 7p 9p  (0-4 strength)
   [1, 2, 2, 1, 2, 4, 3], [1, 2, 3, 2, 2, 4, 3], [2, 2, 2, 1, 3, 4, 4],
   [1, 3, 2, 2, 2, 3, 4], [2, 2, 3, 2, 3, 4, 3], [2, 3, 3, 3, 3, 3, 2],
@@ -98,6 +98,43 @@ export default function Tools({ posts, stats, templates, onCreateTemplate, onUse
 
   const vault = HASHTAG_VAULT.filter((h) => (vaultCat === 'All' || h.cat === vaultCat) && h.tag.toLowerCase().includes(vaultQ.toLowerCase()))
 
+  // Best-time heatmap from the user's OWN posts (real data): counts of
+  // scheduled/published posts by weekday × hour bucket, scaled 0–4. With
+  // fewer than 10 timed posts the pattern is noise, so the general guide
+  // is shown instead — labelled as a guide.
+  const HOUR_BUCKETS = [6, 9, 12, 15, 17, 19, 21]
+  const heatmap = useMemo(() => {
+    const timed = (posts || []).filter((p) => p.scheduleTime && (p.status === 'scheduled' || p.status === 'published'))
+    if (timed.length < 10) return { grid: GUIDE_HEATMAP, real: false, count: timed.length }
+    const counts = Array.from({ length: 7 }, () => Array(7).fill(0))
+    for (const p of timed) {
+      const d = new Date(p.scheduleTime)
+      if (Number.isNaN(d.getTime())) continue
+      const row = (d.getDay() + 6) % 7 // Monday-first
+      const h = d.getHours()
+      let col = 0
+      for (let i = 0; i < HOUR_BUCKETS.length; i++) if (h >= HOUR_BUCKETS[i]) col = i
+      counts[row][col]++
+    }
+    const max = Math.max(1, ...counts.flat())
+    return { grid: counts.map((row) => row.map((v) => Math.round((v / max) * 4))), real: true, count: timed.length }
+  }, [posts])
+
+  // Why did publishes fail? Grouped from the stored lastPublishError.
+  const failureReasons = useMemo(() => {
+    const m = {}
+    for (const p of posts || []) {
+      if (p.status !== 'failed' || !p.lastPublishError) continue
+      const e = p.lastPublishError
+      const key = /token|expired|invalid/i.test(e) ? 'Instagram token invalid or expired'
+        : /format|process|MP4|JPG/i.test(e) ? 'Media format / processing'
+        : /reach|connection|network/i.test(e) ? 'Could not reach Instagram'
+        : 'Other Instagram error'
+      m[key] = (m[key] || 0) + 1
+    }
+    return Object.entries(m).sort((a, b) => b[1] - a[1])
+  }, [posts])
+
   const makeReply = () => {
     const c = replyComment.trim()
     if (!c) { setReplyDraft(''); return }
@@ -145,6 +182,15 @@ export default function Tools({ posts, stats, templates, onCreateTemplate, onUse
             <div className="bar-row"><span>Drafts</span><div className="bar-track"><div className="bar-fill" style={{ width: `${(byStatus.draft / total) * 100}%` }} /></div><b>{byStatus.draft}</b></div>
             <div className="bar-row"><span>Failed</span><div className="bar-track"><div className="bar-fill" style={{ width: `${(byStatus.failed / total) * 100}%` }} /></div><b>{byStatus.failed}</b></div>
             <p className="muted small mt">Total posts: {posts?.length || 0} · Media files: {s.mediaCount ?? '—'}</p>
+            {failureReasons.length > 0 && (
+              <div style={{ marginTop: 16 }}>
+                <h3>Why publishes failed</h3>
+                {failureReasons.map(([reason, n]) => (
+                  <div key={reason} className="bar-row"><span>{reason}</span><div className="bar-track"><div className="bar-fill" style={{ width: `${(n / Math.max(1, byStatus.failed)) * 100}%` }} /></div><b>{n}</b></div>
+                ))}
+                <p className="muted small mt">Token errors: reconnect in Settings. Media errors: use a standard MP4 (H.264) or JPG, and Reels format for vertical video.</p>
+              </div>
+            )}
             <h3 style={{ marginTop: 20 }}>Posts per platform</h3>
             {byPlatform.length === 0 ? <p className="muted small mt">No posts yet.</p> : byPlatform.map(([name, v]) => (
               <div key={name} className="bar-row"><span>{name}</span><div className="bar-track"><div className="bar-fill" style={{ width: `${(v / maxPlatform) * 100}%` }} /></div><b>{v}</b></div>
@@ -212,18 +258,20 @@ export default function Tools({ posts, stats, templates, onCreateTemplate, onUse
       {tool === 'besttime' && (
         <section className="card">
           <h2>Best-time heatmap</h2>
-          <p className="muted small mb">A general guide for when audiences are usually online — evenings, especially 7–9pm, tend to be strongest. Your own results will vary; watch which of your posts actually perform.</p>
+          <p className="muted small mb">{heatmap.real
+            ? `Built from your own ${heatmap.count} scheduled/published posts — darker cells are the times you actually post most. It shows your pattern, not measured audience reach (Instagram does not share that with this app).`
+            : 'A general guide for when audiences are usually online — evenings, especially 7–9pm, tend to be strongest. Schedule 10+ posts and this heatmap switches to your own posting pattern.'}</p>
           <div style={{ display: 'grid', gridTemplateColumns: '44px 1fr', gap: 6, alignItems: 'start' }}>
             <div />
             <div className="heatmap" style={{ marginBottom: 5 }}>{HOURS.map((h) => <span key={h} style={{ fontSize: 10.5, textAlign: 'center', color: 'var(--muted)', fontWeight: 700 }}>{h}</span>)}</div>
-            {HEATMAP.map((row, i) => (
+            {heatmap.grid.map((row, i) => (
               <Fragment key={DAYS[i]}>
                 <span style={{ fontSize: 12, fontWeight: 700, paddingTop: 6 }}>{DAYS[i]}</span>
                 <div className="heatmap">{row.map((v, j) => <div key={j} className={`heat heat-${v}`} title={`${DAYS[i]} ${HOURS[j]} — strength ${v}/4`}>{v >= 3 ? '●' : ''}</div>)}</div>
               </Fragment>
             ))}
           </div>
-          <p className="muted small mt">Darker = usually busier. This is a guide, not measured data from your account.</p>
+          <p className="muted small mt">{heatmap.real ? 'Your posting pattern — darker = you post there more often.' : 'Darker = usually busier. This is a guide, not measured data from your account.'}</p>
         </section>
       )}
 

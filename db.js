@@ -24,7 +24,7 @@ const path = require('path');
 const crypto = require('crypto');
 const mongoose = require('mongoose');
 
-const DATA = path.join(__dirname, 'data');
+const DATA = process.env.DATA_DIR || path.join(__dirname, 'data');
 try { fs.mkdirSync(DATA, { recursive: true }); } catch { /* read-only fs on Vercel */ }
 
 const DB_NAME = 'social_scheduler';
@@ -54,6 +54,7 @@ const sessionSchema = new mongoose.Schema({
   userId: { type: String, index: true }, expiresAt: Date,
   revoked: { type: Boolean, default: false }, createdAt: String,
 });
+sessionSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 }); // expired sessions self-clean
 const postSchema = new mongoose.Schema({
   id: { type: String, unique: true, index: true },
   userId: { type: String, index: true },
@@ -62,6 +63,8 @@ const postSchema = new mongoose.Schema({
   status: { type: String, default: 'scheduled' }, format: String,
   liveUrl: String, instagramId: String, containerId: String, createdAt: String,
 }, { strict: false });
+postSchema.index({ userId: 1, status: 1, scheduleTime: 1 });
+postSchema.index({ userId: 1, instagramId: 1 }, { unique: true, sparse: true, partialFilterExpression: { instagramId: { $exists: true } } });
 const mediaSchema = new mongoose.Schema({
   id: { type: String, unique: true, index: true },
   userId: { type: String, index: true },
@@ -69,6 +72,8 @@ const mediaSchema = new mongoose.Schema({
   folder: String, tags: [String], favorite: Boolean, usedCount: Number,
   instagramId: String, permalink: String, createdAt: String,
 }, { strict: false });
+mediaSchema.index({ userId: 1, createdAt: -1 });
+mediaSchema.index({ userId: 1, instagramId: 1 }, { unique: true, sparse: true, partialFilterExpression: { instagramId: { $exists: true } } });
 const templateSchema = new mongoose.Schema({
   id: { type: String, unique: true, index: true },
   userId: { type: String, index: true }, name: String, text: String,
@@ -266,6 +271,42 @@ async function saveUser(user) {
   if (isMongo()) { await User.create(user); return user; }
   const list = jsonList('users'); list.push(user); jsonSave('users', list); return user;
 }
+async function updateUser(id, patch) {
+  await ensureMongo();
+  if (isMongo()) { const u = await User.findOneAndUpdate({ id }, patch, { new: true }).lean(); return u ? strip(u) : null; }
+  const list = jsonList('users');
+  const item = list.find((x) => x.id === id);
+  if (!item) return null;
+  Object.assign(item, patch); jsonSave('users', list); return item;
+}
+// Delete a user and every document that belongs to them (posts, media,
+// templates, settings, Instagram connection, import jobs, sessions).
+async function deleteUserData(userId) {
+  await ensureMongo();
+  if (isMongo()) {
+    await Promise.all([
+      User.deleteOne({ id: userId }),
+      Session.deleteMany({ userId }),
+      Post.deleteMany({ userId }),
+      Media.deleteMany({ userId }),
+      Template.deleteMany({ userId }),
+      SettingsDoc.deleteOne({ userId }),
+      InstagramDoc.deleteOne({ userId }),
+      ImportJob.deleteMany({ userId }),
+    ]);
+    return;
+  }
+  jsonSave('users', jsonList('users').filter((x) => x.id !== userId));
+  jsonSave('sessions', jsonList('sessions').filter((x) => x.userId !== userId));
+  jsonSave('posts', jsonList('posts').filter((x) => x.userId !== userId));
+  jsonSave('media', jsonList('media').filter((x) => x.userId !== userId));
+  jsonSave('templates', jsonList('templates').filter((x) => x.userId !== userId));
+  const settings = load(JSON_FILES.settings, {});
+  if (settings && typeof settings === 'object') { delete settings[userId]; save(JSON_FILES.settings, settings); }
+  const ig = load(JSON_FILES.instagram, {});
+  if (ig && typeof ig === 'object') { delete ig[userId]; save(JSON_FILES.instagram, ig); }
+  jsonSave('importJobs', jsonList('importJobs').filter((x) => x.userId !== userId));
+}
 async function countUsers() { return (await listUsers()).length; }
 
 // ---------- sessions (ledger: login writes one, logout marks it revoked) ----------
@@ -293,16 +334,44 @@ async function isSessionRevoked(id) {
   const s = jsonList('sessions').find((x) => x.id === id);
   return !!(s && s.revoked);
 }
+async function listSessions() {
+  await ensureMongo();
+  if (isMongo()) return stripAll(await Session.find({}).lean());
+  return jsonList('sessions');
+}
+
+// Mongo filter that returns only docs visible to this user: their own docs,
+// plus (for the owner only) legacy docs saved before per-user scoping that
+// have no userId. Used by every list/update/delete so the database — not
+// in-memory filtering — enforces isolation.
+function scopeFilter(userId, owner) {
+  if (userId && userId === owner) return { $or: [{ userId }, { userId: { $exists: false } }] };
+  return { userId };
+}
+function pageSlice(list, opts) {
+  if (opts?.all) return list;
+  const limit = Math.min(Math.max(Number(opts?.limit) || 200, 1), 500);
+  const offset = Math.max(Number(opts?.offset) || 0, 0);
+  return list.slice(offset, offset + limit);
+}
 
 // ---------- posts ----------
-async function listPosts(userId) {
+async function listPosts(userId, opts = {}) {
   await ensureMongo();
   const owner = await ownerId();
-  if (isMongo()) return stripAll(await Post.find({}).lean()).filter((d) => visibleTo([d], userId, owner).length);
-  return visibleTo(jsonList('posts'), userId, owner);
+  if (isMongo()) {
+    const q = Post.find(scopeFilter(userId, owner)).sort({ createdAt: 1 });
+    if (!opts.all) {
+      const limit = Math.min(Math.max(Number(opts.limit) || 200, 1), 500);
+      const offset = Math.max(Number(opts.offset) || 0, 0);
+      q.skip(offset).limit(limit);
+    }
+    return stripAll(await q.lean());
+  }
+  return pageSlice(visibleTo(jsonList('posts'), userId, owner), opts);
 }
 async function getPost(userId, id) {
-  const all = await listPosts(userId);
+  const all = await listPosts(userId, { all: true });
   return all.find((p) => p.id === id) || null;
 }
 async function savePost(post) {
@@ -319,7 +388,12 @@ async function updatePost(userId, id, patch) {
   await ensureMongo();
   const existing = await getPost(userId, id);
   if (!existing) return null;
-  if (isMongo()) { const p = await Post.findOneAndUpdate({ id }, patch, { new: true }).lean(); return p ? strip(p) : null; }
+  if (isMongo()) {
+    const owner = await ownerId();
+    const filter = { $and: [{ id }, scopeFilter(userId, owner)] };
+    const p = await Post.findOneAndUpdate(filter, patch, { new: true }).lean();
+    return p ? strip(p) : null;
+  }
   const list = jsonList('posts');
   const item = list.find((x) => x.id === id);
   if (!item) return null;
@@ -329,16 +403,28 @@ async function deletePost(userId, id) {
   await ensureMongo();
   const existing = await getPost(userId, id);
   if (!existing) return false;
-  if (isMongo()) { await Post.deleteOne({ id }); return true; }
+  if (isMongo()) {
+    const owner = await ownerId();
+    await Post.deleteOne({ $and: [{ id }, scopeFilter(userId, owner)] });
+    return true;
+  }
   jsonSave('posts', jsonList('posts').filter((x) => x.id !== id)); return true;
 }
 
 // ---------- media ----------
-async function listMedia(userId) {
+async function listMedia(userId, opts = {}) {
   await ensureMongo();
   const owner = await ownerId();
-  if (isMongo()) return stripAll(await Media.find({}).lean()).filter((d) => visibleTo([d], userId, owner).length);
-  return visibleTo(jsonList('media'), userId, owner);
+  if (isMongo()) {
+    const q = Media.find(scopeFilter(userId, owner)).sort({ createdAt: -1 });
+    if (!opts.all) {
+      const limit = Math.min(Math.max(Number(opts.limit) || 200, 1), 500);
+      const offset = Math.max(Number(opts.offset) || 0, 0);
+      q.skip(offset).limit(limit);
+    }
+    return stripAll(await q.lean());
+  }
+  return pageSlice(visibleTo(jsonList('media'), userId, owner), opts);
 }
 async function saveMedia(item) {
   await ensureMongo();
@@ -352,9 +438,13 @@ async function saveMediaBulk(items) {
 }
 async function updateMedia(userId, id, patch) {
   await ensureMongo();
-  const all = await listMedia(userId);
+  const all = await listMedia(userId, { all: true });
   if (!all.some((m) => m.id === id)) return null;
-  if (isMongo()) { const m = await Media.findOneAndUpdate({ id }, patch, { new: true }).lean(); return m ? strip(m) : null; }
+  if (isMongo()) {
+    const owner = await ownerId();
+    const m = await Media.findOneAndUpdate({ $and: [{ id }, scopeFilter(userId, owner)] }, patch, { new: true }).lean();
+    return m ? strip(m) : null;
+  }
   const list = jsonList('media');
   const item = list.find((x) => x.id === id);
   if (!item) return null;
@@ -362,9 +452,13 @@ async function updateMedia(userId, id, patch) {
 }
 async function deleteMedia(userId, id) {
   await ensureMongo();
-  const all = await listMedia(userId);
+  const all = await listMedia(userId, { all: true });
   if (!all.some((m) => m.id === id)) return false;
-  if (isMongo()) { await Media.deleteOne({ id }); return true; }
+  if (isMongo()) {
+    const owner = await ownerId();
+    await Media.deleteOne({ $and: [{ id }, scopeFilter(userId, owner)] });
+    return true;
+  }
   jsonSave('media', jsonList('media').filter((x) => x.id !== id)); return true;
 }
 
@@ -372,7 +466,7 @@ async function deleteMedia(userId, id) {
 async function listTemplates(userId) {
   await ensureMongo();
   const owner = await ownerId();
-  if (isMongo()) return stripAll(await Template.find({}).lean()).filter((d) => visibleTo([d], userId, owner).length);
+  if (isMongo()) return stripAll(await Template.find(scopeFilter(userId, owner)).lean());
   return visibleTo(jsonList('templates'), userId, owner);
 }
 async function saveTemplate(tpl) {
@@ -470,8 +564,8 @@ module.exports = {
   connect, ensureMongo, isMongo, getStatus, getLastError: () => lastError,
   DB_NAME, load, save,
   encryptToken, decryptToken, isTokenEncryptionAvailable,
-  listUsers, getUserByEmail, getUserById, saveUser, countUsers, ownerId,
-  createSession, revokeSession, isSessionRevoked,
+  listUsers, getUserByEmail, getUserById, saveUser, updateUser, deleteUserData, countUsers, ownerId,
+  createSession, revokeSession, isSessionRevoked, listSessions,
   listPosts, getPost, savePost, savePostsBulk, updatePost, deletePost,
   listMedia, saveMedia, saveMediaBulk, updateMedia, deleteMedia,
   listTemplates, saveTemplate,

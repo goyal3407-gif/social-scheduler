@@ -9,6 +9,7 @@ export default function Auth({ onAuth }) {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [showPw, setShowPw] = useState(false)
 
   const submit = async (e) => {
     e.preventDefault()
@@ -43,7 +44,10 @@ export default function Auth({ onAuth }) {
         <label htmlFor="authEmail">Email</label>
         <input id="authEmail" type="email" autoComplete="email" placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} />
         <label htmlFor="authPassword" style={{ marginTop: 14 }}>Password</label>
-        <input id="authPassword" type="password" autoComplete={mode === 'signup' ? 'new-password' : 'current-password'} placeholder={mode === 'signup' ? 'At least 8 characters' : 'Your password'} value={password} onChange={(e) => setPassword(e.target.value)} />
+        <div style={{ display: 'flex', gap: 8 }}>
+          <input id="authPassword" type={showPw ? 'text' : 'password'} autoComplete={mode === 'signup' ? 'new-password' : 'current-password'} placeholder={mode === 'signup' ? 'At least 8 characters' : 'Your password'} value={password} onChange={(e) => setPassword(e.target.value)} />
+          <button type="button" className="btn ghost small" style={{ flex: 'none' }} onClick={() => setShowPw(!showPw)} aria-label={showPw ? 'Hide password' : 'Show password'}>{showPw ? 'Hide' : 'Show'}</button>
+        </div>
         {error && <div className="alert error">{error}</div>}
         <button type="submit" className="btn primary block mt" disabled={busy}>
           {busy ? 'Please wait…' : mode === 'signup' ? 'Create account' : 'Log in'}

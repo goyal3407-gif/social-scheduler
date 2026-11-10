@@ -1,7 +1,33 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { fmtDate } from '../api.js'
 import { Skeleton, Empty, ErrorBox } from './shared.jsx'
 import { IconHeart, IconTrash, IconSearch } from './icons.jsx'
+
+const PAGE_SIZE = 24
+
+// Probe a file or URL for its real dimensions/duration (stored with the
+// media item so Studio's reel-safety check never needs hand-typed sizes).
+function probeUrl(url, isVideo) {
+  return new Promise((resolve) => {
+    const done = (meta) => resolve(meta)
+    const timer = setTimeout(() => done({}), 2500)
+    const finish = (meta) => { clearTimeout(timer); done(meta) }
+    try {
+      if (isVideo) {
+        const v = document.createElement('video')
+        v.preload = 'metadata'
+        v.onloadedmetadata = () => finish({ width: v.videoWidth || 0, height: v.videoHeight || 0, duration: Math.round(v.duration || 0) })
+        v.onerror = () => finish({})
+        v.src = url
+      } else {
+        const img = new Image()
+        img.onload = () => finish({ width: img.naturalWidth || 0, height: img.naturalHeight || 0 })
+        img.onerror = () => finish({})
+        img.src = url
+      }
+    } catch { finish({}) }
+  })
+}
 
 export default function MediaLibrary({ media, loading, error, onRetry, onAddLink, onUpload, onToggleFav, onDelete, onUse }) {
   const [q, setQ] = useState('')
@@ -15,7 +41,10 @@ export default function MediaLibrary({ media, loading, error, onRetry, onAddLink
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
   const [err, setErr] = useState('')
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE)
   const fileRef = useRef(null)
+
+  useEffect(() => { setVisibleCount(PAGE_SIZE) }, [q, folder, onlyFav])
 
   const folders = useMemo(() => {
     const set = new Set((media || []).map((m) => m.folder).filter(Boolean))
@@ -43,7 +72,12 @@ export default function MediaLibrary({ media, loading, error, onRetry, onAddLink
       // The live site (Vercel serverless) accepts about 4 MB per request —
       // bigger files fail there even though local dev allows 60 MB.
       if (f.size > 4.5 * 1024 * 1024) { setErr(`"${f.name}" is over the live site's ~4 MB upload limit and was skipped — add it by public link instead (Add by link, on the right).`); continue }
-      try { await onUpload(f, { folder: newFolder || undefined }); ok++ } catch (e) { setErr(e.message || 'Upload failed.') }
+      try {
+        const isVideo = /^video\//.test(f.type) || /\.(mp4|mov|webm)$/i.test(f.name)
+        const meta = await probeUrl(URL.createObjectURL(f), isVideo)
+        await onUpload(f, { folder: newFolder || undefined, ...meta })
+        ok++
+      } catch (e) { setErr(e.message || 'Upload failed.') }
     }
     setBusy(false)
     if (ok) setMsg(`Uploaded ${ok} file${ok === 1 ? '' : 's'}.`)
@@ -55,7 +89,9 @@ export default function MediaLibrary({ media, loading, error, onRetry, onAddLink
     if (!url.trim()) { setErr('Paste a media URL first.'); return }
     setBusy(true)
     try {
-      await onAddLink({ url: url.trim(), title: title.trim() || url.trim(), folder: newFolder || undefined, tags: tags.split(',').map((t) => t.trim()).filter(Boolean) })
+      const isVideo = !/\.(png|jpe?g|gif|webp|avif)(\?|$)/i.test(url.trim())
+      const meta = await probeUrl(url.trim(), isVideo)
+      await onAddLink({ url: url.trim(), title: title.trim() || url.trim(), folder: newFolder || undefined, tags: tags.split(',').map((t) => t.trim()).filter(Boolean), ...meta })
       setMsg('Link added to your library.')
       setUrl(''); setTitle(''); setTags('')
     } catch (e2) { setErr(e2.message || 'Could not add link.') }
@@ -119,22 +155,29 @@ export default function MediaLibrary({ media, loading, error, onRetry, onAddLink
       {loading ? <Skeleton rows={3} /> : filtered.length === 0 ? (
         <div className="card"><Empty title="Library is empty" body={q || folder !== 'all' || onlyFav ? 'Nothing matches those filters — try clearing them.' : 'Upload your first video or image, or add one by link, and it will live here ready for Studio.'} /></div>
       ) : (
-        <div className="media-grid">
-          {filtered.map((m) => (
-            <article key={m.id} className="media-card">
-              {m.kind === 'image' ? <img src={m.url} alt={m.title || ''} loading="lazy" /> : <video src={m.url} muted preload="metadata" />}
-              <div className="mc-body">
-                <b title={m.title || m.url}>{m.title || 'Untitled'}</b>
-                <span className="muted small">{m.folder || 'Unsorted'} · {fmtDate(m.createdAt)}{m.usedCount ? ` · Used ${m.usedCount}×` : ''}</span>
-                {(m.tags || []).length > 0 && <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 6 }}>{m.tags.map((t) => <span key={t} className="chip">{t}</span>)}</div>}
-                <div style={{ display: 'flex', gap: 6, marginTop: 9, flexWrap: 'wrap' }}>
-                  <button type="button" className="btn primary small" onClick={() => onUse(m)}>Use in Studio</button>
-                  <button type="button" className="btn ghost small" aria-label={m.favorite ? 'Remove favourite' : 'Mark favourite'} onClick={() => onToggleFav(m)}><span className={m.favorite ? 'heart' : ''}><IconHeart size={15} filled={Boolean(m.favorite)} /></span></button>
-                  <button type="button" className="btn danger small" aria-label="Delete media" onClick={() => onDelete(m)}><IconTrash size={15} /></button>
+        <div>
+          <div className="media-grid">
+            {filtered.slice(0, visibleCount).map((m) => (
+              <article key={m.id} className="media-card">
+                {m.kind === 'image' ? <img src={m.url} alt={m.title || ''} loading="lazy" decoding="async" /> : <video src={m.url} muted preload="none" />}
+                <div className="mc-body">
+                  <b title={m.title || m.url}>{m.title || 'Untitled'}</b>
+                  <span className="muted small">{m.folder || 'Unsorted'} · {fmtDate(m.createdAt)}{m.usedCount ? ` · Used ${m.usedCount}×` : ''}{m.width && m.height ? ` · ${m.width}×${m.height}` : ''}</span>
+                  {(m.tags || []).length > 0 && <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 6 }}>{m.tags.map((t) => <span key={t} className="chip">{t}</span>)}</div>}
+                  <div style={{ display: 'flex', gap: 6, marginTop: 9, flexWrap: 'wrap' }}>
+                    <button type="button" className="btn primary small" onClick={() => onUse(m)}>Use in Studio</button>
+                    <button type="button" className="btn ghost small" aria-label={m.favorite ? 'Remove favourite' : 'Mark favourite'} onClick={() => onToggleFav(m)}><span className={m.favorite ? 'heart' : ''}><IconHeart size={15} filled={Boolean(m.favorite)} /></span></button>
+                    <button type="button" className="btn danger small" aria-label="Delete media" onClick={() => onDelete(m)}><IconTrash size={15} /></button>
+                  </div>
                 </div>
-              </div>
-            </article>
-          ))}
+              </article>
+            ))}
+          </div>
+          {filtered.length > visibleCount && (
+            <div style={{ textAlign: 'center', marginTop: 18 }}>
+              <button type="button" className="btn ghost" onClick={() => setVisibleCount((c) => c + PAGE_SIZE)}>Load more ({filtered.length - visibleCount} remaining)</button>
+            </div>
+          )}
         </div>
       )}
     </div>

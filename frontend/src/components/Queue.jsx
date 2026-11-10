@@ -1,31 +1,59 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { fmtDateTime } from '../api.js'
 import { PostRow, Skeleton, Empty, StatusBadge, PlatformBadge } from './shared.jsx'
 
 const STATUSES = ['scheduled', 'draft', 'published', 'failed']
 const LABELS = { scheduled: 'Scheduled', draft: 'Drafts', published: 'Published', failed: 'Failed' }
 
-export default function Queue({ posts, loading, onEdit, onDelete, onPublish, publishingId, onCreate, onDuplicate, onReschedule, onRescheduleNextBest }) {
+export default function Queue({ posts, loading, onEdit, onDelete, onPublish, publishingId, onCreate, onDuplicate, onReschedule, onRescheduleNextBest, overdue, onPublishDue, onDeleteMany }) {
   const [view, setView] = useState('list')
   const [filter, setFilter] = useState('all')
   const [platform, setPlatform] = useState('all')
   const [q, setQ] = useState('')
+  const [qDebounced, setQDebounced] = useState('')
+  const [selected, setSelected] = useState(new Set())
+
+  useEffect(() => {
+    const t = setTimeout(() => setQDebounced(q), 150)
+    return () => clearTimeout(t)
+  }, [q])
 
   const filtered = useMemo(() => {
     let list = [...(posts || [])].sort((a, b) => new Date(a.scheduleTime || 0) - new Date(b.scheduleTime || 0))
     if (filter !== 'all') list = list.filter((p) => p.status === filter)
     if (platform !== 'all') list = list.filter((p) => p.platform === platform)
-    if (q.trim()) {
-      const needle = q.toLowerCase()
+    if (qDebounced.trim()) {
+      const needle = qDebounced.toLowerCase()
       list = list.filter((p) => `${p.caption || ''} ${p.hashtags || ''} ${p.cta || ''}`.toLowerCase().includes(needle))
     }
     return list
-  }, [posts, filter, platform, q])
+  }, [posts, filter, platform, qDebounced])
+
+  const exportCsv = () => {
+    const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`
+    const lines = [['Media', 'Caption', 'Hashtags', 'CTA', 'Platform', 'Schedule Time', 'Status', 'Format', 'Live URL'].join(',')]
+    for (const p of filtered) lines.push([p.mediaUrl, p.caption, p.hashtags, p.cta, p.platform, p.scheduleTime, p.status, p.format, p.liveUrl].map(esc).join(','))
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = 'social-scheduler-queue.csv'
+    a.click()
+    URL.revokeObjectURL(a.href)
+  }
+  const toggleSelect = (id) => setSelected((prev) => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next })
+  const selectedItems = filtered.filter((p) => selected.has(p.id))
 
   return (
     <div>
       <h2 className="section-title">Queue</h2>
       <p className="section-sub">Everything you&apos;ve planned — drag-free, but organised. Switch to Kanban to see it by status.</p>
+
+      {overdue && overdue.length > 0 && (
+        <div className="alert error" role="alert" style={{ marginTop: 0 }}>
+          <div style={{ flex: 1 }}><b>{overdue.length} overdue</b> — scheduled time passed. Publish them now or move them.</div>
+          <button type="button" className="btn primary small" disabled={publishingId === 'due'} onClick={onPublishDue}>{publishingId === 'due' ? 'Publishing…' : 'Publish due'}</button>
+        </div>
+      )}
 
       <div className="toolbar">
         <div className="tabs" role="tablist" aria-label="Queue view">
@@ -41,14 +69,32 @@ export default function Queue({ posts, loading, onEdit, onDelete, onPublish, pub
           {['Instagram', 'YouTube', 'Facebook', 'TikTok'].map((p) => <option key={p} value={p}>{p}</option>)}
         </select>
         <input type="search" placeholder="Search captions, hashtags…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search queue" />
+        <button type="button" className="btn ghost" onClick={exportCsv}>Export CSV</button>
         <button type="button" className="btn primary" onClick={onCreate}>+ New post</button>
       </div>
+
+      {selected.size > 0 && (
+        <div className="toolbar" role="region" aria-label="Bulk actions">
+          <span className="pill">{selected.size} selected</span>
+          <button type="button" className="btn danger small" onClick={() => { onDeleteMany && onDeleteMany(selectedItems); setSelected(new Set()) }}>Delete selected</button>
+          <button type="button" className="btn ghost small" onClick={() => setSelected(new Set())}>Clear selection</button>
+        </div>
+      )}
 
       {loading ? <div className="card"><Skeleton rows={4} /></div> : filtered.length === 0 ? (
         <div className="card"><Empty title="Nothing matches" body="Try clearing a filter, or create a post — scheduled posts land here first." action={<button type="button" className="btn primary small" onClick={onCreate}>Create a post</button>} /></div>
       ) : view === 'list' ? (
         <div className="card">
-          {filtered.map((p) => <PostRow key={p.id} post={p} onEdit={onEdit} onDelete={onDelete} onPublish={onPublish} publishing={publishingId === p.id} onDuplicate={onDuplicate} onReschedule={onReschedule} onRescheduleNextBest={onRescheduleNextBest} />)}
+          <label className="small muted" style={{ display: 'flex', gap: 6, alignItems: 'center', paddingBottom: 10, cursor: 'pointer' }}>
+            <input type="checkbox" style={{ width: 16, height: 16 }} checked={filtered.length > 0 && filtered.every((p) => selected.has(p.id))} onChange={(e) => setSelected(e.target.checked ? new Set(filtered.map((p) => p.id)) : new Set())} />
+            Select all {filtered.length} shown
+          </label>
+          {filtered.map((p) => (
+            <div key={p.id} style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+              <input type="checkbox" aria-label={`Select post: ${(p.caption || 'No caption').slice(0, 40)}`} checked={selected.has(p.id)} onChange={() => toggleSelect(p.id)} style={{ width: 18, height: 18, marginTop: 16, flex: 'none' }} />
+              <div style={{ flex: 1, minWidth: 0 }}><PostRow post={p} onEdit={onEdit} onDelete={onDelete} onPublish={onPublish} publishing={publishingId === p.id} onDuplicate={onDuplicate} onReschedule={onReschedule} onRescheduleNextBest={onRescheduleNextBest} /></div>
+            </div>
+          ))}
         </div>
       ) : (
         <div className="kanban">

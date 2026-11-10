@@ -18,7 +18,27 @@ function useCountdown(targetIso) {
   return { label: formatCountdown(targetIso), parts: { d, h, m } }
 }
 
-export default function Dashboard({ posts, stats, loading, error, onRetry, onCreate, onGoQueue, onEdit, onDelete, onPublish, publishingId, settings, onDuplicate, onReschedule, onRescheduleNextBest }) {
+export default function Dashboard({ posts, stats, loading, error, onRetry, onCreate, onGoQueue, onEdit, onDelete, onPublish, publishingId, settings, onDuplicate, onReschedule, onRescheduleNextBest, overdue, onPublishDue }) {
+  const [checklistDismissed, setChecklistDismissed] = useState(() => { try { return localStorage.getItem('ss-checklist-dismissed') === '1' } catch { return false } })
+  const dismissChecklist = () => { setChecklistDismissed(true); try { localStorage.setItem('ss-checklist-dismissed', '1') } catch { /* ignore */ } }
+  // Publishing streak (real data only): consecutive days with at least one
+  // published post, ending today or yesterday.
+  const streak = useMemo(() => {
+    const days = new Set((posts || []).filter((p) => p.status === 'published' && p.scheduleTime).map((p) => new Date(p.scheduleTime).toDateString()))
+    if (!days.size) return 0
+    let n = 0
+    const d = new Date()
+    if (!days.has(d.toDateString())) d.setDate(d.getDate() - 1) // streak may end yesterday
+    while (days.has(d.toDateString())) { n++; d.setDate(d.getDate() - 1) }
+    return n
+  }, [posts])
+  const checklist = useMemo(() => [
+    { done: Boolean(settings?.instagramConnected), label: 'Connect Instagram', hint: 'Settings → Connect Instagram' },
+    { done: (posts || []).some((p) => p.mediaUrl), label: 'Add media to your library', hint: 'Media → Upload or Add by link' },
+    { done: (posts || []).some((p) => p.status === 'scheduled'), label: 'Schedule your first post', hint: 'Studio → Schedule post' },
+    { done: (posts || []).some((p) => p.status === 'published'), label: 'Publish your first post', hint: 'Queue → Publish now, or Publish due' },
+  ], [settings, posts])
+  const checklistDone = checklist.every((c) => c.done)
   const upcoming = useMemo(() => {
     const now = Date.now()
     return [...(posts || [])]
@@ -70,11 +90,39 @@ export default function Dashboard({ posts, stats, loading, error, onRetry, onCre
 
       {error && <ErrorBox error={error} onRetry={onRetry} />}
 
+      {!loading && overdue && overdue.length > 0 && (
+        <div className="alert error" role="alert" style={{ marginTop: 16 }}>
+          <div style={{ flex: 1 }}>
+            <b>{overdue.length} post{overdue.length === 1 ? '' : 's'} overdue</b> — scheduled time passed without publishing.
+            <div style={{ marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button type="button" className="btn primary small" disabled={publishingId === 'due'} onClick={onPublishDue}>{publishingId === 'due' ? 'Publishing…' : `Publish due (${overdue.length})`}</button>
+              <button type="button" className="btn ghost small" onClick={onGoQueue}>Review in Queue</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {!loading && !checklistDismissed && !checklistDone && (
+        <section className="card section" aria-label="Getting started checklist">
+          <div className="card-head">
+            <div><h2>Getting started</h2><p>{checklist.filter((c) => c.done).length} of {checklist.length} done — your next step is highlighted.</p></div>
+            <button type="button" className="btn ghost small" onClick={dismissChecklist}>Dismiss</button>
+          </div>
+          <div>
+            {checklist.map((c) => (
+              <p key={c.label} className="small" style={{ padding: '6px 0', color: c.done ? 'var(--muted)' : 'var(--ink)' }}>
+                {c.done ? '✓ ' : '○ '}<b>{c.label}</b>{!c.done && <span className="muted"> — {c.hint}</span>}
+              </p>
+            ))}
+          </div>
+        </section>
+      )}
+
       <div className="stats" aria-label="Overview">
         {loading ? Array.from({ length: 5 }).map((_, i) => <div key={i} className="skel" style={{ height: 92 }} />) : (
           <>
             <div className="stat"><b>{s.scheduled ?? upcoming.length}</b><span>Scheduled</span><small>{weekCount} in the next 7 days</small></div>
-            <div className="stat"><b>{s.published ?? 0}</b><span>Published</span><small>All time</small></div>
+            <div className="stat"><b>{s.published ?? 0}</b><span>Published</span><small>{streak > 0 ? `${streak}-day publishing streak` : 'All time'}</small></div>
             <div className="stat"><b>{s.drafts ?? 0}</b><span>Drafts</span><small>Waiting for a time</small></div>
             <div className="stat"><b>{s.failed ?? 0}</b><span>Failed</span><small>Needs a retry</small></div>
             <div className="stat"><b>{s.mediaCount ?? 0}</b><span>Media files</span><small>In your library</small></div>

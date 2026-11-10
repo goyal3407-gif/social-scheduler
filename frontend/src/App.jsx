@@ -1,17 +1,23 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense } from 'react'
 import { api, nextBestTime } from './api.js'
 import Auth from './components/Auth.jsx'
-import SetupWizard from './components/SetupWizard.jsx'
 import Dashboard from './components/Dashboard.jsx'
-import CalendarView from './components/CalendarView.jsx'
-import Queue from './components/Queue.jsx'
-import Studio from './components/Studio.jsx'
-import Bulk from './components/Bulk.jsx'
-import MediaLibrary from './components/MediaLibrary.jsx'
-import Tools from './components/Tools.jsx'
-import AIStudio from './components/AIStudio.jsx'
-import Settings from './components/Settings.jsx'
 import { IconHome, IconCal, IconQueue, IconPlus, IconMedia, IconBulk, IconTools, IconSpark, IconSettings, IconSun, IconMoon } from './components/icons.jsx'
+import { Skeleton } from './components/shared.jsx'
+// Heavy tabs load on demand so the first paint is only Dashboard + shell.
+const SetupWizard = lazy(() => import('./components/SetupWizard.jsx'))
+const CalendarView = lazy(() => import('./components/CalendarView.jsx'))
+const Queue = lazy(() => import('./components/Queue.jsx'))
+const Studio = lazy(() => import('./components/Studio.jsx'))
+const Bulk = lazy(() => import('./components/Bulk.jsx'))
+const MediaLibrary = lazy(() => import('./components/MediaLibrary.jsx'))
+const Tools = lazy(() => import('./components/Tools.jsx'))
+const AIStudio = lazy(() => import('./components/AIStudio.jsx'))
+const Settings = lazy(() => import('./components/Settings.jsx'))
+
+function TabFallback() {
+  return <div className="section"><div className="card"><Skeleton rows={4} /></div></div>
+}
 
 const NAV = [
   { id: 'home', label: 'Home', Icon: IconHome },
@@ -44,8 +50,23 @@ export default function App() {
   const [studioKey, setStudioKey] = useState(0)
   const [saving, setSaving] = useState(false)
   const [publishingId, setPublishingId] = useState(null)
-  const [confirmDelete, setConfirmDelete] = useState(null) // {type:'post'|'media', item}
+  const [confirmDelete, setConfirmDelete] = useState(null) // {type:'post'|'media'|'posts', item|items}
   const [templateSeed, setTemplateSeed] = useState(null)
+  const toastTimer = useRef(null)
+
+  // Per-tab document title (screen readers + history).
+  useEffect(() => {
+    const label = (NAV.find((n) => n.id === tab) || {}).label || (tab === 'studio' ? 'Studio' : 'Home')
+    document.title = tab === 'home' ? 'Social Scheduler by Goyal Kumar' : `${label} · Social Scheduler`
+  }, [tab])
+
+  // Escape closes the delete modal.
+  useEffect(() => {
+    if (!confirmDelete) return undefined
+    const onKey = (e) => { if (e.key === 'Escape') setConfirmDelete(null) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [confirmDelete])
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
@@ -91,16 +112,28 @@ export default function App() {
 
   useEffect(() => { if (user) loadAll() }, [user, loadAll])
 
-  const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(''), 4000) }
+  const showToast = (msg) => {
+    setToast(msg)
+    if (toastTimer.current) clearTimeout(toastTimer.current)
+    toastTimer.current = setTimeout(() => setToast(''), 4000)
+  }
+  useEffect(() => () => { if (toastTimer.current) clearTimeout(toastTimer.current) }, [])
 
   const refreshStats = useCallback(async () => {
     try { setStats(await api.getStats()) } catch { /* keep last stats */ }
   }, [])
 
   const refreshSettings = useCallback(async () => {
+    // Light refresh: settings + stats only. The old version called
+    // loadAll(), which flashed skeletons across the whole app after every
+    // settings save.
     try { setSettings(await api.getSettings()) } catch { /* keep last settings */ }
-    await loadAll()
-  }, [loadAll])
+    refreshStats()
+  }, [refreshStats])
+
+  // Full reload (used after the setup wizard, when posts/media may have
+  // been imported).
+  const refreshAll = useCallback(async () => { await loadAll() }, [loadAll])
 
   const handleLogout = useCallback(async () => {
     try { await api.logout() } catch { /* cookie cleared server-side anyway */ }
@@ -180,15 +213,45 @@ export default function App() {
 
   const doDelete = useCallback(async () => {
     if (!confirmDelete) return
-    const { type, item } = confirmDelete
+    const { type, item, items } = confirmDelete
     setConfirmDelete(null)
     try {
       if (type === 'post') { await api.deletePost(item.id); setPosts((prev) => prev.filter((p) => p.id !== item.id)) }
+      else if (type === 'posts') {
+        for (const p of items || []) { try { await api.deletePost(p.id) } catch { /* keep going */ } }
+        const ids = new Set((items || []).map((p) => p.id))
+        setPosts((prev) => prev.filter((p) => !ids.has(p.id)))
+      }
       else { await api.deleteMedia(item.id); setMedia((prev) => prev.filter((m) => m.id !== item.id)) }
       showToast('Deleted.')
       refreshStats()
     } catch (e) { setError(e) }
   }, [confirmDelete, refreshStats])
+
+  // Posts whose scheduled time has passed without publishing.
+  const overdue = useMemo(() => {
+    const now = Date.now()
+    return (posts || []).filter((p) => p.status === 'scheduled' && p.scheduleTime && new Date(p.scheduleTime).getTime() <= now)
+  }, [posts])
+
+  // Publish everything that is due, right now.
+  const handlePublishDue = useCallback(async () => {
+    setPublishingId('due')
+    try {
+      const res = await api.publishDue()
+      const n = res?.published?.length || 0
+      const f = res?.failed?.length || 0
+      const r = res?.retrying?.length || 0
+      if (n === 0 && f === 0 && r === 0) showToast('Nothing due right now — your queue is up to date.')
+      else showToast(`Published ${n}${f ? `, ${f} failed` : ''}${r ? `, ${r} still processing` : ''}.`)
+      const fresh = await api.getPosts().catch(() => null)
+      if (fresh) setPosts(fresh)
+      refreshStats()
+    } catch (e) {
+      showToast(e.message || 'Could not publish due posts.')
+      setError(e)
+    } finally { setPublishingId(null) }
+  }, [refreshStats])
 
   // AI Studio: save one draft, or many at once (Weekly Plan). Drafts are
   // created with status 'draft' and no media yet — the user adds the video
@@ -296,13 +359,16 @@ export default function App() {
   if (settings && settings.setupDone !== true) {
     return (
       <div className="app">
-        <SetupWizard settings={settings} onDone={refreshSettings} onInstagramChanged={refreshSettings} />
+        <Suspense fallback={<TabFallback />}>
+          <SetupWizard settings={settings} onDone={refreshAll} onInstagramChanged={refreshAll} />
+        </Suspense>
       </div>
     )
   }
 
   return (
     <div className="app">
+      <a className="skip-link" href="#main">Skip to content</a>
       <header className="topbar">
         <div className="topbar-in">
           <div className="logo">
@@ -325,8 +391,8 @@ export default function App() {
         </div>
       </header>
 
-      <main className="wrap">
-        {toast && <div className="alert success" role="status" style={{ marginTop: 16 }}>{toast}</div>}
+      <main className="wrap" id="main">
+        {toast && <div className="alert success" role="status" style={{ marginTop: 16 }}><span style={{ flex: 1 }}>{toast}</span><button type="button" className="btn ghost small" aria-label="Dismiss" onClick={() => setToast('')}>✕</button></div>}
         {error && tab !== 'home' && (
           <div className="alert error" role="alert" style={{ marginTop: 16 }}>
             <div style={{ flex: 1 }}>{String(error.message || error)}</div>
@@ -340,20 +406,22 @@ export default function App() {
             onCreate={() => goStudio(null)} onGoQueue={() => setTab('queue')}
             onEdit={goStudio} onDelete={(p) => setConfirmDelete({ type: 'post', item: p })}
             onPublish={handlePublish} publishingId={publishingId} settings={settings}
-            onDuplicate={handleDuplicate} onReschedule={handleReschedule} onRescheduleNextBest={handleRescheduleNextBest} />
+            onDuplicate={handleDuplicate} onReschedule={handleReschedule} onRescheduleNextBest={handleRescheduleNextBest}
+            overdue={overdue} onPublishDue={handlePublishDue} />
         )}
+        <Suspense fallback={<TabFallback />}>
         {tab === 'calendar' && (
           <div className="section"><CalendarView posts={posts} loading={loading} onEdit={goStudio} onDelete={(p) => setConfirmDelete({ type: 'post', item: p })} onPublish={handlePublish} publishingId={publishingId} /></div>
         )}
         {tab === 'queue' && (
-          <div className="section"><Queue posts={posts} loading={loading} onEdit={goStudio} onDelete={(p) => setConfirmDelete({ type: 'post', item: p })} onPublish={handlePublish} publishingId={publishingId} onCreate={() => goStudio(null)} onDuplicate={handleDuplicate} onReschedule={handleReschedule} onRescheduleNextBest={handleRescheduleNextBest} /></div>
+          <div className="section"><Queue posts={posts} loading={loading} onEdit={goStudio} onDelete={(p) => setConfirmDelete({ type: 'post', item: p })} onPublish={handlePublish} publishingId={publishingId} onCreate={() => goStudio(null)} onDuplicate={handleDuplicate} onReschedule={handleReschedule} onRescheduleNextBest={handleRescheduleNextBest} overdue={overdue} onPublishDue={handlePublishDue} onDeleteMany={(items) => setConfirmDelete({ type: 'posts', items })} /></div>
         )}
         {tab === 'studio' && (
           <div className="section">
             <Studio key={`${studioKey}-${editing?.id || 'new'}`} editing={editing} seed={templateSeed ? { caption: templateSeed.text || templateSeed.caption || '', hashtags: templateSeed.hashtags || '', cta: templateSeed.cta || '', mediaUrl: templateSeed.mediaUrl || '', mediaType: templateSeed.mediaType || 'video', scheduleTime: templateSeed.scheduleTime || '' } : null} media={media} templates={templates} onSave={handleSavePost} onCancel={() => setTab('queue')} saving={saving} posts={posts} />
           </div>
         )}
-        {tab === 'bulk' && <div className="section"><Bulk onImport={handleBulkImport} /></div>}
+        {tab === 'bulk' && <div className="section"><Bulk onImport={handleBulkImport} posts={posts} /></div>}
         {tab === 'media' && (
           <div className="section"><MediaLibrary media={media} loading={loading} error={error} onRetry={loadAll}
             onAddLink={handleAddLink} onUpload={handleUpload}
@@ -368,12 +436,14 @@ export default function App() {
           <div className="section"><AIStudio posts={posts} settings={settings} onSendToStudio={useInStudio} onSaveDraft={handleSaveDraft} onSaveDrafts={handleSaveDrafts} /></div>
         )}
         {tab === 'settings' && (
-          <div className="section"><Settings settings={settings} dbStatus={dbStatus} saving={saving} onSave={async (s) => { setSaving(true); try { const u = await api.saveSettings(s); setSettings(u || s) } finally { setSaving(false) } }} onInstagramChanged={refreshSettings} /></div>
+          <div className="section"><Settings settings={settings} dbStatus={dbStatus} saving={saving} onSave={async (s) => { setSaving(true); try { const u = await api.saveSettings(s); setSettings(u || s) } finally { setSaving(false) } }} onInstagramChanged={refreshSettings} user={user} onAccountDeleted={handleLogout} /></div>
         )}
+        </Suspense>
 
         <footer className="footer">
           <b>Social Scheduler</b> — free forever, for every creator.<br />
-          Made by <b>Goyal Kumar</b> · Schedule Reels, Feed posts &amp; Stories for Instagram, YouTube, Facebook and TikTok.
+          Made by <b>Goyal Kumar</b> · Schedule Reels, Feed posts &amp; Stories for Instagram, YouTube, Facebook and TikTok.<br />
+          <span className="muted small">v1.1.0{dbStatus?.db ? ` · storage: ${dbStatus.db}` : ''}</span>
         </footer>
       </main>
 
@@ -392,12 +462,12 @@ export default function App() {
       </nav>
 
       {confirmDelete && (
-        <div className="modal-bg" role="dialog" aria-modal="true" aria-label="Confirm delete">
-          <div className="modal">
-            <h2>Delete this {confirmDelete.type === 'post' ? 'post' : 'media file'}?</h2>
-            <p className="muted mt">{confirmDelete.type === 'post' ? (confirmDelete.item.caption || 'This post') : (confirmDelete.item.title || confirmDelete.item.url)} — this cannot be undone.</p>
+        <div className="modal-bg" role="dialog" aria-modal="true" aria-label="Confirm delete" onClick={() => setConfirmDelete(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h2>Delete {confirmDelete.type === 'posts' ? `${(confirmDelete.items || []).length} posts` : confirmDelete.type === 'post' ? 'this post' : 'this media file'}?</h2>
+            <p className="muted mt">{confirmDelete.type === 'posts' ? 'These posts will be permanently deleted.' : confirmDelete.type === 'post' ? (confirmDelete.item.caption || 'This post') : (confirmDelete.item.title || confirmDelete.item.url)} — this cannot be undone.</p>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 20 }}>
-              <button type="button" className="btn ghost" onClick={() => setConfirmDelete(null)}>Cancel</button>
+              <button type="button" className="btn ghost" autoFocus onClick={() => setConfirmDelete(null)}>Cancel</button>
               <button type="button" className="btn danger" onClick={doDelete}>Delete</button>
             </div>
           </div>

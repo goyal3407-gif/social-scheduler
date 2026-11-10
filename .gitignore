@@ -4,3 +4,7 @@ frontend/dist/
 data/*.json
 .env
 .DS_Store
+# Local-only transformation working docs (Stages 2-4) — never commit.
+TRANSFORMATION_100_IDEAS.md
+TRANSFORMATION_DEBATE.md
+TRANSFORMATION_DECISIONS.md

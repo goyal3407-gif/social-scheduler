@@ -12,11 +12,22 @@
 // wrapped response.
 
 async function req(path, options = {}) {
-  const res = await fetch(path, {
-    credentials: 'include', // send the httpOnly session cookie
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
-    ...options
-  })
+  // 30 s timeout: a hung request used to hang the UI forever.
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), 30000)
+  let res
+  try {
+    res = await fetch(path, {
+      credentials: 'include', // send the httpOnly session cookie
+      headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+      signal: ctrl.signal,
+      ...options
+    })
+  } catch (e) {
+    clearTimeout(timer)
+    if (e && e.name === 'AbortError') { const err = new Error('The server took too long to answer — please try again.'); err.status = 0; throw err }
+    throw e
+  } finally { clearTimeout(timer) }
   let data = null
   try { data = await res.json() } catch { data = null }
   if (!res.ok) {
@@ -46,10 +57,13 @@ export const api = {
   login: (email, password) => req('/api/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
   me: () => req('/api/auth/me'),
   logout: () => req('/api/auth/logout', { method: 'POST', body: JSON.stringify({}) }),
+  changePassword: (currentPassword, newPassword) => req('/api/auth/change-password', { method: 'POST', body: JSON.stringify({ currentPassword, newPassword }) }),
+  deleteAccount: () => req('/api/auth/account', { method: 'DELETE' }),
+  exportData: () => req('/api/export'),
 
   getStats: () => req('/api/stats'),
 
-  getPosts: async () => asArray(await req('/api/posts'), 'posts'),
+  getPosts: async () => asArray(await req('/api/posts?limit=500'), 'posts'),
   // Single-object endpoints return the object itself (not the {ok, post}
   // wrapper) so callers can use it directly — returning the wrapper used
   // to insert a broken post with no id into the queue until a reload.
@@ -61,8 +75,9 @@ export const api = {
   reschedulePost: async (id, patch) => (await req(`/api/posts/${encodeURIComponent(id)}/reschedule`, { method: 'POST', body: JSON.stringify(patch) })).post,
   getNextBestTime: () => req('/api/next-best-time'),
   publishPost: (id) => req(`/api/posts/${encodeURIComponent(id)}/publish`, { method: 'POST', body: JSON.stringify({}) }),
+  publishDue: () => req('/api/publish-due', { method: 'POST', body: JSON.stringify({}) }),
 
-  getMedia: async () => asArray(await req('/api/media'), 'media'),
+  getMedia: async () => asArray(await req('/api/media?limit=500'), 'media'),
   createMedia: async (media) => (await req('/api/media', { method: 'POST', body: JSON.stringify(media) })).media,
   uploadMedia: async (file, extra = {}) => {
     // Server accepts base64 JSON (no multipart parser on the server).
@@ -72,7 +87,7 @@ export const api = {
       r.onerror = () => reject(new Error('Could not read file'))
       r.readAsDataURL(file)
     })
-    return req('/api/media/upload', { method: 'POST', body: JSON.stringify({ name: extra.title || file.name, dataUrl, folder: extra.folder || 'Uploads', tags: extra.tags || [] }) }).then((d) => d.media || d)
+    return req('/api/media/upload', { method: 'POST', body: JSON.stringify({ name: extra.title || file.name, dataUrl, folder: extra.folder || 'Uploads', tags: extra.tags || [], width: extra.width || 0, height: extra.height || 0, duration: extra.duration || 0 }) }).then((d) => d.media || d)
   },
   updateMedia: async (id, patch) => (await req(`/api/media/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) })).media,
   deleteMedia: (id) => req(`/api/media/${encodeURIComponent(id)}`, { method: 'DELETE' }),

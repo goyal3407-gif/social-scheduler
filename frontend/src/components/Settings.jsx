@@ -3,7 +3,7 @@ import { api } from '../api.js'
 
 const APP_DASHBOARD_URL = 'https://developers.facebook.com/apps/1671693167666941'
 
-export default function Settings({ settings, dbStatus, onSave, saving, onInstagramChanged }) {
+export default function Settings({ settings, dbStatus, onSave, saving, onInstagramChanged, user, onAccountDeleted }) {
   const [handle, setHandle] = useState('')
   const [token, setToken] = useState('')
   const [igUserId, setIgUserId] = useState('')
@@ -11,6 +11,59 @@ export default function Settings({ settings, dbStatus, onSave, saving, onInstagr
   const [err, setErr] = useState('')
   const [connecting, setConnecting] = useState(false)
   const [disconnecting, setDisconnecting] = useState(false)
+  const [currentPw, setCurrentPw] = useState('')
+  const [newPw, setNewPw] = useState('')
+  const [pwBusy, setPwBusy] = useState(false)
+  const [pwMsg, setPwMsg] = useState('')
+  const [pwErr, setPwErr] = useState('')
+  const [exporting, setExporting] = useState(false)
+  const [confirmDeleteAccount, setConfirmDeleteAccount] = useState(false)
+  const [deletingAccount, setDeletingAccount] = useState(false)
+
+  // Instagram tokens last about 60 days: warn from day 53 so a publish
+  // never fails without warning. connectedAt comes from the server.
+  const tokenAgeDays = settings?.connectedAt ? Math.floor((Date.now() - new Date(settings.connectedAt).getTime()) / 86400000) : null
+  const tokenExpiringSoon = tokenAgeDays !== null && tokenAgeDays >= 53
+
+  const changePassword = async (e) => {
+    e.preventDefault()
+    setPwErr(''); setPwMsg('')
+    if (newPw.length < 8) { setPwErr('The new password must be at least 8 characters long.'); return }
+    setPwBusy(true)
+    try {
+      await api.changePassword(currentPw, newPw)
+      setPwMsg('Password changed — other devices were logged out.')
+      setCurrentPw(''); setNewPw('')
+    } catch (e2) { setPwErr(e2.message || 'Could not change the password.') }
+    finally { setPwBusy(false) }
+  }
+
+  const exportData = async () => {
+    setExporting(true)
+    try {
+      const data = await api.exportData()
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+      const a = document.createElement('a')
+      a.href = URL.createObjectURL(blob)
+      a.download = 'social-scheduler-export.json'
+      a.click()
+      URL.revokeObjectURL(a.href)
+      setMsg('Your data was downloaded as social-scheduler-export.json.')
+    } catch (e2) { setErr(e2.message || 'Could not export your data.') }
+    finally { setExporting(false) }
+  }
+
+  const deleteAccount = async () => {
+    setDeletingAccount(true)
+    try {
+      await api.deleteAccount()
+      if (onAccountDeleted) onAccountDeleted()
+    } catch (e2) {
+      setErr(e2.message || 'Could not delete the account.')
+      setDeletingAccount(false)
+      setConfirmDeleteAccount(false)
+    }
+  }
 
   const connected = Boolean(settings?.instagramConnected)
   const username = settings?.instagramUsername || ''
@@ -124,6 +177,12 @@ export default function Settings({ settings, dbStatus, onSave, saving, onInstagr
               )}
             </div>
             <p className="muted small mt">The token is checked live with Instagram before it is saved, and stored on the server only. It is never shown in full — only the first and last 4 characters.</p>
+            {tokenExpiringSoon && (
+              <div className="warn amber" style={{ marginTop: 12 }}><div><b>Token is {tokenAgeDays} days old.</b> Instagram tokens last about 60 days — generate a fresh one soon or publishing will start failing.</div></div>
+            )}
+            {tokenAgeDays !== null && !tokenExpiringSoon && (
+              <p className="muted small mt">Token connected {tokenAgeDays} day{tokenAgeDays === 1 ? '' : 's'} ago (Instagram tokens last about 60 days).</p>
+            )}
           </form>
         </div>
         <section className="card">
@@ -136,6 +195,40 @@ export default function Settings({ settings, dbStatus, onSave, saving, onInstagr
             <li>Works on phone and desktop</li>
           </ul>
           <p className="muted small mt">Made by <b style={{ color: 'var(--ink)' }}>Goyal Kumar</b>.</p>
+        </section>
+      </div>
+
+      <div className="two-col section" style={{ alignItems: 'start' }}>
+        <form className="card" onSubmit={changePassword}>
+          <h2>Change password</h2>
+          <p className="muted small" style={{ marginTop: 8 }}>Changing your password logs out your other devices.</p>
+          <label htmlFor="currentPw" style={{ marginTop: 12 }}>Current password</label>
+          <input id="currentPw" type="password" autoComplete="current-password" value={currentPw} onChange={(e) => setCurrentPw(e.target.value)} />
+          <label htmlFor="newPw" style={{ marginTop: 12 }}>New password</label>
+          <input id="newPw" type="password" autoComplete="new-password" placeholder="At least 8 characters" value={newPw} onChange={(e) => setNewPw(e.target.value)} />
+          {pwErr && <div className="alert error">{pwErr}</div>}
+          {pwMsg && <div className="alert success">{pwMsg}</div>}
+          <button type="submit" className="btn primary mt" disabled={pwBusy || !currentPw || newPw.length < 8}>{pwBusy ? 'Changing…' : 'Change password'}</button>
+        </form>
+
+        <section className="card">
+          <h2>Your data &amp; account</h2>
+          <p className="muted small" style={{ marginTop: 8 }}>Signed in as <b style={{ color: 'var(--ink)' }}>{user?.email || '—'}</b>{user?.role ? ` · ${user.role}` : ''}.</p>
+          <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
+            <button type="button" className="btn ghost" disabled={exporting} onClick={exportData}>{exporting ? 'Exporting…' : 'Download my data (JSON)'}</button>
+          </div>
+          <p className="muted small mt">The export contains your posts, media, templates and settings. Your Instagram token is never included.</p>
+          <hr style={{ border: 'none', borderTop: '1px solid var(--line)', margin: '18px 0' }} />
+          <h3 style={{ color: 'var(--red)' }}>Delete account</h3>
+          <p className="muted small" style={{ marginTop: 6 }}>Permanently deletes your account and everything in it — posts, media, templates, settings and your Instagram connection. This cannot be undone.</p>
+          {!confirmDeleteAccount ? (
+            <button type="button" className="btn danger mt" onClick={() => setConfirmDeleteAccount(true)}>Delete my account…</button>
+          ) : (
+            <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
+              <button type="button" className="btn danger" disabled={deletingAccount} onClick={deleteAccount}>{deletingAccount ? 'Deleting…' : 'Yes, delete everything'}</button>
+              <button type="button" className="btn ghost" onClick={() => setConfirmDeleteAccount(false)}>Cancel</button>
+            </div>
+          )}
         </section>
       </div>
     </div>

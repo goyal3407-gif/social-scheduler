@@ -38,6 +38,41 @@ export default function Studio({ editing, seed, media, templates, onSave, onCanc
     if (!form.scheduleTime) return false
     return true
   }, [form])
+  // Drafts are plans: they save with media alone, no time needed (the
+  // server allows timeless drafts — the old UI blocked them).
+  const canSaveDraft = useMemo(() => Boolean(form.mediaUrl.trim()), [form])
+
+  // Warn when this media is already scheduled, and when another post sits
+  // within 30 minutes of the chosen time.
+  const duplicateOf = useMemo(() => {
+    if (!form.mediaUrl.trim()) return null
+    return (posts || []).find((p) => p.id !== editing?.id && p.mediaUrl && p.mediaUrl === form.mediaUrl.trim() && p.status !== 'published')
+  }, [posts, form.mediaUrl, editing?.id])
+  const collision = useMemo(() => {
+    if (!form.scheduleTime) return null
+    const t = new Date(form.scheduleTime).getTime()
+    if (Number.isNaN(t)) return null
+    return (posts || []).find((p) => p.id !== editing?.id && p.status === 'scheduled' && p.scheduleTime && Math.abs(new Date(p.scheduleTime).getTime() - t) < 30 * 60000)
+  }, [posts, form.scheduleTime, editing?.id])
+
+  // Auto-probe the media's real dimensions (no more hand-typed width/
+  // height): the browser already knows them once the file loads.
+  useEffect(() => {
+    const url = form.mediaUrl.trim()
+    if (!url || /^data:/i.test(url)) return undefined
+    let alive = true
+    if (form.mediaType === 'image') {
+      const img = new Image()
+      img.onload = () => { if (alive && img.naturalWidth) { setWidth(String(img.naturalWidth)); setHeight(String(img.naturalHeight)) } }
+      img.src = url
+    } else {
+      const v = document.createElement('video')
+      v.preload = 'metadata'
+      v.onloadedmetadata = () => { if (alive && v.videoWidth) { setWidth(String(v.videoWidth)); setHeight(String(v.videoHeight)) } }
+      v.src = url
+    }
+    return () => { alive = false }
+  }, [form.mediaUrl, form.mediaType])
 
   // Suggestion from the user's own schedule: next free 7:00 PM slot.
   // Excludes the post being edited so it doesn't block its own slot.
@@ -51,16 +86,18 @@ export default function Studio({ editing, seed, media, templates, onSave, onCanc
 
   const submit = async (statusOverride) => {
     setError('')
+    const status = statusOverride || form.status || 'scheduled'
     if (!form.mediaUrl.trim()) { setError('Add a media URL or pick one from your library first (Step 1).'); setStep(1); return }
-    if (!form.scheduleTime) { setError('Pick a date and time to schedule (Step 3).'); setStep(3); return }
+    // Drafts need no time; scheduled posts do.
+    if (status !== 'draft' && !form.scheduleTime) { setError('Pick a date and time to schedule (Step 3).'); setStep(3); return }
     const payload = {
       ...form,
       mediaUrl: form.mediaUrl.trim(),
       caption: form.caption.trim(),
       hashtags: form.hashtags.trim(),
       cta: form.cta.trim(),
-      scheduleTime: form.scheduleTime.includes('T') && !form.scheduleTime.endsWith('Z') && form.scheduleTime.length <= 16 ? fromLocalInputValue(form.scheduleTime) : form.scheduleTime,
-      status: statusOverride || form.status || 'scheduled'
+      scheduleTime: form.scheduleTime ? (form.scheduleTime.includes('T') && !form.scheduleTime.endsWith('Z') && form.scheduleTime.length <= 16 ? fromLocalInputValue(form.scheduleTime) : form.scheduleTime) : '',
+      status
     }
     try {
       await onSave(payload, Boolean(editing?.id))
@@ -119,7 +156,7 @@ export default function Studio({ editing, seed, media, templates, onSave, onCanc
               </div>
 
               <div className="mt2">
-                <label>Reel-safety check <span className="muted">(optional — enter the video dimensions)</span></label>
+                <label>Reel-safety check <span className="muted">(auto-detected when the media loads — or enter manually)</span></label>
                 <div className="two-col">
                   <input type="number" placeholder="Width, e.g. 1080" value={width} onChange={(e) => setWidth(e.target.value)} aria-label="Video width in pixels" />
                   <input type="number" placeholder="Height, e.g. 1920" value={height} onChange={(e) => setHeight(e.target.value)} aria-label="Video height in pixels" />
@@ -196,7 +233,6 @@ export default function Studio({ editing, seed, media, templates, onSave, onCanc
                   <select id="status" value={form.status} onChange={(e) => set({ status: e.target.value })}>
                     <option value="scheduled">Scheduled</option>
                     <option value="draft">Draft</option>
-                    <option value="published">Published</option>
                   </select>
                 </div>
               </div>
@@ -214,21 +250,23 @@ export default function Studio({ editing, seed, media, templates, onSave, onCanc
                 </div>
               )}
               <p className="muted small mt">Best times are usually 7–9pm in your audience&apos;s timezone — check the heatmap in Tools.</p>
+              {duplicateOf && <div className="warn amber"><IconWarn size={17} /><div>This same media is already in your queue ({duplicateOf.status}, {duplicateOf.scheduleTime ? new Date(duplicateOf.scheduleTime).toLocaleString() : 'no time'}). Scheduling it again will post the same video twice.</div></div>}
+              {collision && <div className="warn amber"><IconWarn size={17} /><div>Another post is scheduled within 30 minutes of this time ({collision.caption ? collision.caption.slice(0, 60) : 'untitled'}). Consider spacing posts at least an hour apart.</div></div>}
               {feedVerticalWarn && <div className="warn red"><IconWarn size={17} /><div>Vertical video (ratio {ratio?.toFixed(2)}) with FEED format — this is likely to fail or crop. Switch to REELS above.</div></div>}
               {error && <div className="alert error">{error}</div>}
               {savedNote && <div className="alert success">{savedNote}</div>}
               <div style={{ display: 'flex', gap: 8, marginTop: 16, flexWrap: 'wrap' }}>
                 <button type="button" className="btn ghost" onClick={() => setStep(2)}>← Back</button>
-                <button type="button" className="btn ghost" disabled={!canSave || saving} onClick={() => submit('draft')}>Save draft</button>
+                <button type="button" className="btn ghost" disabled={!canSaveDraft || saving} onClick={() => submit('draft')}>Save draft</button>
                 <button type="button" className="btn primary" disabled={!canSave || saving} onClick={() => submit('scheduled')}>{saving ? 'Saving…' : editing ? 'Save changes' : 'Schedule post'}</button>
               </div>
-              {!canSave && <p className="muted small mt">Add a media URL (Step 1) and a schedule time to enable saving.</p>}
+              {!canSave && <p className="muted small mt">{canSaveDraft ? 'Add a schedule time to schedule this post — or save it as a draft for now.' : 'Add a media URL (Step 1) and a schedule time to enable saving.'}</p>}
             </div>
           )}
         </div>
 
         <div>
-          <div className="card" style={{ position: 'sticky', top: 76 }}>
+          <div className="card preview-card">
             <div className="card-head"><div><h2>Live preview</h2><p>How it will look on a phone.</p></div><span className="badge brand">{form.platform}</span></div>
             <div className="phone" aria-label="Phone preview">
               <div className="phone-head"><span>Social Scheduler</span><span>{form.format}</span></div>
@@ -257,7 +295,7 @@ export default function Studio({ editing, seed, media, templates, onSave, onCanc
         <div><b>{editing ? 'Editing post' : 'New post'}</b> <span className="muted small">· {form.platform} · {form.format} · Score {score}/100</span></div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           {onCancel && <button type="button" className="btn ghost small" onClick={onCancel}>Cancel</button>}
-          <button type="button" className="btn ghost small" disabled={!canSave || saving} onClick={() => submit('draft')}>Save draft</button>
+          <button type="button" className="btn ghost small" disabled={!canSaveDraft || saving} onClick={() => submit('draft')}>Save draft</button>
           <button type="button" className="btn primary small" disabled={!canSave || saving} onClick={() => submit('scheduled')}>{saving ? 'Saving…' : 'Schedule post'}</button>
         </div>
       </div>

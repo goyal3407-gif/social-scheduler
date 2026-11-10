@@ -27,7 +27,13 @@ const TOOLS = [
 
 export default function AIStudio({ posts, settings, onSendToStudio, onSaveDraft, onSaveDrafts }) {
   const [tool, setTool] = useState('writer')
-  const [niche, setNiche] = useState('Europe jobs')
+  const [niche, setNiche] = useState(() => {
+    try { return localStorage.getItem('ss-ai-niche') || settings?.instagramHandle || 'Europe jobs' } catch { return settings?.instagramHandle || 'Europe jobs' }
+  })
+  const saveNiche = (v) => {
+    setNiche(v)
+    try { localStorage.setItem('ss-ai-niche', v) } catch { /* storage unavailable */ }
+  }
   const [topic, setTopic] = useState('')
   const [tone, setTone] = useState('Direct')
   const [lengthSec, setLengthSec] = useState(60)
@@ -108,7 +114,7 @@ export default function AIStudio({ posts, settings, onSendToStudio, onSaveDraft,
             <h2>Reel Writer</h2>
             <p className="muted small mb">Pick a topic, get hooks, a full script outline, caption and hashtags — then send it to Studio.</p>
             <label htmlFor="aiNiche">Your niche</label>
-            <input id="aiNiche" placeholder="e.g. Europe jobs" value={niche} onChange={(e) => setNiche(e.target.value)} />
+            <input id="aiNiche" placeholder="e.g. Europe jobs" value={niche} onChange={(e) => saveNiche(e.target.value)} />
             <label htmlFor="aiTopic" style={{ marginTop: 12 }}>Topic for this Reel</label>
             <input id="aiTopic" placeholder="e.g. How to get a work visa for Poland" value={topic} onChange={(e) => setTopic(e.target.value)} />
             <div className="two-col" style={{ marginTop: 12 }}>
@@ -162,7 +168,7 @@ export default function AIStudio({ posts, settings, onSendToStudio, onSaveDraft,
             <h2>Weekly Plan — 7 days, one post idea per day</h2>
             <p className="muted small mb">One idea per day at 7:00 PM, built from your niche. “Add all to Queue” saves them as drafts — you add each video in Studio when you are ready.</p>
             <label htmlFor="aiWeekNiche">Your niche</label>
-            <input id="aiWeekNiche" placeholder="e.g. Europe jobs" value={niche} onChange={(e) => setNiche(e.target.value)} />
+            <input id="aiWeekNiche" placeholder="e.g. Europe jobs" value={niche} onChange={(e) => saveNiche(e.target.value)} />
             <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
               <button type="button" className="btn primary" onClick={makePlan}>Generate my week</button>
               {plan && <button type="button" className="btn ghost" disabled={planBusy} onClick={addPlanToQueue}>{planBusy ? 'Adding…' : 'Add all 7 to Queue (as drafts)'}</button>}
@@ -241,7 +247,7 @@ export default function AIStudio({ posts, settings, onSendToStudio, onSaveDraft,
             <h2>Viral Ideas</h2>
             <p className="muted small mb">Trending formats, rewritten for your niche. Pick one, make it yours, save it as a draft.</p>
             <label htmlFor="aiViralNiche">Your niche</label>
-            <input id="aiViralNiche" placeholder="e.g. Europe jobs" value={niche} onChange={(e) => setNiche(e.target.value)} />
+            <input id="aiViralNiche" placeholder="e.g. Europe jobs" value={niche} onChange={(e) => saveNiche(e.target.value)} />
             <label htmlFor="aiViralTone" style={{ marginTop: 12 }}>Tone</label>
             <select id="aiViralTone" value={tone} onChange={(e) => setTone(e.target.value)}>
               {TONES.map((t) => <option key={t} value={t}>{t}</option>)}
