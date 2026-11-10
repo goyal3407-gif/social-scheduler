@@ -196,6 +196,7 @@ export default function Studio({ editing, seed, media, templates, onSave, onCanc
                   <select id="status" value={form.status} onChange={(e) => set({ status: e.target.value })}>
                     <option value="scheduled">Scheduled</option>
                     <option value="draft">Draft</option>
+                    <option value="published">Published</option>
                   </select>
                 </div>
               </div>

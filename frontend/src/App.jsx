@@ -9,8 +9,9 @@ import Studio from './components/Studio.jsx'
 import Bulk from './components/Bulk.jsx'
 import MediaLibrary from './components/MediaLibrary.jsx'
 import Tools from './components/Tools.jsx'
+import AIStudio from './components/AIStudio.jsx'
 import Settings from './components/Settings.jsx'
-import { IconHome, IconCal, IconQueue, IconPlus, IconMedia, IconBulk, IconTools, IconSettings, IconSun, IconMoon } from './components/icons.jsx'
+import { IconHome, IconCal, IconQueue, IconPlus, IconMedia, IconBulk, IconTools, IconSpark, IconSettings, IconSun, IconMoon } from './components/icons.jsx'
 
 const NAV = [
   { id: 'home', label: 'Home', Icon: IconHome },
@@ -19,6 +20,7 @@ const NAV = [
   { id: 'media', label: 'Media', Icon: IconMedia },
   { id: 'bulk', label: 'Bulk', Icon: IconBulk },
   { id: 'tools', label: 'Tools', Icon: IconTools },
+  { id: 'ai', label: 'AI Studio', Icon: IconSpark },
   { id: 'settings', label: 'Settings', Icon: IconSettings }
 ]
 
@@ -33,6 +35,7 @@ export default function App() {
   const [media, setMedia] = useState([])
   const [templates, setTemplates] = useState([])
   const [settings, setSettings] = useState(null)
+  const [dbStatus, setDbStatus] = useState(null)
   const [stats, setStats] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -62,14 +65,24 @@ export default function App() {
   const loadAll = useCallback(async () => {
     setLoading(true); setError(null)
     try {
-      const [p, m, t, s, st] = await Promise.all([
-        api.getPosts().catch(() => []),
-        api.getMedia().catch(() => []),
-        api.getTemplates().catch(() => []),
-        api.getSettings().catch(() => null),
-        api.getStats().catch(() => null)
+      // allSettled + explicit 401 handling: previously a 401 (expired
+      // session) was swallowed by the per-call .catch(() => []) and the
+      // app showed an empty dashboard instead of the login screen.
+      const results = await Promise.allSettled([
+        api.getPosts(),
+        api.getMedia(),
+        api.getTemplates(),
+        api.getSettings(),
+        api.getStats(),
+        api.dbStatus().catch(() => null)
       ])
-      setPosts(p); setMedia(m); setTemplates(t); setSettings(s); setStats(st)
+      for (const r of results) {
+        if (r.status === 'rejected' && r.reason && r.reason.status === 401) { setUser(null); return }
+      }
+      const value = (i, fallback) => (results[i].status === 'fulfilled' ? results[i].value : fallback)
+      const firstError = results.find((r) => r.status === 'rejected')
+      setPosts(value(0, [])); setMedia(value(1, [])); setTemplates(value(2, [])); setSettings(value(3, null)); setStats(value(4, null)); setDbStatus(value(5, null))
+      if (firstError) setError(firstError.reason)
     } catch (e) {
       if (e && e.status === 401) { setUser(null); return }
       setError(e)
@@ -177,16 +190,54 @@ export default function App() {
     } catch (e) { setError(e) }
   }, [confirmDelete, refreshStats])
 
-  const handleBulkImport = useCallback(async (rows) => {
-    let imported = 0
-    const errors = []
-    for (const row of rows) {
-      try { await api.createPost(row); imported++ } catch (e) { errors.push(e.message || 'Failed row') }
-    }
+  // AI Studio: save one draft, or many at once (Weekly Plan). Drafts are
+  // created with status 'draft' and no media yet — the user adds the video
+  // in Studio before anything is scheduled or published.
+  const handleSaveDraft = useCallback(async (post) => {
+    const created = await api.createPost({ ...post, status: 'draft' })
+    if (created && created.id) setPosts((prev) => [created, ...prev])
+    else { const fresh = await api.getPosts().catch(() => null); if (fresh) setPosts(fresh) }
+    showToast('Saved as a draft — find it in your Queue.')
+    refreshStats()
+    return created
+  }, [refreshStats])
+
+  const handleSaveDrafts = useCallback(async (postsToSave) => {
+    const res = await api.createPostsBulk(postsToSave.map((p) => ({ ...p, status: 'draft' })))
     const fresh = await api.getPosts().catch(() => null)
     if (fresh) setPosts(fresh)
     refreshStats()
-    return { imported, failed: rows.length - imported, errors }
+    showToast(`Added ${res?.imported ?? postsToSave.length} draft${(res?.imported ?? postsToSave.length) === 1 ? '' : 's'} to your Queue.`)
+    return res
+  }, [refreshStats])
+
+  const handleBulkImport = useCallback(async (rows) => {    // One bulk request per 500 rows (server endpoint) instead of one
+    // request per row; falls back to one-by-one if the server is old.
+    try {
+      let imported = 0
+      let failed = 0
+      const errors = []
+      for (let i = 0; i < rows.length; i += 500) {
+        const res = await api.createPostsBulk(rows.slice(i, i + 500))
+        imported += res.imported || 0
+        failed += res.failed || 0
+        if (res.errors) errors.push(...res.errors)
+      }
+      const fresh = await api.getPosts().catch(() => null)
+      if (fresh) setPosts(fresh)
+      refreshStats()
+      return { imported, failed, errors }
+    } catch (e) {
+      let imported = 0
+      const errors = []
+      for (const row of rows) {
+        try { await api.createPost(row); imported++ } catch (err) { errors.push(err.message || 'Failed row') }
+      }
+      const fresh = await api.getPosts().catch(() => null)
+      if (fresh) setPosts(fresh)
+      refreshStats()
+      return { imported, failed: rows.length - imported, errors }
+    }
   }, [refreshStats])
 
   const handleUpload = useCallback(async (file, extra) => {
@@ -299,7 +350,7 @@ export default function App() {
         )}
         {tab === 'studio' && (
           <div className="section">
-            <Studio key={`${studioKey}-${editing?.id || 'new'}`} editing={editing} seed={templateSeed ? { caption: templateSeed.text || templateSeed.caption || '', mediaUrl: templateSeed.mediaUrl || '', mediaType: templateSeed.mediaType || 'video', scheduleTime: templateSeed.scheduleTime || '' } : null} media={media} templates={templates} onSave={handleSavePost} onCancel={() => setTab('queue')} saving={saving} posts={posts} />
+            <Studio key={`${studioKey}-${editing?.id || 'new'}`} editing={editing} seed={templateSeed ? { caption: templateSeed.text || templateSeed.caption || '', hashtags: templateSeed.hashtags || '', cta: templateSeed.cta || '', mediaUrl: templateSeed.mediaUrl || '', mediaType: templateSeed.mediaType || 'video', scheduleTime: templateSeed.scheduleTime || '' } : null} media={media} templates={templates} onSave={handleSavePost} onCancel={() => setTab('queue')} saving={saving} posts={posts} />
           </div>
         )}
         {tab === 'bulk' && <div className="section"><Bulk onImport={handleBulkImport} /></div>}
@@ -313,8 +364,11 @@ export default function App() {
         {tab === 'tools' && (
           <div className="section"><Tools posts={posts} stats={statsFallback} templates={templates} onCreateTemplate={handleCreateTemplate} onUseTemplate={useInStudio} /></div>
         )}
+        {tab === 'ai' && (
+          <div className="section"><AIStudio posts={posts} settings={settings} onSendToStudio={useInStudio} onSaveDraft={handleSaveDraft} onSaveDrafts={handleSaveDrafts} /></div>
+        )}
         {tab === 'settings' && (
-          <div className="section"><Settings settings={settings} saving={saving} onSave={async (s) => { setSaving(true); try { const u = await api.saveSettings(s); setSettings(u || s) } finally { setSaving(false) } }} onInstagramChanged={refreshSettings} /></div>
+          <div className="section"><Settings settings={settings} dbStatus={dbStatus} saving={saving} onSave={async (s) => { setSaving(true); try { const u = await api.saveSettings(s); setSettings(u || s) } finally { setSaving(false) } }} onInstagramChanged={refreshSettings} /></div>
         )}
 
         <footer className="footer">

@@ -3,7 +3,7 @@ import { api } from '../api.js'
 
 const APP_DASHBOARD_URL = 'https://developers.facebook.com/apps/1671693167666941'
 
-export default function Settings({ settings, onSave, saving, onInstagramChanged }) {
+export default function Settings({ settings, dbStatus, onSave, saving, onInstagramChanged }) {
   const [handle, setHandle] = useState('')
   const [token, setToken] = useState('')
   const [igUserId, setIgUserId] = useState('')
@@ -65,6 +65,23 @@ export default function Settings({ settings, onSave, saving, onInstagramChanged 
     <div>
       <h2 className="section-title">Settings</h2>
       <p className="section-sub">Connect Instagram so “Publish now” can go live. Your token stays on the server — it is never fully displayed here.</p>
+      {dbStatus && (dbStatus.db !== 'mongodb' || !dbStatus.sessionSecretFromEnv) && (
+        <div className="alert error" role="alert" style={{ marginBottom: 16 }}>
+          <b>Server setup needs attention.</b>{' '}
+          {dbStatus.db !== 'mongodb'
+            ? 'Accounts and posts are stored in temporary files right now and will disappear when the site redeploys. Set MONGODB_URI in Vercel → Project Settings → Environment Variables (all environments), then redeploy. '
+            : ''}
+          {!dbStatus.sessionSecretFromEnv
+            ? 'SESSION_SECRET is not set, so logins will not survive a restart or redeploy. Set SESSION_SECRET in Vercel → Project Settings → Environment Variables (all environments), then redeploy.'
+            : ''}
+          {dbStatus.lastError ? ` Last database error: ${dbStatus.lastError}` : ''}
+        </div>
+      )}
+      {dbStatus && dbStatus.db === 'mongodb' && dbStatus.sessionSecretFromEnv && (
+        <div className="alert success" role="status" style={{ marginBottom: 16 }}>
+          Database connected (MongoDB) and logins survive redeploys.
+        </div>
+      )}
       <div className="two-col" style={{ alignItems: 'start' }}>
         <div>
           <form className="card" onSubmit={submitHandle} style={{ marginBottom: 16 }}>

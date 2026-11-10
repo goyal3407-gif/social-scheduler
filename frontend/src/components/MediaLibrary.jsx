@@ -40,7 +40,9 @@ export default function MediaLibrary({ media, loading, error, onRetry, onAddLink
     setBusy(true)
     let ok = 0
     for (const f of list) {
-      if (f.size > 60 * 1024 * 1024) { setErr(`"${f.name}" is over the 60MB limit and was skipped.`); continue }
+      // The live site (Vercel serverless) accepts about 4 MB per request —
+      // bigger files fail there even though local dev allows 60 MB.
+      if (f.size > 4.5 * 1024 * 1024) { setErr(`"${f.name}" is over the live site's ~4 MB upload limit and was skipped — add it by public link instead (Add by link, on the right).`); continue }
       try { await onUpload(f, { folder: newFolder || undefined }); ok++ } catch (e) { setErr(e.message || 'Upload failed.') }
     }
     setBusy(false)
@@ -63,7 +65,7 @@ export default function MediaLibrary({ media, loading, error, onRetry, onAddLink
   return (
     <div>
       <h2 className="section-title">Media Library</h2>
-      <p className="section-sub">Upload videos and images (up to 60MB each) or save links. Organise with folders, tags and favourites.</p>
+      <p className="section-sub">Upload videos and images (about 4 MB max per upload on the live site — bigger files: add by link) or save links. Organise with folders, tags and favourites.</p>
 
       {error && <ErrorBox error={error} onRetry={onRetry} />}
       {err && <div className="alert error">{err}</div>}
@@ -82,7 +84,7 @@ export default function MediaLibrary({ media, loading, error, onRetry, onAddLink
             role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter') fileRef.current?.click() }}
           >
             <b>{busy ? 'Uploading…' : 'Drop files here, or click to browse'}</b>
-            <p className="small">MP4, MOV, JPG, PNG, WebP — max 60MB per file</p>
+            <p className="small">MP4, MOV, JPG, PNG, WebP — max ~4 MB per file on the live site</p>
             <input ref={fileRef} type="file" multiple accept="video/*,image/*" style={{ display: 'none' }} onChange={(e) => handleFiles(e.target.files)} />
           </div>
           <label htmlFor="upFolder" style={{ marginTop: 14 }}>Folder for uploads</label>

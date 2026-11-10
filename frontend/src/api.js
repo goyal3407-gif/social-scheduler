@@ -39,6 +39,7 @@ function asArray(data, key) {
 
 export const api = {
   health: () => req('/api/health'),
+  dbStatus: () => req('/api/db-status'),
 
   // Auth (session cookie is httpOnly; the frontend never sees a token)
   signup: (email, password) => req('/api/auth/signup', { method: 'POST', body: JSON.stringify({ email, password }) }),
@@ -49,16 +50,20 @@ export const api = {
   getStats: () => req('/api/stats'),
 
   getPosts: async () => asArray(await req('/api/posts'), 'posts'),
-  createPost: (post) => req('/api/posts', { method: 'POST', body: JSON.stringify(post) }),
-  updatePost: (id, patch) => req(`/api/posts/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  // Single-object endpoints return the object itself (not the {ok, post}
+  // wrapper) so callers can use it directly — returning the wrapper used
+  // to insert a broken post with no id into the queue until a reload.
+  createPost: async (post) => (await req('/api/posts', { method: 'POST', body: JSON.stringify(post) })).post,
+  createPostsBulk: (posts) => req('/api/posts/bulk', { method: 'POST', body: JSON.stringify({ posts }) }),
+  updatePost: async (id, patch) => (await req(`/api/posts/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) })).post,
   deletePost: (id) => req(`/api/posts/${encodeURIComponent(id)}`, { method: 'DELETE' }),
-  duplicatePost: (id) => req(`/api/posts/${encodeURIComponent(id)}/duplicate`, { method: 'POST', body: JSON.stringify({}) }),
-  reschedulePost: (id, patch) => req(`/api/posts/${encodeURIComponent(id)}/reschedule`, { method: 'POST', body: JSON.stringify(patch) }),
+  duplicatePost: async (id) => (await req(`/api/posts/${encodeURIComponent(id)}/duplicate`, { method: 'POST', body: JSON.stringify({}) })).post,
+  reschedulePost: async (id, patch) => (await req(`/api/posts/${encodeURIComponent(id)}/reschedule`, { method: 'POST', body: JSON.stringify(patch) })).post,
   getNextBestTime: () => req('/api/next-best-time'),
   publishPost: (id) => req(`/api/posts/${encodeURIComponent(id)}/publish`, { method: 'POST', body: JSON.stringify({}) }),
 
   getMedia: async () => asArray(await req('/api/media'), 'media'),
-  createMedia: (media) => req('/api/media', { method: 'POST', body: JSON.stringify(media) }),
+  createMedia: async (media) => (await req('/api/media', { method: 'POST', body: JSON.stringify(media) })).media,
   uploadMedia: async (file, extra = {}) => {
     // Server accepts base64 JSON (no multipart parser on the server).
     const dataUrl = await new Promise((resolve, reject) => {
@@ -67,13 +72,13 @@ export const api = {
       r.onerror = () => reject(new Error('Could not read file'))
       r.readAsDataURL(file)
     })
-    return req('/api/media/upload', { method: 'POST', body: JSON.stringify({ name: extra.title || file.name, dataUrl, folder: extra.folder || 'Uploads', tags: extra.tags || [] }) })
+    return req('/api/media/upload', { method: 'POST', body: JSON.stringify({ name: extra.title || file.name, dataUrl, folder: extra.folder || 'Uploads', tags: extra.tags || [] }) }).then((d) => d.media || d)
   },
-  updateMedia: (id, patch) => req(`/api/media/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  updateMedia: async (id, patch) => (await req(`/api/media/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) })).media,
   deleteMedia: (id) => req(`/api/media/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
   getTemplates: async () => asArray(await req('/api/templates'), 'templates'),
-  createTemplate: (tpl) => req('/api/templates', { method: 'POST', body: JSON.stringify(tpl) }),
+  createTemplate: async (tpl) => (await req('/api/templates', { method: 'POST', body: JSON.stringify(tpl) })).template,
 
   getSettings: () => req('/api/settings'),
   saveSettings: (settings) => req('/api/settings', { method: 'POST', body: JSON.stringify(settings) }),
