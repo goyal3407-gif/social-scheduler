@@ -121,8 +121,7 @@ app.delete('/api/posts/:id', ah(async (req, res) => {
 }));
 
 // ---------- Instagram publish (Graph API, env token only) ----------
-// Proven live 2026-11-09: media_type "REELS" (NOT "REEL"), container -> FINISHED -> media_publish.
-// Demo Reel: https://www.instagram.com/reel/Dfhxtieks0u/ (app "Zahixx Scheduler", dev mode)
+// media_type "REELS" (NOT "REEL"), container -> FINISHED -> media_publish.
 async function graph(path, method, body) {
   const url = `https://graph.facebook.com/v27.0${path}`;
   const res = await fetch(url, {

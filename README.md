@@ -32,9 +32,4 @@ Open http://localhost:3000
    - `IG_USER_ID` — Instagram Business Account ID (e.g. `17841434171126389`)
 4. Without those variables, the app still works fully for scheduling and the library; Publish shows a clear "connect Instagram token" state.
 
-## Proof it publishes
-
-Demo Reel published live 2026-11-09 via the Meta app "Zahixx Scheduler" (App ID 1671693167666941, development mode):
-https://www.instagram.com/reel/Dfhxtieks0u/
-
 Made by Goyal Kumar. Free forever.
