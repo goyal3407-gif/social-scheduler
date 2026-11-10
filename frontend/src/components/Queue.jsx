@@ -5,7 +5,7 @@ import { PostRow, Skeleton, Empty, StatusBadge, PlatformBadge } from './shared.j
 const STATUSES = ['scheduled', 'draft', 'published', 'failed']
 const LABELS = { scheduled: 'Scheduled', draft: 'Drafts', published: 'Published', failed: 'Failed' }
 
-export default function Queue({ posts, loading, onEdit, onDelete, onPublish, publishingId, onCreate }) {
+export default function Queue({ posts, loading, onEdit, onDelete, onPublish, publishingId, onCreate, onDuplicate, onReschedule, onRescheduleNextBest }) {
   const [view, setView] = useState('list')
   const [filter, setFilter] = useState('all')
   const [platform, setPlatform] = useState('all')
@@ -48,7 +48,7 @@ export default function Queue({ posts, loading, onEdit, onDelete, onPublish, pub
         <div className="card"><Empty title="Nothing matches" body="Try clearing a filter, or create a post — scheduled posts land here first." action={<button type="button" className="btn primary small" onClick={onCreate}>Create a post</button>} /></div>
       ) : view === 'list' ? (
         <div className="card">
-          {filtered.map((p) => <PostRow key={p.id} post={p} onEdit={onEdit} onDelete={onDelete} onPublish={onPublish} publishing={publishingId === p.id} />)}
+          {filtered.map((p) => <PostRow key={p.id} post={p} onEdit={onEdit} onDelete={onDelete} onPublish={onPublish} publishing={publishingId === p.id} onDuplicate={onDuplicate} onReschedule={onReschedule} onRescheduleNextBest={onRescheduleNextBest} />)}
         </div>
       ) : (
         <div className="kanban">
@@ -68,6 +68,9 @@ export default function Queue({ posts, loading, onEdit, onDelete, onPublish, pub
                     <div className="post-meta"><span>{fmtDateTime(p.scheduleTime)}</span></div>
                     <div style={{ display: 'flex', gap: 6, marginTop: 9, flexWrap: 'wrap' }}>
                       {p.status !== 'published' && <button type="button" className="btn primary small" disabled={publishingId === p.id} onClick={() => onPublish(p)}>Publish</button>}
+                      {onDuplicate && <button type="button" className="btn ghost small" onClick={() => onDuplicate(p)}>Duplicate</button>}
+                      {onReschedule && p.status !== 'published' && <button type="button" className="btn ghost small" onClick={() => onReschedule(p, { addDays: 1 })}>+1 day</button>}
+                      {onRescheduleNextBest && p.status !== 'published' && <button type="button" className="btn ghost small" onClick={() => onRescheduleNextBest(p)} title="Move to the next free 7:00 PM slot in your schedule">Next best time</button>}
                       <button type="button" className="btn ghost small" onClick={() => onEdit(p)}>Edit</button>
                       <button type="button" className="btn danger small" onClick={() => onDelete(p)}>Delete</button>
                     </div>

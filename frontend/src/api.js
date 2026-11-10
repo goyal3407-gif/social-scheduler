@@ -13,6 +13,7 @@
 
 async function req(path, options = {}) {
   const res = await fetch(path, {
+    credentials: 'include', // send the httpOnly session cookie
     headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
     ...options
   })
@@ -39,12 +40,21 @@ function asArray(data, key) {
 export const api = {
   health: () => req('/api/health'),
 
+  // Auth (session cookie is httpOnly; the frontend never sees a token)
+  signup: (email, password) => req('/api/auth/signup', { method: 'POST', body: JSON.stringify({ email, password }) }),
+  login: (email, password) => req('/api/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
+  me: () => req('/api/auth/me'),
+  logout: () => req('/api/auth/logout', { method: 'POST', body: JSON.stringify({}) }),
+
   getStats: () => req('/api/stats'),
 
   getPosts: async () => asArray(await req('/api/posts'), 'posts'),
   createPost: (post) => req('/api/posts', { method: 'POST', body: JSON.stringify(post) }),
   updatePost: (id, patch) => req(`/api/posts/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   deletePost: (id) => req(`/api/posts/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  duplicatePost: (id) => req(`/api/posts/${encodeURIComponent(id)}/duplicate`, { method: 'POST', body: JSON.stringify({}) }),
+  reschedulePost: (id, patch) => req(`/api/posts/${encodeURIComponent(id)}/reschedule`, { method: 'POST', body: JSON.stringify(patch) }),
+  getNextBestTime: () => req('/api/next-best-time'),
   publishPost: (id) => req(`/api/posts/${encodeURIComponent(id)}/publish`, { method: 'POST', body: JSON.stringify({}) }),
 
   getMedia: async () => asArray(await req('/api/media'), 'media'),
@@ -66,7 +76,53 @@ export const api = {
   createTemplate: (tpl) => req('/api/templates', { method: 'POST', body: JSON.stringify(tpl) }),
 
   getSettings: () => req('/api/settings'),
-  saveSettings: (settings) => req('/api/settings', { method: 'POST', body: JSON.stringify(settings) })
+  saveSettings: (settings) => req('/api/settings', { method: 'POST', body: JSON.stringify(settings) }),
+  connectInstagram: (token, igUserId) => req('/api/instagram/connect', { method: 'POST', body: JSON.stringify({ token, igUserId }) }),
+  disconnectInstagram: () => req('/api/instagram/disconnect', { method: 'POST', body: JSON.stringify({}) }),
+  startInstagramImport: () => req('/api/instagram/import', { method: 'POST', body: JSON.stringify({}) }),
+  getInstagramImport: (jobId) => req(`/api/instagram/import/${encodeURIComponent(jobId)}`)
+}
+
+/**
+ * Next free 7:00 PM slot (browser local time), computed from the user's own
+ * saved posts only: the first day in the next 14 days with no scheduled or
+ * draft post at 7pm. Returns an ISO string, or null if none is free.
+ * This is a suggestion from the user's own schedule — not audience data.
+ */
+export function nextBestTime(posts) {
+  const taken = new Set()
+  for (const p of posts || []) {
+    if (!p.scheduleTime || (p.status !== 'scheduled' && p.status !== 'draft')) continue
+    const d = new Date(p.scheduleTime)
+    if (Number.isNaN(d.getTime())) continue
+    taken.add(`${d.getFullYear()}-${d.getMonth()}-${d.getDate()}-${d.getHours()}`)
+  }
+  const now = new Date()
+  for (let day = 0; day < 14; day++) {
+    const cand = new Date(now.getFullYear(), now.getMonth(), now.getDate() + day, 19, 0, 0, 0)
+    if (cand.getTime() <= now.getTime()) continue
+    if (!taken.has(`${cand.getFullYear()}-${cand.getMonth()}-${cand.getDate()}-19`)) return cand.toISOString()
+  }
+  return null
+}
+
+/** Daily plan: for each of the next `days` days (from today), the count of
+ * scheduled posts that day, from real saved posts only. */
+export function dailyPlan(posts, days = 8) {
+  const start = new Date()
+  start.setHours(0, 0, 0, 0)
+  const out = []
+  for (let i = 0; i < days; i++) {
+    const d = new Date(start.getTime() + i * 86400000)
+    const key = d.toDateString()
+    const count = (posts || []).filter((p) => {
+      if (!p.scheduleTime || p.status !== 'scheduled') return false
+      const pd = new Date(p.scheduleTime)
+      return !Number.isNaN(pd.getTime()) && pd.toDateString() === key
+    }).length
+    out.push({ date: d, label: i === 0 ? 'Today' : d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' }), count })
+  }
+  return out
 }
 
 export function formatCountdown(targetIso) {

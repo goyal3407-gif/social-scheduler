@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { api } from './api.js'
+import { api, nextBestTime } from './api.js'
+import Auth from './components/Auth.jsx'
+import SetupWizard from './components/SetupWizard.jsx'
 import Dashboard from './components/Dashboard.jsx'
 import CalendarView from './components/CalendarView.jsx'
 import Queue from './components/Queue.jsx'
@@ -25,6 +27,8 @@ export default function App() {
   const [theme, setTheme] = useState(() => {
     try { return localStorage.getItem('ss-theme') || (window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') } catch { return 'light' }
   })
+  const [user, setUser] = useState(null)
+  const [authChecked, setAuthChecked] = useState(false)
   const [posts, setPosts] = useState([])
   const [media, setMedia] = useState([])
   const [templates, setTemplates] = useState([])
@@ -45,6 +49,16 @@ export default function App() {
     try { localStorage.setItem('ss-theme', theme) } catch { /* storage unavailable */ }
   }, [theme])
 
+  // Who is logged in? Logged-out visitors see only the Auth screen.
+  useEffect(() => {
+    let alive = true
+    api.me()
+      .then((res) => { if (alive) setUser(res.user || null) })
+      .catch(() => { if (alive) setUser(null) })
+      .finally(() => { if (alive) setAuthChecked(true) })
+    return () => { alive = false }
+  }, [])
+
   const loadAll = useCallback(async () => {
     setLoading(true); setError(null)
     try {
@@ -57,16 +71,27 @@ export default function App() {
       ])
       setPosts(p); setMedia(m); setTemplates(t); setSettings(s); setStats(st)
     } catch (e) {
+      if (e && e.status === 401) { setUser(null); return }
       setError(e)
     } finally { setLoading(false) }
   }, [])
 
-  useEffect(() => { loadAll() }, [loadAll])
+  useEffect(() => { if (user) loadAll() }, [user, loadAll])
 
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(''), 4000) }
 
   const refreshStats = useCallback(async () => {
     try { setStats(await api.getStats()) } catch { /* keep last stats */ }
+  }, [])
+
+  const refreshSettings = useCallback(async () => {
+    try { setSettings(await api.getSettings()) } catch { /* keep last settings */ }
+    await loadAll()
+  }, [loadAll])
+
+  const handleLogout = useCallback(async () => {
+    try { await api.logout() } catch { /* cookie cleared server-side anyway */ }
+    setUser(null); setPosts([]); setMedia([]); setTemplates([]); setSettings(null); setStats(null); setTab('home')
   }, [])
 
   const goStudio = (post = null) => {
@@ -94,6 +119,33 @@ export default function App() {
       setTab('queue')
     } finally { setSaving(false) }
   }, [editing, refreshStats])
+
+  const handleDuplicate = useCallback(async (post) => {
+    try {
+      const res = await api.duplicatePost(post.id)
+      const copy = res?.post || res
+      if (copy && copy.id) setPosts((prev) => [copy, ...prev])
+      else { const fresh = await api.getPosts().catch(() => null); if (fresh) setPosts(fresh) }
+      showToast('Duplicated as a draft.')
+      refreshStats()
+    } catch (e) { setError(e) }
+  }, [refreshStats])
+
+  const handleReschedule = useCallback(async (post, patch) => {
+    try {
+      const res = await api.reschedulePost(post.id, patch)
+      const updated = res?.post || res
+      if (updated && updated.id) setPosts((prev) => prev.map((p) => (p.id === post.id ? { ...p, ...updated } : p)))
+      showToast('Rescheduled.')
+      refreshStats()
+    } catch (e) { setError(e) }
+  }, [refreshStats])
+
+  const handleRescheduleNextBest = useCallback(async (post) => {
+    const slot = nextBestTime(posts.filter((p) => p.id !== post.id))
+    if (!slot) { showToast('No free 7:00 PM slot in the next 14 days.'); return }
+    await handleReschedule(post, { scheduleTime: slot })
+  }, [posts, handleReschedule])
 
   const handlePublish = useCallback(async (post) => {
     setPublishingId(post.id)
@@ -177,6 +229,27 @@ export default function App() {
     mediaCount: media.length
   }, [stats, posts, media])
 
+  // --- Login gate: nothing but the Auth screen until the server says who this is.
+  if (!authChecked) {
+    return <div className="app"><div className="wrap" style={{ paddingTop: 60, textAlign: 'center' }}><p className="muted">Loading…</p></div></div>
+  }
+  if (!user) {
+    return (
+      <div className="app">
+        <Auth onAuth={(u) => { setUser(u); setTab('home') }} />
+      </div>
+    )
+  }
+
+  // --- Setup wizard: first login only, until it is finished or skipped.
+  if (settings && settings.setupDone !== true) {
+    return (
+      <div className="app">
+        <SetupWizard settings={settings} onDone={refreshSettings} onInstagramChanged={refreshSettings} />
+      </div>
+    )
+  }
+
   return (
     <div className="app">
       <header className="topbar">
@@ -196,6 +269,7 @@ export default function App() {
             <button type="button" className="icon-btn" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}>
               {theme === 'dark' ? <IconSun size={18} /> : <IconMoon size={18} />}
             </button>
+            <button type="button" className="btn ghost small" onClick={handleLogout} title={`Log out ${user.email || ''}`}>Log out</button>
           </div>
         </div>
       </header>
@@ -214,17 +288,18 @@ export default function App() {
           <Dashboard posts={posts} stats={statsFallback} loading={loading} error={error} onRetry={loadAll}
             onCreate={() => goStudio(null)} onGoQueue={() => setTab('queue')}
             onEdit={goStudio} onDelete={(p) => setConfirmDelete({ type: 'post', item: p })}
-            onPublish={handlePublish} publishingId={publishingId} settings={settings} />
+            onPublish={handlePublish} publishingId={publishingId} settings={settings}
+            onDuplicate={handleDuplicate} onReschedule={handleReschedule} onRescheduleNextBest={handleRescheduleNextBest} />
         )}
         {tab === 'calendar' && (
           <div className="section"><CalendarView posts={posts} loading={loading} onEdit={goStudio} onDelete={(p) => setConfirmDelete({ type: 'post', item: p })} onPublish={handlePublish} publishingId={publishingId} /></div>
         )}
         {tab === 'queue' && (
-          <div className="section"><Queue posts={posts} loading={loading} onEdit={goStudio} onDelete={(p) => setConfirmDelete({ type: 'post', item: p })} onPublish={handlePublish} publishingId={publishingId} onCreate={() => goStudio(null)} /></div>
+          <div className="section"><Queue posts={posts} loading={loading} onEdit={goStudio} onDelete={(p) => setConfirmDelete({ type: 'post', item: p })} onPublish={handlePublish} publishingId={publishingId} onCreate={() => goStudio(null)} onDuplicate={handleDuplicate} onReschedule={handleReschedule} onRescheduleNextBest={handleRescheduleNextBest} /></div>
         )}
         {tab === 'studio' && (
           <div className="section">
-            <Studio key={`${studioKey}-${editing?.id || 'new'}`} editing={editing} seed={templateSeed ? { caption: templateSeed.text || templateSeed.caption || '', mediaUrl: templateSeed.mediaUrl || '', mediaType: templateSeed.mediaType || 'video', scheduleTime: templateSeed.scheduleTime || '' } : null} media={media} templates={templates} onSave={handleSavePost} onCancel={() => setTab('queue')} saving={saving} />
+            <Studio key={`${studioKey}-${editing?.id || 'new'}`} editing={editing} seed={templateSeed ? { caption: templateSeed.text || templateSeed.caption || '', mediaUrl: templateSeed.mediaUrl || '', mediaType: templateSeed.mediaType || 'video', scheduleTime: templateSeed.scheduleTime || '' } : null} media={media} templates={templates} onSave={handleSavePost} onCancel={() => setTab('queue')} saving={saving} posts={posts} />
           </div>
         )}
         {tab === 'bulk' && <div className="section"><Bulk onImport={handleBulkImport} /></div>}
@@ -239,7 +314,7 @@ export default function App() {
           <div className="section"><Tools posts={posts} stats={statsFallback} templates={templates} onCreateTemplate={handleCreateTemplate} onUseTemplate={useInStudio} /></div>
         )}
         {tab === 'settings' && (
-          <div className="section"><Settings settings={settings} saving={saving} onSave={async (s) => { setSaving(true); try { const u = await api.saveSettings(s); setSettings(u || s) } finally { setSaving(false) } }} /></div>
+          <div className="section"><Settings settings={settings} saving={saving} onSave={async (s) => { setSaving(true); try { const u = await api.saveSettings(s); setSettings(u || s) } finally { setSaving(false) } }} onInstagramChanged={refreshSettings} /></div>
         )}
 
         <footer className="footer">

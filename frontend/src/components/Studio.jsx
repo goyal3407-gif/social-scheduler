@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
-import { captionScore, countHashtags, fromLocalInputValue, toLocalInputValue } from '../api.js'
+import { captionScore, countHashtags, fromLocalInputValue, nextBestTime, toLocalInputValue } from '../api.js'
 import { IconWarn, IconCheck } from './icons.jsx'
 
 const PLATFORMS = ['Instagram', 'YouTube', 'Facebook', 'TikTok']
 const FORMATS = ['REELS', 'FEED', 'STORY']
 const EMPTY = { mediaUrl: '', mediaType: 'video', caption: '', hashtags: '', cta: '', platform: 'Instagram', scheduleTime: '', status: 'scheduled', format: 'REELS' }
 
-export default function Studio({ editing, seed, media, templates, onSave, onCancel, saving }) {
+export default function Studio({ editing, seed, media, templates, onSave, onCancel, saving, posts }) {
   const [form, setForm] = useState(EMPTY)
   const [step, setStep] = useState(1)
   const [width, setWidth] = useState('')
@@ -38,6 +38,16 @@ export default function Studio({ editing, seed, media, templates, onSave, onCanc
     if (!form.scheduleTime) return false
     return true
   }, [form])
+
+  // Suggestion from the user's own schedule: next free 7:00 PM slot.
+  // Excludes the post being edited so it doesn't block its own slot.
+  const suggestion = useMemo(() => {
+    const others = (posts || []).filter((p) => p.id !== editing?.id)
+    return nextBestTime(others)
+  }, [posts, editing?.id])
+  const suggestionLabel = suggestion
+    ? new Date(suggestion).toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })
+    : null
 
   const submit = async (statusOverride) => {
     setError('')
@@ -191,6 +201,17 @@ export default function Studio({ editing, seed, media, templates, onSave, onCanc
               </div>
               <label htmlFor="scheduleTime" style={{ marginTop: 14 }}>Schedule time</label>
               <input id="scheduleTime" type="datetime-local" value={form.scheduleTime && form.scheduleTime.length > 16 ? toLocalInputValue(form.scheduleTime) : form.scheduleTime} onChange={(e) => set({ scheduleTime: e.target.value })} />
+              {suggestion && (
+                <div className="warn blue">
+                  <IconCheck size={17} />
+                  <div>
+                    <b>Suggested time: {suggestionLabel}.</b> This is the next free 7:00 PM slot in your own schedule — no post is scheduled then. It is a suggestion from your saved posts, not audience data.
+                    <div style={{ marginTop: 8 }}>
+                      <button type="button" className="btn ghost small" onClick={() => set({ scheduleTime: toLocalInputValue(suggestion) })}>Use {suggestionLabel}</button>
+                    </div>
+                  </div>
+                </div>
+              )}
               <p className="muted small mt">Best times are usually 7–9pm in your audience&apos;s timezone — check the heatmap in Tools.</p>
               {feedVerticalWarn && <div className="warn red"><IconWarn size={17} /><div>Vertical video (ratio {ratio?.toFixed(2)}) with FEED format — this is likely to fail or crop. Switch to REELS above.</div></div>}
               {error && <div className="alert error">{error}</div>}

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { fmtDateTime, formatCountdown } from '../api.js'
+import { dailyPlan, fmtDateTime, formatCountdown } from '../api.js'
 import { PostRow, Skeleton, ErrorBox, Empty } from './shared.jsx'
 import { IconClock, IconPlay } from './icons.jsx'
 
@@ -18,7 +18,7 @@ function useCountdown(targetIso) {
   return { label: formatCountdown(targetIso), parts: { d, h, m } }
 }
 
-export default function Dashboard({ posts, stats, loading, error, onRetry, onCreate, onGoQueue, onEdit, onDelete, onPublish, publishingId, settings }) {
+export default function Dashboard({ posts, stats, loading, error, onRetry, onCreate, onGoQueue, onEdit, onDelete, onPublish, publishingId, settings, onDuplicate, onReschedule, onRescheduleNextBest }) {
   const upcoming = useMemo(() => {
     const now = Date.now()
     return [...(posts || [])]
@@ -27,6 +27,7 @@ export default function Dashboard({ posts, stats, loading, error, onRetry, onCre
   }, [posts])
   const next = upcoming[0]
   const cd = useCountdown(next?.scheduleTime)
+  const plan = useMemo(() => dailyPlan(posts, 8), [posts])
   const recent = useMemo(() => [...(posts || [])].sort((a, b) => new Date(b.createdAt || b.scheduleTime || 0) - new Date(a.createdAt || a.scheduleTime || 0)).slice(0, 5), [posts])
   const s = stats || {}
   const weekCount = useMemo(() => {
@@ -81,6 +82,34 @@ export default function Dashboard({ posts, stats, loading, error, onRetry, onCre
         )}
       </div>
 
+      <section className="card section" aria-label="Daily plan">
+        <div className="card-head">
+          <div><h2>Daily plan — today + next 7 days</h2><p>Scheduled posts per day, from your saved posts. {next ? `Next post due ${fmtDateTime(next.scheduleTime)}.` : 'No post due yet.'}</p></div>
+          <button type="button" className="btn ghost small" onClick={onGoQueue}>Queue →</button>
+        </div>
+        {loading ? <Skeleton rows={3} /> : (
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th>Day</th><th>Scheduled posts</th><th>Next post due</th></tr></thead>
+              <tbody>
+                {plan.map((d, i) => {
+                  const dayPosts = [...(posts || [])]
+                    .filter((p) => p.status === 'scheduled' && p.scheduleTime && new Date(p.scheduleTime).toDateString() === d.date.toDateString())
+                    .sort((a, b) => new Date(a.scheduleTime) - new Date(b.scheduleTime))
+                  return (
+                    <tr key={d.date.toDateString()} style={i === 0 ? { background: 'var(--surface-2)' } : undefined}>
+                      <td><b>{d.label}</b></td>
+                      <td>{d.count === 0 ? '—' : `${d.count} post${d.count === 1 ? '' : 's'}`}</td>
+                      <td>{dayPosts[0] ? fmtDateTime(dayPosts[0].scheduleTime) : '—'}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
       <div className="two-col section">
         <section className="card">
           <div className="card-head">
@@ -90,7 +119,7 @@ export default function Dashboard({ posts, stats, loading, error, onRetry, onCre
           {loading ? <Skeleton rows={3} /> : upcoming.length === 0 ? (
             <Empty title="Queue is clear" body="No posts are scheduled. Schedule one from Studio or Bulk and it will show up here with a countdown." action={<button type="button" className="btn primary small" onClick={onCreate}>Create a post</button>} />
           ) : upcoming.slice(0, 4).map((p) => (
-            <PostRow key={p.id} post={p} onEdit={onEdit} onDelete={onDelete} onPublish={onPublish} publishing={publishingId === p.id} />
+            <PostRow key={p.id} post={p} onEdit={onEdit} onDelete={onDelete} onPublish={onPublish} publishing={publishingId === p.id} onDuplicate={onDuplicate} onReschedule={onReschedule} onRescheduleNextBest={onRescheduleNextBest} />
           ))}
         </section>
 

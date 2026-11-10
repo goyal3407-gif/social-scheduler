@@ -21,7 +21,18 @@ npm run build
 npm start
 ```
 
-Open http://localhost:3000
+Open http://localhost:3000 — create an account (the first account is the owner),
+then the setup wizard walks through connecting Instagram and importing your
+existing Instagram posts. Either wizard step can be skipped.
+
+## Environment variables
+
+- `SESSION_SECRET` — signs the login session cookie. Set it in Vercel
+  (all environments) so logins survive redeploys; without it a random
+  per-process secret is used and everyone is logged out on each restart/redeploy.
+- `INSTAGRAM_ACCESS_TOKEN` / `IG_USER_ID` — optional fallback for Instagram
+  publishing when no token has been pasted in Settings. Pasting a token in
+  Settings (verified live against the Graph API) takes priority.
 
 ## Deploy on Vercel (free, Hobby)
 

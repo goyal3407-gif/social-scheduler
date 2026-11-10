@@ -51,7 +51,7 @@ export function Empty({ title, body, action }) {
   )
 }
 
-export function PostRow({ post, onEdit, onDelete, onPublish, publishing }) {
+export function PostRow({ post, onEdit, onDelete, onPublish, publishing, onDuplicate, onReschedule, onRescheduleNextBest }) {
   return (
     <div className="post-row">
       <Thumb post={post} />
@@ -74,6 +74,13 @@ export function PostRow({ post, onEdit, onDelete, onPublish, publishing }) {
           <button type="button" className="btn primary small" disabled={publishing} onClick={() => onPublish && onPublish(post)}>
             {publishing ? 'Publishing…' : 'Publish now'}
           </button>
+        )}
+        {onDuplicate && <button type="button" className="btn ghost small" onClick={() => onDuplicate(post)} title="Make a copy as a draft">Duplicate</button>}
+        {onReschedule && post.status !== 'published' && (
+          <button type="button" className="btn ghost small" onClick={() => onReschedule(post, { addDays: 1 })} title="Move this post one day later">+1 day</button>
+        )}
+        {onRescheduleNextBest && post.status !== 'published' && (
+          <button type="button" className="btn ghost small" onClick={() => onRescheduleNextBest(post)} title="Move to the next free 7:00 PM slot in your schedule">Next best time</button>
         )}
         <button type="button" className="btn ghost small" onClick={() => onEdit && onEdit(post)}>Edit</button>
         <button type="button" className="btn danger small" onClick={() => onDelete && onDelete(post)}>Delete</button>
