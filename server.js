@@ -864,6 +864,7 @@ app.get('/api/instagram/callback', ah(async (req, res) => {
   // handoff), so every outcome is a friendly result page, not a redirect
   // into the SPA. The user is identified by the signed OAuth state.
   const fail = (reason) => igResultPage(res, 200, { ok: false, title: 'Instagram was not connected', message: IG_OAUTH_REASONS[reason] || IG_OAUTH_REASONS.exchange });
+  const failMsg = (message) => igResultPage(res, 200, { ok: false, title: 'Instagram was not connected', message });
   const q = req.query || {};
   if (q.error) return fail('denied');
   const code = String(q.code || '');
@@ -913,7 +914,25 @@ app.get('/api/instagram/callback', ah(async (req, res) => {
       }
     } catch { /* try the next Page */ }
   }
-  if (!igAccount) return fail('no_instagram');
+  if (!igAccount) {
+    // Diagnostic detail for the owner: which Pages (if any) this
+    // Facebook login actually returned, so a wrong-account login, an
+    // unselected Page in the dialog, or a missing Page↔Instagram link
+    // is obvious from the error page itself. Page names are the user's
+    // own data (shown only to the person who just logged in); no token
+    // values are ever included here or in any log.
+    const guidance = 'KiluaAI needs the Facebook account that manages your Page. If your Page isn\'t listed, log out of Facebook in this browser, log in with the account that owns your Page, and in the KiluaAI dialog select your Page AND your Instagram account, then try again.';
+    if (pageList.length === 0) {
+      return failMsg('No Pages were returned for this login (0 Pages found), so no Instagram account could be resolved. ' + guidance);
+    }
+    const names = pageList.map((p) => (p && p.name ? String(p.name) : '(unnamed Page)')).join(', ');
+    const plural = pageList.length !== 1;
+    return failMsg(
+      `Your Page${plural ? 's' : ''} — ${names} — ${plural ? 'were' : 'was'} found (${pageList.length} Page${plural ? 's' : ''}), but no Instagram professional account is linked to ${plural ? 'them' : 'it'}. `
+      + 'Link Instagram to the Page in the Instagram app → Settings → Accounts Centre, or in the Page\'s Settings → Linked Accounts, then try again from the KiluaAI app. '
+      + guidance
+    );
+  }
   await db.saveInstagram(userId, {
     token, igUserId: igAccount.id, username: igAccount.username || '', pageId,
     connectedAt: new Date().toISOString(),
