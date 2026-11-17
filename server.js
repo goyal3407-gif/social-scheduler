@@ -876,7 +876,7 @@ function igResultPage(res, status, { ok, title, message }) {
 <div style="font-size:52px;line-height:1;color:${ok ? '#7dd87d' : '#e8c268'}">${ok ? '✓' : '!'}</div>
 <h1 style="font-size:24px;margin:16px 0 10px;color:#e8c268">${esc(title)}</h1>
 <p style="font-size:16px;line-height:1.55;margin:0 0 26px">${esc(message)}</p>
-<a href="/" style="display:inline-block;background:#e8c268;color:#0e1325;text-decoration:none;font-weight:700;padding:12px 22px;border-radius:10px">Open KiluaAI</a>
+<a href="https://social-scheduler-one-sandy.vercel.app/open-app" style="display:inline-block;background:#e8c268;color:#0e1325;text-decoration:none;font-weight:700;padding:12px 22px;border-radius:10px">Open KiluaAI</a>
 <p style="font-size:13px;opacity:.65;margin-top:18px">You can close this tab — nothing else is needed here.</p>
 </main></body></html>`);
 }
@@ -1526,7 +1526,7 @@ async function attemptPublish(userId, post, ig) {
 app.post('/api/posts/:id/publish', ah(async (req, res) => {
   const ig = await getInstagramCreds(req);
   if (!ig.token || !ig.igUserId) {
-    return res.status(400).json({ ok: false, error: 'Instagram is not connected — add your access token in Settings (or set INSTAGRAM_ACCESS_TOKEN and IG_USER_ID on the server) to publish from here.' });
+    return res.status(400).json({ ok: false, error: 'Instagram is not connected — connect Instagram in Settings to publish from here.' });
   }
   const post = await db.getPost(req.userId, req.params.id);
   if (!post) return res.status(404).json({ ok: false, error: 'That post no longer exists — it may have been deleted.' });
@@ -1559,7 +1559,7 @@ app.post('/api/publish-due', ah(async (req, res) => {
   await ensureInstagramTokenFresh(req.userId).catch(() => null);
   const ig = await getInstagramCreds(req);
   if (!ig.token || !ig.igUserId) {
-    return res.status(400).json({ ok: false, error: 'Instagram is not connected — add your access token in Settings to publish from here.' });
+    return res.status(400).json({ ok: false, error: 'Instagram is not connected — connect Instagram in Settings to publish from here.' });
   }
   const due = await duePostsFor(req.userId, 5);
   const published = [];

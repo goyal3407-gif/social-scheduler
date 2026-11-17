@@ -180,7 +180,7 @@ export default function Dashboard({ posts, stats, loading, error, onRetry, onCre
           ))}
           <div className="warn blue" style={{ marginTop: 14 }}>
             <IconClock size={17} />
-            <div><b>Instagram status: </b>{settings?.instagramConnected ? `Connected${settings.instagramHandle ? ` as @${settings.instagramHandle}` : ''}. Publishing is ready.` : 'Not connected yet — add your access token in Settings to publish live.'}</div>
+            <div><b>Instagram status: </b>{settings?.instagramConnected ? `Connected${settings.instagramHandle ? ` as @${settings.instagramHandle}` : ''}. Publishing is ready.` : 'Not connected yet — connect Instagram in Settings to publish live.'}</div>
           </div>
           {settings?.instagramConnected && (
             <p className="muted mt">Token is stored on the server only — it is never shown in this app.</p>

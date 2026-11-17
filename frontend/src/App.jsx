@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense } fro
 import { api, nextBestTime } from './api.js'
 import Auth from './components/Auth.jsx'
 import Dashboard from './components/Dashboard.jsx'
-import { IconHome, IconCal, IconQueue, IconPlus, IconMedia, IconBulk, IconTools, IconSpark, IconSettings, IconSun, IconMoon } from './components/icons.jsx'
+import { IconHome, IconCal, IconQueue, IconPlus, IconMedia, IconBulk, IconTools, IconSpark, IconSettings, IconSun, IconMoon, IconMenu, IconX } from './components/icons.jsx'
 import { Skeleton } from './components/shared.jsx'
 // Heavy tabs load on demand so the first paint is only Dashboard + shell.
 const SetupWizard = lazy(() => import('./components/SetupWizard.jsx'))
@@ -33,9 +33,16 @@ const NAV = [
 export default function App() {
   // Returning from the Meta "Connect Instagram" login lands on
   // /?ig_oauth=... — open Settings directly so its result banner shows.
+  // The same applies to /open-app, the verified Android App Link the
+  // connect result pages point at: it means "I just connected", so land
+  // on Settings (and clean the path so a refresh doesn't repeat it).
   const [tab, setTab] = useState(() => {
-    try { return new URLSearchParams(window.location.search).has('ig_oauth') ? 'settings' : 'home' } catch { return 'home' }
+    try {
+      if (window.location.pathname.startsWith('/open-app')) return 'settings'
+      return new URLSearchParams(window.location.search).has('ig_oauth') ? 'settings' : 'home'
+    } catch { return 'home' }
   })
+  const [menuOpen, setMenuOpen] = useState(false)
   const [theme, setTheme] = useState(() => {
     try { return localStorage.getItem('ss-theme') || (window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') } catch { return 'light' }
   })
@@ -57,6 +64,7 @@ export default function App() {
   const [confirmDelete, setConfirmDelete] = useState(null) // {type:'post'|'media'|'posts', item|items}
   const [templateSeed, setTemplateSeed] = useState(null)
   const toastTimer = useRef(null)
+  const refreshSettingsRef = useRef(null)
 
   // Per-tab document title (screen readers + history).
   useEffect(() => {
@@ -71,6 +79,58 @@ export default function App() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [confirmDelete])
+
+  // Side drawer: Escape closes it, and the page behind it must not
+  // scroll while it is open (the drawer's own list scrolls instead).
+  useEffect(() => {
+    if (!menuOpen) return undefined
+    const onKey = (e) => { if (e.key === 'Escape') setMenuOpen(false) }
+    window.addEventListener('keydown', onKey)
+    const prevOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      document.body.style.overflow = prevOverflow
+    }
+  }, [menuOpen])
+
+  // /open-app arrived as a plain browser visit (not the Android app):
+  // normalise the URL to the app home so refreshes and shares behave.
+  useEffect(() => {
+    try {
+      if (window.location.pathname.startsWith('/open-app')) {
+        window.history.replaceState({}, '', '/')
+      }
+    } catch { /* history unavailable — the page still works */ }
+  }, [])
+
+  // Android App Link return: when the system browser hands the user
+  // back to the APK via https://…/open-app (verified App Link), the
+  // native shell fires appUrlOpen — route to Settings and refetch the
+  // connection status so "Connected" shows without a manual reload.
+  useEffect(() => {
+    let remove = null
+    let cancelled = false
+    try {
+      if (window.Capacitor && typeof window.Capacitor.isNativePlatform === 'function' && window.Capacitor.isNativePlatform()) {
+        import('@capacitor/app').then(({ App: CapApp }) => {
+          if (cancelled) return
+          CapApp.addListener('appUrlOpen', (data) => {
+            try {
+              const url = new URL(data && data.url ? data.url : '')
+              if (url.pathname.startsWith('/open-app')) {
+                setTab('settings')
+                refreshSettingsRef.current && refreshSettingsRef.current()
+              }
+            } catch { /* not a URL we route */ }
+          }).then((handle) => { if (!cancelled) remove = handle; else handle && handle.remove && handle.remove() })
+            .catch(() => { /* listener unavailable — focus refetch still covers us */ })
+        }).catch(() => { /* plugin not bundled in this context */ })
+      }
+    } catch { /* not running in a native shell */ }
+    return () => { cancelled = true; if (remove && remove.remove) remove.remove() }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
@@ -134,6 +194,7 @@ export default function App() {
     try { setSettings(await api.getSettings()) } catch { /* keep last settings */ }
     refreshStats()
   }, [refreshStats])
+  refreshSettingsRef.current = refreshSettings
 
   // Full reload (used after the setup wizard, when posts/media may have
   // been imported).
@@ -209,7 +270,7 @@ export default function App() {
     } catch (e) {
       showToast(e.message || 'Publish failed.')
       // Surface the server's message plainly so the user knows what to fix
-      // (e.g. "Instagram not connected — add your access token in Settings").
+      // (e.g. "Instagram not connected — connect Instagram in Settings").
       setError(e)
       if (/not connected/i.test(e.message || '')) setTab('settings')
     } finally { setPublishingId(null) }
@@ -375,8 +436,11 @@ export default function App() {
       <a className="skip-link" href="#main">Skip to content</a>
       <header className="topbar">
         <div className="topbar-in">
+          <button type="button" className="icon-btn burger-btn" onClick={() => setMenuOpen(true)} aria-label="Open menu" aria-expanded={menuOpen}>
+            <IconMenu size={20} />
+          </button>
           <div className="logo">
-            <div className="logo-mark" aria-hidden="true"><IconQueue size={22} /></div>
+            <div className="logo-mark" aria-hidden="true"><img src="/icon-192.png" alt="" width="40" height="40" /></div>
             <div>
               <b>KiluaAI</b>
               <span>by Goyal Kumar · Free forever</span>
@@ -394,6 +458,49 @@ export default function App() {
           </div>
         </div>
       </header>
+
+      {menuOpen && (
+        <div className="drawer-bg" onClick={() => setMenuOpen(false)}>
+          <aside className="drawer" role="dialog" aria-modal="true" aria-label="Menu" onClick={(e) => e.stopPropagation()}>
+            <div className="drawer-head">
+              <div className="logo">
+                <div className="logo-mark" aria-hidden="true"><img src="/icon-192.png" alt="" width="40" height="40" /></div>
+                <div>
+                  <b>KiluaAI</b>
+                  <span>by Goyal Kumar</span>
+                </div>
+              </div>
+              <button type="button" className="icon-btn" onClick={() => setMenuOpen(false)} aria-label="Close menu" autoFocus>
+                <IconX size={18} />
+              </button>
+            </div>
+            <nav className="drawer-nav" aria-label="Menu navigation">
+              {NAV.map(({ id, label, Icon }) => (
+                <button key={id} type="button" className={`drawer-item ${tab === id ? 'active' : ''}`} aria-current={tab === id ? 'page' : undefined}
+                  onClick={() => { setTab(id); setMenuOpen(false); window.scrollTo({ top: 0 }) }}>
+                  <Icon size={20} /><span>{label}</span>
+                </button>
+              ))}
+              <button type="button" className="drawer-item drawer-create" onClick={() => { goStudio(null); setMenuOpen(false) }}>
+                <IconPlus size={20} /><span>Create a post</span>
+              </button>
+            </nav>
+            <div className="drawer-foot">
+              <span className="pill" title={settings?.instagramConnected ? 'Instagram connected' : 'Instagram not connected'}>
+                <span className={`dot ${settings?.instagramConnected ? '' : 'off'}`} />
+                {settings?.instagramConnected ? `IG ${settings.instagramHandle || 'connected'}` : 'IG not connected'}
+              </span>
+              <p className="muted small" style={{ marginTop: 10 }}>{user.email}</p>
+              <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+                <button type="button" className="btn ghost small" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
+                  {theme === 'dark' ? 'Light theme' : 'Dark theme'}
+                </button>
+                <button type="button" className="btn ghost small" onClick={() => { setMenuOpen(false); handleLogout() }}>Log out</button>
+              </div>
+            </div>
+          </aside>
+        </div>
+      )}
 
       <main className="wrap" id="main">
         {toast && <div className="alert success" role="status" style={{ marginTop: 16 }}><span style={{ flex: 1 }}>{toast}</span><button type="button" className="btn ghost small" aria-label="Dismiss" onClick={() => setToast('')}>✕</button></div>}
@@ -454,13 +561,13 @@ export default function App() {
       <nav className="dock" aria-label="Main navigation">
         {NAV.slice(0, 3).map(({ id, label, Icon }) => (
           <button key={id} type="button" className={`dock-btn ${tab === id ? 'active' : ''}`} onClick={() => setTab(id)} aria-current={tab === id ? 'page' : undefined}>
-            <Icon size={20} />{label}
+            <Icon size={20} /><span className="dock-label">{label}</span>
           </button>
         ))}
         <button type="button" className="dock-create" onClick={() => goStudio(null)} aria-label="Create a post"><IconPlus size={24} /></button>
         {NAV.slice(3).map(({ id, label, Icon }) => (
           <button key={id} type="button" className={`dock-btn ${tab === id ? 'active' : ''}`} onClick={() => setTab(id)} aria-current={tab === id ? 'page' : undefined}>
-            <Icon size={20} />{label}
+            <Icon size={20} /><span className="dock-label">{label}</span>
           </button>
         ))}
       </nav>

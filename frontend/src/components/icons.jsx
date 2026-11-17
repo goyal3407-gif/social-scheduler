@@ -29,3 +29,4 @@ export const IconSend = (p) => <I {...p} d="m3 11 18-8-8 18-2.5-7.5L3 11z" />
 export const IconSpark = (p) => <I {...p}><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3z" /><path d="M19 15l.9 2.6 2.6.9-2.6.9L19 22l-.9-2.6-2.6-.9 2.6-.9L19 15z" /></I>
 export const IconEdit = (p) => <I {...p} d="M4 20h4L20 8a2.8 2.8 0 0 0-4-4L4 16v4zM13.5 6.5l4 4" />
 export const IconX = (p) => <I {...p} d="M6 6l12 12M18 6 6 18" />
+export const IconMenu = (p) => <I {...p} d="M4 7h16M4 12h16M4 17h16" />

@@ -1,6 +1,15 @@
 node_modules/
 frontend/node_modules/
 frontend/dist/
+# Gold-logo files materialised by frontend/gen-icons.mjs at build time
+# (sources are the base64 text files in frontend/icon-src/).
+frontend/public/icon-192.png
+frontend/public/icon-512.png
+frontend/public/logo-512.png
+frontend/public/apple-touch-icon.png
+frontend/public/favicon.ico
+frontend/public/favicon-16.png
+frontend/public/favicon-32.png
 data/*.json
 .env
 .DS_Store

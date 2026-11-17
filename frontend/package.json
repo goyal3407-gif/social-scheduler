@@ -1,5 +1,6 @@
 {
   "dependencies": {
+    "@capacitor/app": "^8.1.2",
     "@capacitor/core": "^8.6.2",
     "@capacitor/filesystem": "^8.1.5",
     "react": "^18.3.1",
@@ -12,7 +13,7 @@
   "name": "social-scheduler-frontend",
   "private": true,
   "scripts": {
-    "build": "vite build",
+    "build": "node gen-icons.mjs && vite build",
     "dev": "vite",
     "preview": "vite preview"
   },

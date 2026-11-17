@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.goyalkumar.scheduler",
+      "sha256_cert_fingerprints": [
+        "59:DA:1A:77:3C:E7:CD:07:DE:01:C6:FD:3E:44:33:4C:D8:66:6A:5B:3A:C3:F1:FC:63:B2:E4:15:C4:DD:19:C4"
+      ]
+    }
+  }
+]
