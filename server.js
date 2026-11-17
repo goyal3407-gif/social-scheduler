@@ -1178,7 +1178,10 @@ app.post('/api/publish-due', ah(async (req, res) => {
 // "Authorization: Bearer <CRON_SECRET>". Without CRON_SECRET set, the
 // endpoint refuses to run. Max 3 posts per user per run, so a bad token or
 // a stuck queue can never publish a flood.
-app.post('/api/cron/publish-due', ah(async (req, res) => {
+// Vercel Cron invokes with GET (not POST) and automatically sends the
+// CRON_SECRET bearer when that env var exists in the project, so the same
+// handler is registered for GET and POST (see vercel.json "crons").
+const cronPublishDue = ah(async (req, res) => {
   const secret = process.env.CRON_SECRET;
   if (!secret) return res.status(503).json({ ok: false, error: 'Auto-publish is not configured — set CRON_SECRET in the server environment variables.' });
   const auth = req.get('authorization') || '';
@@ -1203,14 +1206,18 @@ app.post('/api/cron/publish-due', ah(async (req, res) => {
     summary.push({ userId: user.id, due: due.length, published, failed });
   }
   res.json({ ok: true, ranAt: new Date().toISOString(), summary });
-}));
+});
+app.get('/api/cron/publish-due', cronPublishDue);
+app.post('/api/cron/publish-due', cronPublishDue);
 
 // Cron endpoint: run the token keeper for EVERY user (check + renew).
 // Same CRON_SECRET guard as publish-due. The keeper also runs on its own
 // whenever Settings is opened, a publish is attempted, or /api/db-status
 // is hit — this endpoint exists so an external cron can guarantee a daily
 // run even if nobody opens the app. Returns health metadata only.
-app.post('/api/cron/token-refresh', ah(async (req, res) => {
+// Registered for GET and POST for Vercel Cron (see cronPublishDue above
+// and vercel.json "crons").
+const cronTokenRefresh = ah(async (req, res) => {
   const secret = process.env.CRON_SECRET;
   if (!secret) return res.status(503).json({ ok: false, error: 'Cron endpoints are not configured — set CRON_SECRET in the server environment variables.' });
   const auth = req.get('authorization') || '';
@@ -1226,7 +1233,9 @@ app.post('/api/cron/token-refresh', ah(async (req, res) => {
     summary.push({ userId: user.id, instagram: health });
   }
   res.json({ ok: true, ranAt: new Date().toISOString(), summary });
-}));
+});
+app.get('/api/cron/token-refresh', cronTokenRefresh);
+app.post('/api/cron/token-refresh', cronTokenRefresh);
 
 // ---------- media library ----------
 app.get('/api/media', ah(async (req, res) => res.json({ ok: true, media: await db.listMedia(req.userId, { limit: req.query.limit, offset: req.query.offset }) })));
