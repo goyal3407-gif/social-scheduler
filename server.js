@@ -181,6 +181,78 @@ function parseDataUrl(s) {
   } catch { return null; }
 }
 
+// ---------- OCI Object Storage media backend (optional) ----------
+// When BOTH MEDIA_OCI_READ_BASE and MEDIA_OCI_WRITE_BASE are set —
+// pre-authenticated request (PAR) base URLs for the bridge bucket,
+// each ending in "/o/" — new uploads are stored as objects in OCI
+// Object Storage instead of as binaries in the database mediafiles
+// store. The object name is the same unguessable media file id, the
+// library item records storage:"oci" + objectName, and its public url
+// is the read-base URL Instagram fetches. The write base also serves
+// deletes (post-publish auto-delete, library item delete). With
+// either variable unset, uploads behave exactly as before.
+const OCI_READ_BASE = (process.env.MEDIA_OCI_READ_BASE || '').trim();
+const OCI_WRITE_BASE = (process.env.MEDIA_OCI_WRITE_BASE || '').trim();
+function ociEnabled() { return !!(OCI_READ_BASE && OCI_WRITE_BASE); }
+function ociObjectUrl(base, objectName) { return (base.endsWith('/') ? base : base + '/') + objectName; }
+function ociReadUrl(objectName) { return ociObjectUrl(OCI_READ_BASE, objectName); }
+async function ociPutObject(objectName, buffer, contentType) {
+  const res = await fetch(ociObjectUrl(OCI_WRITE_BASE, objectName), {
+    method: 'PUT',
+    headers: { 'Content-Type': contentType || 'application/octet-stream' },
+    body: buffer,
+  });
+  if (!res.ok) throw new Error(`Object storage upload failed (HTTP ${res.status})`);
+}
+// Object deletion is the one operation a PAR cannot perform: OCI
+// answers 404 to DELETE (and HEAD) on a write PAR — a PAR permits
+// PUT only — and DeleteObject requires a signed API request. So when
+// the optional signing settings are present (MEDIA_OCI_API_KEY_PEM +
+// tenancy/user OCIDs + fingerprint + namespace + bucket), deletes go
+// out as signed DeleteObject calls; without them, deletes fall back
+// to a best-effort DELETE against the write PAR (a no-op on OCI, so
+// published/removed copies then linger in the bucket until cleaned).
+const OCI_SIGN = {
+  keyPem: (process.env.MEDIA_OCI_API_KEY_PEM || '').replace(/\\n/g, '\n'),
+  tenancy: (process.env.MEDIA_OCI_TENANCY_OCID || '').trim(),
+  user: (process.env.MEDIA_OCI_USER_OCID || '').trim(),
+  fingerprint: (process.env.MEDIA_OCI_FINGERPRINT || '').trim(),
+  region: (process.env.MEDIA_OCI_REGION || 'ap-mumbai-1').trim(),
+  namespace: (process.env.MEDIA_OCI_NAMESPACE || '').trim(),
+  bucket: (process.env.MEDIA_OCI_BUCKET || '').trim(),
+};
+function ociSignedDeleteConfigured() {
+  return !!(OCI_SIGN.keyPem && OCI_SIGN.tenancy && OCI_SIGN.user && OCI_SIGN.fingerprint && OCI_SIGN.namespace && OCI_SIGN.bucket);
+}
+async function ociSignedDeleteObject(objectName) {
+  const host = `objectstorage.${OCI_SIGN.region}.oraclecloud.com`;
+  const target = `/n/${OCI_SIGN.namespace}/b/${OCI_SIGN.bucket}/o/${encodeURIComponent(objectName)}`;
+  const date = new Date().toUTCString();
+  const signingString = `(request-target): delete ${target}\nhost: ${host}\ndate: ${date}`;
+  const signer = crypto.createSign('RSA-SHA256');
+  signer.update(signingString);
+  const signature = signer.sign(OCI_SIGN.keyPem, 'base64');
+  const keyId = `${OCI_SIGN.tenancy}/${OCI_SIGN.user}/${OCI_SIGN.fingerprint}`;
+  const res = await fetch(`https://${host}${target}`, {
+    method: 'DELETE',
+    headers: {
+      date,
+      host,
+      authorization: `Signature version="1",keyId="${keyId}",algorithm="rsa-sha256",headers="(request-target) host date",signature="${signature}"`,
+    },
+  });
+  // 204 = deleted; 404 = already gone — both are the desired end state.
+  if (!res.ok && res.status !== 404) throw new Error(`Object storage delete failed (HTTP ${res.status})`);
+}
+async function ociDeleteObject(objectName) {
+  // Best-effort by design: cleanup must never fail the caller's flow,
+  // and an already-gone object is the desired end state anyway.
+  try {
+    if (ociSignedDeleteConfigured()) { await ociSignedDeleteObject(objectName); return; }
+    await fetch(ociObjectUrl(OCI_WRITE_BASE, objectName), { method: 'DELETE' });
+  } catch { /* ignore */ }
+}
+
 // ---------- auth (email + password, scrypt hashes, signed cookie) ----------
 function hashPassword(password, salt) {
   return crypto.scryptSync(password, salt, 64).toString('hex');
@@ -1740,18 +1812,23 @@ async function markFailed(userId, post, error, { isAutoRetry = false } = {}) {
 async function maybeDeleteServerCopy(userId, post) {
   const url = post && post.mediaUrl;
   if (typeof url !== 'string') return;
+  const library = await db.listMedia(userId, { all: true }).catch(() => []);
+  const itemByUrl = library.find((x) => x.url === url) || null;
+  // An OCI-backed copy is recognised by its library item; a database
+  // copy by the /media/<id> shape of the post URL, exactly as before.
+  const ociItem = itemByUrl && itemByUrl.storage === 'oci' && itemByUrl.objectName ? itemByUrl : null;
   const m = /\/media\/(f[0-9a-f]{32})$/.exec(url.trim());
-  if (!m) return; // link media or an external URL — not stored here
-  const fileId = m[1];
+  if (!ociItem && !m) return; // link media or an external URL — not stored here
+  const fileId = ociItem ? ociItem.objectName : m[1];
   const settings = await db.getSettings(userId).catch(() => ({}));
   if (settings && settings.keepServerCopyAfterPublish === true) return;
   const posts = await db.listPosts(userId, { all: true }).catch(() => []);
   const stillNeeded = posts.some((p) => p.id !== post.id && p.mediaUrl === url
     && ['scheduled', 'draft', 'failed'].includes(p.status));
   if (stillNeeded) return;
-  await db.deleteMediaFile(fileId);
-  const library = await db.listMedia(userId, { all: true }).catch(() => []);
-  const item = library.find((x) => x.fileId === fileId || x.url === url);
+  if (ociItem) await ociDeleteObject(ociItem.objectName);
+  else await db.deleteMediaFile(fileId);
+  const item = ociItem || library.find((x) => x.fileId === fileId || x.url === url);
   if (item && !item.serverCopyRemoved) {
     await db.updateMedia(userId, item.id, { serverCopyRemoved: true, serverCopyRemovedAt: new Date().toISOString() });
   }
@@ -2030,7 +2107,16 @@ app.post('/api/cron/token-refresh', cronTokenRefresh);
 // because video fetchers (and browsers previewing a Reel) ask for them.
 app.get('/media/:id', ah(async (req, res) => {
   const file = await db.getMediaFile(req.params.id);
-  if (!file) return res.status(404).json({ ok: false, error: 'That media file no longer exists.' });
+  if (!file) {
+    // OCI-backed uploads never enter the database file store — their
+    // canonical URL is the object read URL. Redirect an app-shaped
+    // /media/<id> request for one to it; the object read answers 404
+    // itself when the id names no object.
+    if (ociEnabled() && /^f[0-9a-f]{32}$/.test(req.params.id)) {
+      return res.redirect(302, ociReadUrl(req.params.id));
+    }
+    return res.status(404).json({ ok: false, error: 'That media file no longer exists.' });
+  }
   const buf = file.buffer;
   res.setHeader('Content-Type', file.contentType);
   // Uploaded bytes are user content served from the app's own origin:
@@ -2095,8 +2181,9 @@ app.post('/api/media', ah(async (req, res) => {
 }));
 // Upload: the frontend sends base64 in JSON (no multipart parser).
 // POST /api/media/upload { name, dataUrl, folder, tags }.
-// The binary is stored server-side (db mediafiles) and the library item
-// gets a public /media/<id> URL served by this app — Instagram can only
+// The binary is stored server-side (db mediafiles — or OCI Object
+// Storage when the MEDIA_OCI_* env vars are set) and the library item
+// gets a public URL served for it — Instagram can only
 // publish media it can download from a public URL, so uploads must not
 // stay as data: URLs. Limits: Vercel serverless requests cap at ~4.5 MB,
 // and one MongoDB document caps at 16 MB — so on the live site a file
@@ -2113,6 +2200,10 @@ async function storePosterFile(req, posterDataUrl) {
   const parsed = parseDataUrl(posterDataUrl);
   if (!parsed || !/^image\//.test(parsed.contentType) || parsed.buffer.length > 2 * 1024 * 1024) return empty;
   const posterFileId = newMediaFileId();
+  if (ociEnabled()) {
+    await ociPutObject(posterFileId, parsed.buffer, parsed.contentType);
+    return { posterUrl: ociReadUrl(posterFileId), posterFileId };
+  }
   await db.saveMediaFile({ id: posterFileId, userId: req.userId, contentType: parsed.contentType, buffer: parsed.buffer });
   return { posterUrl: `${publicBase(req)}/media/${posterFileId}`, posterFileId };
 }
@@ -2136,10 +2227,13 @@ app.post('/api/media/upload', ah(async (req, res) => {
       : 'That file is over the 60 MB limit — use a smaller file, or add it by link.' });
   }
   const fileId = newMediaFileId();
-  await db.saveMediaFile({ id: fileId, userId: req.userId, contentType: parsed.contentType, buffer: parsed.buffer });
+  const useOci = ociEnabled();
+  if (useOci) await ociPutObject(fileId, parsed.buffer, parsed.contentType);
+  else await db.saveMediaFile({ id: fileId, userId: req.userId, contentType: parsed.contentType, buffer: parsed.buffer });
   const poster = await storePosterFile(req, b.posterDataUrl);
   const item = {
-    id: uid('media'), userId: req.userId, url: `${publicBase(req)}/media/${fileId}`, fileId, title: b.name,
+    id: uid('media'), userId: req.userId, url: useOci ? ociReadUrl(fileId) : `${publicBase(req)}/media/${fileId}`, fileId,
+    ...(useOci ? { storage: 'oci', objectName: fileId } : {}), title: b.name,
     kind: /\.(mp4|mov|webm)$/i.test(b.name) ? 'video' : 'image',
     size: parsed.buffer.length, duration: Number.isFinite(Number(b.duration)) ? Number(b.duration) : 0,
     width: Number.isFinite(Number(b.width)) ? Number(b.width) : 0,
@@ -2155,8 +2249,9 @@ app.post('/api/media/upload', ah(async (req, res) => {
 // single request at ~4.5 MB, which used to make even a 14 MB Reel fail
 // outright. The UI splits the file into 3 MB binary chunks (≈4 MB as
 // base64 JSON), sends init → chunk(s) → complete, and the server
-// assembles the chunks into the SAME mediafiles store, so the result
-// is the identical public /media/<id> URL contract as a small upload.
+// assembles the chunks into the SAME store as a small upload (db
+// mediafiles, or OCI Object Storage when the MEDIA_OCI_* env vars are
+// set), so the result is the identical public URL contract.
 // Sessions expire after 2 hours; expired/aborted sessions are deleted
 // with all their chunks, so an abandoned upload leaves nothing behind.
 const UPLOAD_CHUNK_BYTES = 3 * 1024 * 1024;
@@ -2227,10 +2322,13 @@ app.post('/api/media/upload/complete', ah(async (req, res) => {
     return res.status(400).json({ ok: false, error: 'That upload arrived incomplete — try uploading the file again.' });
   }
   const fileId = newMediaFileId();
-  await db.saveMediaFile({ id: fileId, userId: req.userId, contentType: session.contentType, buffer });
+  const useOci = ociEnabled();
+  if (useOci) await ociPutObject(fileId, buffer, session.contentType);
+  else await db.saveMediaFile({ id: fileId, userId: req.userId, contentType: session.contentType, buffer });
   const poster = await storePosterFile(req, session.posterDataUrl);
   const item = {
-    id: uid('media'), userId: req.userId, url: `${publicBase(req)}/media/${fileId}`, fileId, title: session.name,
+    id: uid('media'), userId: req.userId, url: useOci ? ociReadUrl(fileId) : `${publicBase(req)}/media/${fileId}`, fileId,
+    ...(useOci ? { storage: 'oci', objectName: fileId } : {}), title: session.name,
     kind: /\.(mp4|mov|webm)$/i.test(session.name) ? 'video' : 'image',
     size: buffer.length, duration: session.duration || 0,
     width: session.width || 0, height: session.height || 0,
@@ -2262,8 +2360,17 @@ app.patch('/api/media/:id', ah(async (req, res) => {
   res.json({ ok: true, media: updated });
 }));
 app.delete('/api/media/:id', ah(async (req, res) => {
+  // Look the item up first: for an OCI-backed item the object (and its
+  // poster object) must be deleted from object storage too — the
+  // database delete below only knows the database file store.
+  const library = await db.listMedia(req.userId, { all: true }).catch(() => []);
+  const item = library.find((x) => x.id === req.params.id) || null;
   const ok = await db.deleteMedia(req.userId, req.params.id);
   if (!ok) return res.status(404).json({ ok: false, error: 'That media file no longer exists.' });
+  if (item && item.storage === 'oci') {
+    if (item.objectName) await ociDeleteObject(item.objectName);
+    if (item.posterFileId) await ociDeleteObject(item.posterFileId);
+  }
   res.json({ ok: true });
 }));
 
