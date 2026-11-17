@@ -20,10 +20,13 @@ export default function Settings({ settings, dbStatus, onSave, saving, onInstagr
   const [confirmDeleteAccount, setConfirmDeleteAccount] = useState(false)
   const [deletingAccount, setDeletingAccount] = useState(false)
 
-  // Instagram tokens last about 60 days: warn from day 53 so a publish
-  // never fails without warning. connectedAt comes from the server.
-  const tokenAgeDays = settings?.connectedAt ? Math.floor((Date.now() - new Date(settings.connectedAt).getTime()) / 86400000) : null
-  const tokenExpiringSoon = tokenAgeDays !== null && tokenAgeDays >= 53
+  // Connection health comes from the server (instagramHealth): the token's
+  // real expiry from Meta, and whether the keeper has renewed it. The app
+  // renews the token automatically before it expires — the user only has
+  // to act if Meta has actually revoked the connection (needsReconnect).
+  const health = settings?.instagramHealth || null
+  const healthUntil = health?.tokenExpiresAt ? new Date(health.tokenExpiresAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) : null
+  const healthRenewed = health?.lastRefreshAt ? new Date(health.lastRefreshAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) : null
 
   const changePassword = async (e) => {
     e.preventDefault()
@@ -153,7 +156,26 @@ export default function Settings({ settings, dbStatus, onSave, saving, onInstagr
               {connected && maskedToken ? ` · token ${maskedToken}` : ''}
               {connected && tokenSource ? ` · via ${tokenSource === 'stored' ? 'saved token' : 'server environment'}` : ''}
             </p>
-            <ol className="muted small" style={{ marginTop: 14, paddingLeft: 18, lineHeight: 2 }}>
+            {connected && health && !health.needsReconnect && (
+              <p className="muted small" style={{ marginTop: 8 }}>
+                {health.tokenNeverExpires
+                  ? 'This connection does not expire — no renewal needed, ever.'
+                  : healthUntil
+                    ? <>Valid until <b style={{ color: 'var(--ink)' }}>{healthUntil}</b>{health.daysRemaining !== null ? ` (${health.daysRemaining} days)` : ''} — and it <b style={{ color: 'var(--ink)' }}>renews itself automatically</b> before that date. You never need to generate a fresh token.</>
+                    : 'This connection renews itself automatically — you never need to generate a fresh token.'}
+                {healthRenewed ? ` Last auto-renewed ${healthRenewed}.` : ''}
+              </p>
+            )}
+            {connected && health?.needsReconnect && (
+              <div className="alert error" style={{ marginTop: 12 }}><b>Instagram ended this connection.</b> Meta revoked it (for example a password change, or access removed in your Meta settings), so automatic renewal can&apos;t save it. Reconnect below — that&apos;s the only time you ever need this form.</div>
+            )}
+            {connected && health?.refreshBlocked && !health.needsReconnect && (
+              <div className="warn amber" style={{ marginTop: 12 }}><div><b>Automatic renewal could not run for this token.</b> The app will keep checking, but if it reaches its expiry date you will need to reconnect once below.</div></div>
+            )}
+            <p className="muted small" style={{ marginTop: 14 }}>
+              <b style={{ color: 'var(--ink)' }}>Reconnect (only if the connection was revoked):</b>
+            </p>
+            <ol className="muted small" style={{ marginTop: 6, paddingLeft: 18, lineHeight: 2 }}>
               <li>Open your Meta app dashboard: <a href={APP_DASHBOARD_URL} target="_blank" rel="noreferrer">developers.facebook.com/apps/1671693167666941</a></li>
               <li>Go to <b style={{ color: 'var(--ink)' }}>API Setup</b> &gt; <b style={{ color: 'var(--ink)' }}>Generate token</b></li>
               <li>Copy the token</li>
@@ -176,13 +198,7 @@ export default function Settings({ settings, dbStatus, onSave, saving, onInstagr
                 </button>
               )}
             </div>
-            <p className="muted small mt">The token is checked live with Instagram before it is saved, and stored on the server only. It is never shown in full — only the first and last 4 characters.</p>
-            {tokenExpiringSoon && (
-              <div className="warn amber" style={{ marginTop: 12 }}><div><b>Token is {tokenAgeDays} days old.</b> Instagram tokens last about 60 days — generate a fresh one soon or publishing will start failing.</div></div>
-            )}
-            {tokenAgeDays !== null && !tokenExpiringSoon && (
-              <p className="muted small mt">Token connected {tokenAgeDays} day{tokenAgeDays === 1 ? '' : 's'} ago (Instagram tokens last about 60 days).</p>
-            )}
+            <p className="muted small mt">The token is checked live with Instagram before it is saved, and stored on the server only. It is never shown in full — only the first and last 4 characters. Once connected, the server keeps the token renewed automatically.</p>
           </form>
         </div>
         <section className="card">

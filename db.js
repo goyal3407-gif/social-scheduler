@@ -88,6 +88,14 @@ const instagramSchema = new mongoose.Schema({
   igUserId: String, username: String,
   profile: { type: mongoose.Schema.Types.Mixed, default: null },
   connectedAt: String, importedAt: String,
+  // Token health (self-renewing connection): expiry learned from Meta's
+  // debug_token, plus when the keeper last checked / last renewed it.
+  // tokenRefreshError is '' when healthy, 'revoked-or-expired' when Meta
+  // says the token is dead, 'auto-refresh-unavailable' when no renewal
+  // path exists for this token type yet.
+  tokenExpiresAt: String, tokenNeverExpires: { type: Boolean, default: false },
+  tokenType: String,
+  lastTokenCheckAt: String, lastRefreshAt: String, tokenRefreshError: String,
 });
 const importJobSchema = new mongoose.Schema({
   id: { type: String, unique: true, index: true },
@@ -499,19 +507,26 @@ async function saveSettings(userId, settings) {
 }
 
 // ---------- instagram connection (one doc per user; token encrypted) ----------
+function instagramHealthFields(doc) {
+  return {
+    tokenExpiresAt: doc.tokenExpiresAt || '', tokenNeverExpires: !!doc.tokenNeverExpires,
+    tokenType: doc.tokenType || '', lastTokenCheckAt: doc.lastTokenCheckAt || '',
+    lastRefreshAt: doc.lastRefreshAt || '', tokenRefreshError: doc.tokenRefreshError || '',
+  };
+}
 async function getInstagram(userId) {
   await ensureMongo();
   if (isMongo()) {
     const doc = await InstagramDoc.findOne({ userId }).lean();
     if (!doc) return {};
-    return { token: decryptToken(doc), igUserId: doc.igUserId || '', username: doc.username || '', profile: doc.profile || null, connectedAt: doc.connectedAt || '', importedAt: doc.importedAt || '', encrypted: !!doc.encrypted };
+    return { token: decryptToken(doc), igUserId: doc.igUserId || '', username: doc.username || '', profile: doc.profile || null, connectedAt: doc.connectedAt || '', importedAt: doc.importedAt || '', encrypted: !!doc.encrypted, ...instagramHealthFields(doc) };
   }
   const all = load(JSON_FILES.instagram, {});
   const obj = (all && typeof all === 'object' && !Array.isArray(all)) ? all : {};
   const doc = obj[userId] || obj;
   if (!doc || typeof doc !== 'object') return {};
-  if (doc.token && !doc.tokenEnc) return { token: doc.token, igUserId: doc.igUserId || '', username: doc.username || '', profile: doc.profile || null, connectedAt: doc.connectedAt || '', importedAt: doc.importedAt || '', encrypted: false };
-  return { token: decryptToken(doc), igUserId: doc.igUserId || '', username: doc.username || '', profile: doc.profile || null, connectedAt: doc.connectedAt || '', importedAt: doc.importedAt || '', encrypted: !!doc.encrypted };
+  if (doc.token && !doc.tokenEnc) return { token: doc.token, igUserId: doc.igUserId || '', username: doc.username || '', profile: doc.profile || null, connectedAt: doc.connectedAt || '', importedAt: doc.importedAt || '', encrypted: false, ...instagramHealthFields(doc) };
+  return { token: decryptToken(doc), igUserId: doc.igUserId || '', username: doc.username || '', profile: doc.profile || null, connectedAt: doc.connectedAt || '', importedAt: doc.importedAt || '', encrypted: !!doc.encrypted, ...instagramHealthFields(doc) };
 }
 async function saveInstagram(userId, fields) {
   await ensureMongo();

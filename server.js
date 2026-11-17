@@ -373,18 +373,141 @@ function maskToken(t) {
 }
 async function igConfigured(req) { const c = await getInstagramCreds(req); return !!(c.token && c.igUserId); }
 
+// ---------- Instagram token keeper (self-renewing connection) ----------
+// One login, unlimited use: the server watches the stored token's real
+// expiry (Meta's debug_token) and renews it BEFORE it expires, so the
+// user never has to generate/paste a fresh token on a schedule again.
+// Renewal paths, tried in order:
+//   1. Instagram Login tokens — GET graph.instagram.com/refresh_access_token
+//      (grant_type=ig_refresh_token). Needs no app secret.
+//   2. Facebook Login tokens — GET /oauth/access_token
+//      (grant_type=fb_exchange_token). Needs META_APP_SECRET in env.
+// A reconnect is only needed when Meta has actually revoked the token
+// (password change, access removed in Meta settings, security check) —
+// debug_token then reports is_valid=false and health.needsReconnect is set.
+// The token value itself is never logged or returned anywhere here.
+const META_APP_ID = process.env.META_APP_ID || '1671693167666941';
+const META_APP_SECRET = process.env.META_APP_SECRET || '';
+const TOKEN_REFRESH_WINDOW_DAYS = 10;
+
+async function debugInstagramToken(token) {
+  // App access token when the secret is configured; otherwise the token
+  // inspects itself (debug_token allows the token being inspected as the
+  // access_token for its own metadata).
+  const inspector = META_APP_SECRET ? `${META_APP_ID}|${META_APP_SECRET}` : token;
+  const out = await graphGet('https://graph.facebook.com/v27.0/debug_token?input_token=' + encodeURIComponent(token) + '&access_token=' + encodeURIComponent(inspector));
+  if (!out || out.error || !out.data) return null;
+  return out.data;
+}
+
+async function tryRefreshInstagramToken(token) {
+  try {
+    const out = await graphGet('https://graph.instagram.com/refresh_access_token?grant_type=ig_refresh_token&access_token=' + encodeURIComponent(token));
+    if (out && out.access_token) return { token: out.access_token, expiresIn: Number(out.expires_in) || 0, via: 'instagram-refresh' };
+  } catch { /* try the next path */ }
+  if (META_APP_SECRET) {
+    try {
+      const out = await graphGet('https://graph.facebook.com/v27.0/oauth/access_token?grant_type=fb_exchange_token&client_id=' + encodeURIComponent(META_APP_ID) + '&client_secret=' + encodeURIComponent(META_APP_SECRET) + '&fb_exchange_token=' + encodeURIComponent(token));
+      if (out && out.access_token) return { token: out.access_token, expiresIn: Number(out.expires_in) || 0, via: 'facebook-exchange' };
+    } catch { /* no path left */ }
+  }
+  return null;
+}
+
+function instagramHealth(stored) {
+  if (!stored || !stored.token) return null;
+  const now = Date.now();
+  const neverExpires = !!stored.tokenNeverExpires;
+  const expMs = stored.tokenExpiresAt ? new Date(stored.tokenExpiresAt).getTime() : 0;
+  return {
+    connected: true,
+    username: stored.username || '',
+    tokenType: stored.tokenType || '',
+    tokenExpiresAt: neverExpires ? null : (stored.tokenExpiresAt || null),
+    tokenNeverExpires: neverExpires,
+    daysRemaining: neverExpires ? null : (expMs ? Math.max(0, Math.round((expMs - now) / 86400000)) : null),
+    lastCheckedAt: stored.lastTokenCheckAt || null,
+    lastRefreshAt: stored.lastRefreshAt || null,
+    refreshBlocked: stored.tokenRefreshError === 'auto-refresh-unavailable',
+    needsReconnect: stored.tokenRefreshError === 'revoked-or-expired',
+  };
+}
+
+const tokenCheckInFlight = new Map();
+// Check (and if needed renew) one user's stored token. Throttled: a full
+// Meta check runs at most once per 24h per user per instance unless the
+// expiry is inside the refresh window. Returns instagramHealth() or null.
+async function ensureInstagramTokenFresh(userId, opts = {}) {
+  if (!userId) return null;
+  if (tokenCheckInFlight.has(userId)) return tokenCheckInFlight.get(userId);
+  const run = (async () => {
+    const stored = await getInstagramStored(userId);
+    if (!stored.token) return null; // env token or not connected — nothing stored to renew
+    const now = Date.now();
+    const expMs = stored.tokenExpiresAt ? new Date(stored.tokenExpiresAt).getTime() : 0;
+    const daysLeft = stored.tokenNeverExpires ? Infinity : (expMs ? (expMs - now) / 86400000 : null);
+    const lastCheck = stored.lastTokenCheckAt ? new Date(stored.lastTokenCheckAt).getTime() : 0;
+    if (!opts.force && lastCheck && now - lastCheck < 24 * 3600 * 1000 && (stored.tokenNeverExpires || (daysLeft !== null && daysLeft > TOKEN_REFRESH_WINDOW_DAYS))) {
+      return instagramHealth(stored);
+    }
+    let current = { ...stored };
+    const dbg = await debugInstagramToken(current.token).catch(() => null);
+    if (dbg) {
+      const patch = { lastTokenCheckAt: new Date().toISOString() };
+      if (typeof dbg.type === 'string') patch.tokenType = dbg.type;
+      if (dbg.is_valid === false) patch.tokenRefreshError = 'revoked-or-expired';
+      else if (current.tokenRefreshError === 'revoked-or-expired') patch.tokenRefreshError = '';
+      if (dbg.expires_at === 0) { patch.tokenNeverExpires = true; patch.tokenExpiresAt = ''; }
+      else if (dbg.expires_at) { patch.tokenNeverExpires = false; patch.tokenExpiresAt = new Date(dbg.expires_at * 1000).toISOString(); }
+      await db.saveInstagram(userId, patch);
+      current = { ...current, ...patch };
+      if (dbg.is_valid === false) return instagramHealth(current);
+    }
+    const expMs2 = current.tokenExpiresAt ? new Date(current.tokenExpiresAt).getTime() : 0;
+    const daysLeft2 = current.tokenNeverExpires ? Infinity : (expMs2 ? (expMs2 - now) / 86400000 : null);
+    const anchor = current.lastRefreshAt || current.connectedAt;
+    const anchorAgeDays = anchor ? (now - new Date(anchor).getTime()) / 86400000 : 0;
+    const needsRefresh = !current.tokenNeverExpires
+      && ((daysLeft2 !== null && daysLeft2 < TOKEN_REFRESH_WINDOW_DAYS)
+        || (daysLeft2 === null && dbg && anchorAgeDays > 40));
+    if (needsRefresh) {
+      const refreshed = await tryRefreshInstagramToken(current.token).catch(() => null);
+      if (refreshed) {
+        const patch = { token: refreshed.token, lastRefreshAt: new Date().toISOString(), lastTokenCheckAt: new Date().toISOString(), tokenRefreshError: '' };
+        if (refreshed.expiresIn > 0) { patch.tokenNeverExpires = false; patch.tokenExpiresAt = new Date(now + refreshed.expiresIn * 1000).toISOString(); }
+        await db.saveInstagram(userId, patch);
+        current = { ...current, ...patch, token: refreshed.token };
+        const dbg2 = await debugInstagramToken(refreshed.token).catch(() => null);
+        if (dbg2) {
+          const p2 = {};
+          if (typeof dbg2.type === 'string') p2.tokenType = dbg2.type;
+          if (dbg2.expires_at === 0) { p2.tokenNeverExpires = true; p2.tokenExpiresAt = ''; }
+          else if (dbg2.expires_at) { p2.tokenNeverExpires = false; p2.tokenExpiresAt = new Date(dbg2.expires_at * 1000).toISOString(); }
+          if (Object.keys(p2).length) { await db.saveInstagram(userId, p2); current = { ...current, ...p2 }; }
+        }
+      } else if (current.tokenRefreshError !== 'auto-refresh-unavailable') {
+        await db.saveInstagram(userId, { tokenRefreshError: 'auto-refresh-unavailable' });
+        current = { ...current, tokenRefreshError: 'auto-refresh-unavailable' };
+      }
+    }
+    return instagramHealth(current);
+  })();
+  tokenCheckInFlight.set(userId, run);
+  try { return await run; } finally { tokenCheckInFlight.delete(userId); }
+}
+
 // Plain-words version of an Instagram Graph API error.
 function friendlyGraphError(data, fallback) {
   const err = data && data.error;
   const msg = (err && (err.message || '')) || '';
   const code = err && err.code;
   if (code === 190 || /invalid oauth|expired|invalid token/i.test(msg)) {
-    return 'Instagram says this token is invalid or expired. Generate a fresh token in your Meta app dashboard (API Setup → Generate token) and paste it again.';
+    return 'Instagram says this connection is invalid or expired. The app renews your token automatically, so this means Meta has revoked it (password change, or access removed in your Meta settings) — reconnect in Settings to fix it.';
   }
   if (code === 100 || /permission|not authorized|does not exist/i.test(msg)) {
-    return 'Instagram rejected the request — the token may lack permission or the Instagram User ID may be wrong. Generate a fresh token with instagram_business_basic and instagram_business_content_publish, check the User ID, and try again.';
+    return 'Instagram rejected the request — the token may lack permission or the Instagram User ID may be wrong. Check the User ID in Settings and reconnect with a token that has instagram_business_basic and instagram_business_content_publish.';
   }
-  if (msg) return `Instagram said: ${msg} Generate a fresh token and try again if this keeps happening.`;
+  if (msg) return `Instagram said: ${msg} If this keeps happening, check the connection health in Settings.`;
   return fallback;
 }
 
@@ -397,8 +520,19 @@ app.get('/health', (req, res) => res.json({ ok: true, service: 'social-scheduler
 // "json", data does NOT survive redeploys — set MONGODB_URI in Vercel.
 // If sessionSecretFromEnv is false, logins die on every restart — set
 // SESSION_SECRET in Vercel.
-app.get('/api/db-status', (req, res) => {
+app.get('/api/db-status', ah(async (req, res) => {
+  // Connect eagerly first: without this, a cold container reports "json"
+  // until some other data request happens, and the UI shows a false warning.
+  await db.ensureMongo();
   const s = db.getStatus();
+  // Owner's Instagram connection health (metadata only — type, expiry,
+  // renewal state; never the token). Running the keeper here means this
+  // status check also renews the token when it is inside the window.
+  let ownerInstagram = null;
+  try {
+    const owner = await db.ownerId();
+    if (owner) ownerInstagram = await ensureInstagramTokenFresh(owner);
+  } catch { /* health is best-effort; db-status must not fail because of it */ }
   res.json({
     ok: true,
     db: s.db,
@@ -407,12 +541,14 @@ app.get('/api/db-status', (req, res) => {
     uriConfigured: s.uriConfigured,
     sessionSecretFromEnv: s.sessionSecretFromEnv,
     tokenEncryptionAvailable: s.tokenEncryptionAvailable,
+    metaAppSecretConfigured: !!META_APP_SECRET,
+    instagram: ownerInstagram,
     lastError: s.lastError,
     warning: s.db !== 'mongodb'
       ? 'Database is local JSON files — accounts and posts will disappear on redeploy. Set MONGODB_URI in Vercel env vars.'
       : (!s.sessionSecretFromEnv ? 'SESSION_SECRET is not set — logins will not survive a restart or redeploy. Set SESSION_SECRET in Vercel env vars.' : null),
   });
-});
+}));
 app.get('/api/stats', ah(async (req, res) => {
   const posts = await getPosts(req); const media = await getMedia(req);
   res.json({
@@ -438,6 +574,9 @@ app.get('/api/export', ah(async (req, res) => {
 // ---------- settings ----------
 app.get('/api/settings', ah(async (req, res) => {
   const s = await getSettings(req);
+  // Opening Settings is a keeper checkpoint: verify the token with Meta
+  // (throttled to once a day) and renew it if it is inside the window.
+  const health = await ensureInstagramTokenFresh(req.userId).catch(() => null);
   const ig = await getInstagramCreds(req);
   const stored = await getInstagramStored(req);
   const settingsResponse = {
@@ -452,6 +591,7 @@ app.get('/api/settings', ah(async (req, res) => {
     tokenEncrypted: stored.token ? !!stored.encrypted : null,
     instagramProfile: stored.profile || null,
     connectedAt: stored.connectedAt || '',
+    instagramHealth: health || instagramHealth(stored),
     setupDone: s.setupDone === true,
   };
   res.json(settingsResponse);
@@ -472,7 +612,7 @@ app.post('/api/settings', ah(async (req, res) => {
   await db.saveSettings(req.userId, s);
   const ig = await getInstagramCreds(req);
   const stored = await getInstagramStored(req);
-  res.json({ ok: true, instagramHandle: s.instagramHandle || ig.username || '', instagramConnected: !!(ig.token && ig.igUserId), tokenConfigured: !!(ig.token && ig.igUserId), instagramUsername: ig.username || '', maskedToken: maskToken(ig.token), tokenSource: ig.source, igUserIdSet: !!ig.igUserId, tokenEncrypted: stored.token ? !!stored.encrypted : null, instagramProfile: stored.profile || null, connectedAt: stored.connectedAt || '', setupDone: s.setupDone === true });
+  res.json({ ok: true, instagramHandle: s.instagramHandle || ig.username || '', instagramConnected: !!(ig.token && ig.igUserId), tokenConfigured: !!(ig.token && ig.igUserId), instagramUsername: ig.username || '', maskedToken: maskToken(ig.token), tokenSource: ig.source, igUserIdSet: !!ig.igUserId, tokenEncrypted: stored.token ? !!stored.encrypted : null, instagramProfile: stored.profile || null, connectedAt: stored.connectedAt || '', instagramHealth: instagramHealth(stored), setupDone: s.setupDone === true });
 }));
 
 // ---------- Instagram connect (paste token, verified live) ----------
@@ -509,8 +649,11 @@ app.post('/api/instagram/connect', ah(async (req, res) => {
     return res.status(400).json({ ok: false, error: friendlyGraphError(data, 'Instagram rejected this token. Generate a fresh token in the Meta app dashboard and try again.') });
   }
   if (!data.id) return res.status(400).json({ ok: false, error: 'Instagram did not recognise this token for that User ID. Check the User ID and generate a fresh token, then try again.' });
-  await db.saveInstagram(req.userId, { token, igUserId, username: data.username || '', connectedAt: new Date().toISOString() });
-  res.json({ ok: true, username: data.username || '', igUserId, maskedToken: maskToken(token), instagramConnected: true, tokenSource: 'stored' });
+  await db.saveInstagram(req.userId, { token, igUserId, username: data.username || '', connectedAt: new Date().toISOString(), tokenExpiresAt: '', tokenNeverExpires: false, tokenType: '', lastTokenCheckAt: '', lastRefreshAt: '', tokenRefreshError: '' });
+  // Learn the token's real type + expiry from Meta right away so the
+  // keeper can renew it before it expires (no more manual re-pasting).
+  const health = await ensureInstagramTokenFresh(req.userId, { force: true }).catch(() => null);
+  res.json({ ok: true, username: data.username || '', igUserId, maskedToken: maskToken(token), instagramConnected: true, tokenSource: 'stored', instagramHealth: health });
 }));
 app.post('/api/instagram/disconnect', ah(async (req, res) => {
   await db.clearInstagram(req.userId);
@@ -936,6 +1079,9 @@ async function duePostsFor(userId, max) {
 // This is what the Dashboard/Queue "Publish due" button calls, and what a
 // cron job should call on a schedule (see /api/cron/publish-due).
 app.post('/api/publish-due', ah(async (req, res) => {
+  // Renew the token first if it is inside the window, so a due publish
+  // never fails just because the token aged out.
+  await ensureInstagramTokenFresh(req.userId).catch(() => null);
   const ig = await getInstagramCreds(req);
   if (!ig.token || !ig.igUserId) {
     return res.status(400).json({ ok: false, error: 'Instagram is not connected — add your access token in Settings to publish from here.' });
@@ -970,6 +1116,7 @@ app.post('/api/cron/publish-due', ah(async (req, res) => {
   const users = await db.listUsers();
   const summary = [];
   for (const user of users) {
+    await ensureInstagramTokenFresh(user.id).catch(() => null);
     const ig = await getInstagramCreds(user.id);
     if (!ig.token || !ig.igUserId) { summary.push({ userId: user.id, skipped: 'instagram-not-connected' }); continue; }
     const due = await duePostsFor(user.id, 3);
@@ -980,6 +1127,29 @@ app.post('/api/cron/publish-due', ah(async (req, res) => {
       else if (!result.retry) failed++;
     }
     summary.push({ userId: user.id, due: due.length, published, failed });
+  }
+  res.json({ ok: true, ranAt: new Date().toISOString(), summary });
+}));
+
+// Cron endpoint: run the token keeper for EVERY user (check + renew).
+// Same CRON_SECRET guard as publish-due. The keeper also runs on its own
+// whenever Settings is opened, a publish is attempted, or /api/db-status
+// is hit — this endpoint exists so an external cron can guarantee a daily
+// run even if nobody opens the app. Returns health metadata only.
+app.post('/api/cron/token-refresh', ah(async (req, res) => {
+  const secret = process.env.CRON_SECRET;
+  if (!secret) return res.status(503).json({ ok: false, error: 'Cron endpoints are not configured — set CRON_SECRET in the server environment variables.' });
+  const auth = req.get('authorization') || '';
+  const given = auth.startsWith('Bearer ') ? auth.slice(7) : '';
+  const a = Buffer.from(given, 'utf8'); const b = Buffer.from(secret, 'utf8');
+  if (!given || a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+    return res.status(401).json({ ok: false, error: 'Not authorised.' });
+  }
+  const users = await db.listUsers();
+  const summary = [];
+  for (const user of users) {
+    const health = await ensureInstagramTokenFresh(user.id).catch(() => null);
+    summary.push({ userId: user.id, instagram: health });
   }
   res.json({ ok: true, ranAt: new Date().toISOString(), summary });
 }));
