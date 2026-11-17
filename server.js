@@ -529,16 +529,19 @@ app.get('/api/db-status', ah(async (req, res) => {
   // renewal state; never the token). Running the keeper here means this
   // status check also renews the token when it is inside the window.
   let ownerInstagram = null;
-  const igDiag = { ownerFound: false, docFound: false, tokenReadable: false, keeperError: null };
+  const igDiag = { usersScanned: 0, docsFound: 0, tokensReadable: 0, keeperError: null };
   try {
-    const owner = await db.ownerId();
-    igDiag.ownerFound = !!owner;
-    if (owner) {
-      const st = await getInstagramStored(owner);
-      igDiag.docFound = !!(st && (st.igUserId || st.connectedAt));
-      igDiag.tokenReadable = !!(st && st.token);
-      ownerInstagram = await ensureInstagramTokenFresh(owner);
+    // The connected account is whichever user actually has a stored token
+    // (normally the owner) — scan all users, counts only, never values.
+    const users = await db.listUsers();
+    igDiag.usersScanned = users.length;
+    let connectedUserId = null;
+    for (const u of users) {
+      const st = await getInstagramStored(u.id);
+      if (st && (st.igUserId || st.connectedAt)) igDiag.docsFound += 1;
+      if (st && st.token) { igDiag.tokensReadable += 1; if (!connectedUserId) connectedUserId = u.id; }
     }
+    if (connectedUserId) ownerInstagram = await ensureInstagramTokenFresh(connectedUserId);
   } catch (e) { igDiag.keeperError = String((e && e.message) || e).slice(0, 200); }
   res.json({
     ok: true,
