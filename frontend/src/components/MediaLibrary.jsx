@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { fmtDate } from '../api.js'
+import { fmtDate, fromLocalInputValue } from '../api.js'
 import { Skeleton, Empty, ErrorBox, MediaVisual } from './shared.jsx'
 import { IconHeart, IconTrash, IconSearch } from './icons.jsx'
-import { isNativeApp, savePickedVideo, listPendingUploads, uploadPendingUpload, deletePendingUpload } from '../localMedia.js'
+import { isNativeApp, importDeviceFile, listDeviceLibrary, readDeviceFile, deleteDeviceItem, loadPendingSchedules, removePendingSchedule } from '../localMedia.js'
+import { scheduleFromDevice } from '../autoBridge.js'
 
 const PAGE_SIZE = 24
 
@@ -36,82 +37,169 @@ function fmtSize(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-// Videos kept on the device itself (app storage), uploaded to the library
-// when the user is ready — the local copy is removed after a successful
-// upload so posted videos do not fill the phone. See src/localMedia.js.
-function DeviceVideos({ onUploaded }) {
+// The on-device library (app only — this section renders solely inside
+// the Android app; in a plain browser there is no device library and the
+// section is hidden, while the web Upload / Add-by-link / library above
+// work exactly as always). Importing stores the original on the phone
+// and uploads NOTHING. Scheduling uploads one disposable copy in the
+// background (autoBridge.js); the original stays on the phone. Offline
+// schedule requests wait in the pending list below with a visible
+// status and finish themselves when the app is back online.
+function DeviceLibrary({ onUploaded, onUpload }) {
   const [items, setItems] = useState([])
-  const [busyName, setBusyName] = useState('')
-  const [saving, setSaving] = useState(false)
+  const [pending, setPending] = useState([])
+  const [importing, setImporting] = useState(false)
+  const [busyId, setBusyId] = useState('')
   const [msg, setMsg] = useState('')
   const [err, setErr] = useState('')
+  const [schedId, setSchedId] = useState('')
+  const [caption, setCaption] = useState('')
+  const [hashtags, setHashtags] = useState('')
+  const [format, setFormat] = useState('REELS')
+  const [when, setWhen] = useState('')
   const devFileRef = useRef(null)
 
   const refresh = useCallback(async () => {
-    try { setItems(await listPendingUploads()) } catch { setItems([]) }
+    try { setItems(await listDeviceLibrary()) } catch { setItems([]) }
+    try { setPending(await loadPendingSchedules()) } catch { setPending([]) }
   }, [])
   useEffect(() => { refresh() }, [refresh])
+  // The app-level auto-bridge runner can change a waiting entry's
+  // status in the background (scheduled / posted late / failed because
+  // the file was deleted). Poll the local state while this section is
+  // mounted so those status changes appear without a remount.
+  useEffect(() => {
+    const t = setInterval(() => { refresh() }, 15000)
+    return () => clearInterval(t)
+  }, [refresh])
 
   const pick = async (files) => {
     const list = [...(files || [])]
     if (!list.length) return
-    setErr(''); setMsg(''); setSaving(true)
+    setErr(''); setMsg(''); setImporting(true)
     let ok = 0
     for (const f of list) {
-      try { await savePickedVideo(f); ok++ } catch (e) { setErr(e.message || 'Could not save that video on this device.') }
+      if (f.size > 200 * 1024 * 1024) { setErr(`"${f.name}" is over the 200 MB per-file limit and was skipped.`); continue }
+      try { await importDeviceFile(f); ok++ } catch (e) { setErr(e.message || 'Could not save that file on this device.') }
     }
-    setSaving(false)
-    if (ok) setMsg(`Saved ${ok} video${ok === 1 ? '' : 's'} on this device.`)
+    setImporting(false)
+    if (ok) setMsg(`Saved ${ok} file${ok === 1 ? '' : 's'} on this phone — nothing was uploaded.`)
     refresh()
   }
 
-  const upload = async (item) => {
-    setErr(''); setMsg('')
-    if (item.size > 4.5 * 1024 * 1024) { setErr(`"${item.name.replace(/^\d+-/, '')}" is over this quick-upload path's ~4 MB limit — it can stay on the device. For bigger files, use the main Upload card above, which now uploads in pieces (up to 200 MB).`); return }
-    setBusyName(item.name)
+  const uploadCopy = async (item) => {
+    setErr(''); setMsg(''); setBusyId(item.id)
     try {
-      await uploadPendingUpload(item.name, { folder: 'Uploads' })
-      await deletePendingUpload(item.name)
-      setMsg('Uploaded to your library — local copy removed from the device.')
-      await refresh()
-      if (onUploaded) onUploaded()
-    } catch (e) { setErr(e.message || 'Upload failed — the video is still saved on this device.') }
-    setBusyName('')
+      const file = await readDeviceFile(item)
+      await onUpload(file, { folder: 'Uploads', title: item.title })
+      setMsg('Copy uploaded to your library — the original stays on this phone.')
+    } catch (e) { setErr(e.message || 'Upload failed — the original is still on this phone.') }
+    setBusyId('')
   }
 
   const remove = async (item) => {
     setErr(''); setMsg('')
-    try { await deletePendingUpload(item.name); await refresh() } catch (e) { setErr(e.message || 'Could not remove that video.') }
+    try { await deleteDeviceItem(item.id); await refresh() } catch (e) { setErr(e.message || 'Could not remove that file.') }
+  }
+
+  const schedule = async (item) => {
+    if (!when) { setErr('Pick a date and time for the post first.'); return }
+    setErr(''); setMsg(''); setBusyId(item.id)
+    try {
+      const res = await scheduleFromDevice(item, { caption, hashtags, format, scheduleTime: fromLocalInputValue(when) })
+      if (res.outcome === 'scheduled') setMsg('Scheduled ✓ — find it in your Queue. One copy is on the server; your original stays on this phone.')
+      else if (res.outcome === 'posted-late') setMsg('That time had already passed, so the post was created to publish right away — find it in your Queue.')
+      else if (res.outcome === 'missing') setErr('That file is no longer on this phone, so the post could not be created.')
+      else setMsg('Waiting for network — it will upload and schedule itself automatically when you are back online. You can close the app.')
+      setSchedId(''); setCaption(''); setHashtags(''); setWhen('')
+      await refresh()
+      if (onUploaded) onUploaded()
+    } catch (e) { setErr(e.message || 'Could not schedule that post.') }
+    setBusyId('')
+  }
+
+  const dismiss = async (p) => {
+    try { await removePendingSchedule(p.id); await refresh() } catch { /* list refreshes next open */ }
   }
 
   return (
     <div className="card mt2">
       <div className="card-head">
         <div>
-          <h2>On this device</h2>
-          <p>{isNativeApp() ? 'Videos stored inside the app on your phone — no cloud storage used until you upload them.' : 'Videos stored in this browser on this device — in the Android app this is your phone storage.'} Uploading a video to the library removes the local copy.</p>
+          <h2>On this phone</h2>
+          <p>Videos and photos stored inside the app on your phone. Importing uploads nothing — scheduling sends one copy to the server in the background, and your original always stays here.</p>
         </div>
-        <span className="pill">{items.length} waiting</span>
+        <span className="pill">{items.length} on device</span>
       </div>
       {err && <div className="alert error">{err}</div>}
       {msg && <div className="alert success">{msg}</div>}
       <div className="drop" onClick={() => devFileRef.current?.click()} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter') devFileRef.current?.click() }}>
-        <b>{saving ? 'Saving…' : 'Save a video on this device'}</b>
-        <p className="small">Pick videos now, upload them to the library later — handy on slow connections.</p>
-        <input ref={devFileRef} type="file" multiple accept="video/*" style={{ display: 'none' }} onChange={(e) => { pick(e.target.files); e.target.value = '' }} />
+        <b>{importing ? 'Saving…' : 'Add videos or photos to this phone'}</b>
+        <p className="small">Stored in the app only — no cloud storage used until you schedule a post.</p>
+        <input ref={devFileRef} type="file" multiple accept="video/*,image/*" style={{ display: 'none' }} onChange={(e) => { pick(e.target.files); e.target.value = '' }} />
       </div>
       {items.length > 0 && (
         <div className="mt">
           {items.map((item) => (
-            <div key={item.name} className="device-row">
+            <div key={item.id}>
+              <div className="device-row">
+                {item.posterUrl
+                  ? <img src={item.posterUrl} alt="" style={{ width: 44, height: 58, objectFit: 'cover', borderRadius: 8, flex: 'none' }} />
+                  : item.kind === 'image' && item.url
+                    ? <img src={item.url} alt="" style={{ width: 44, height: 58, objectFit: 'cover', borderRadius: 8, flex: 'none' }} />
+                    : <div style={{ width: 44, height: 58, borderRadius: 8, flex: 'none', background: 'var(--surface-2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }} aria-hidden="true">{item.kind === 'image' ? '🖼' : '🎬'}</div>}
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <b title={item.title}>{item.title}</b>
+                  <span className="muted small">{fmtSize(item.size)} · {item.kind}{item.width && item.height ? ` · ${item.width}×${item.height}` : ''} · on this phone</span>
+                </div>
+                <div style={{ display: 'flex', gap: 6, flex: 'none', flexWrap: 'wrap' }}>
+                  <button type="button" className="btn primary small" disabled={busyId === item.id} onClick={() => { setSchedId(schedId === item.id ? '' : item.id); setErr(''); setMsg('') }}>Schedule</button>
+                  <button type="button" className="btn ghost small" disabled={busyId === item.id} onClick={() => uploadCopy(item)}>{busyId === item.id ? 'Working…' : 'Upload copy'}</button>
+                  <button type="button" className="btn danger small" disabled={busyId === item.id} onClick={() => remove(item)}>Remove</button>
+                </div>
+              </div>
+              {schedId === item.id && (
+                <div style={{ border: '1px solid var(--line-2)', borderRadius: 10, padding: 12, margin: '4px 0 10px', background: 'var(--surface-2)' }}>
+                  <label htmlFor={`devCap-${item.id}`}>Caption</label>
+                  <textarea id={`devCap-${item.id}`} rows={3} placeholder="Write your caption…" value={caption} onChange={(e) => setCaption(e.target.value)} />
+                  <label htmlFor={`devTags-${item.id}`} style={{ marginTop: 10 }}>Hashtags <span className="muted">(space or comma separated)</span></label>
+                  <input id={`devTags-${item.id}`} placeholder="#reels #daily" value={hashtags} onChange={(e) => setHashtags(e.target.value)} />
+                  <div className="two-col" style={{ marginTop: 10 }}>
+                    <div>
+                      <label htmlFor={`devFmt-${item.id}`}>Format</label>
+                      <select id={`devFmt-${item.id}`} value={format} onChange={(e) => setFormat(e.target.value)}>
+                        <option value="REELS">REELS</option>
+                        <option value="FEED">FEED</option>
+                        <option value="STORY">STORY</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label htmlFor={`devWhen-${item.id}`}>Schedule time</label>
+                      <input id={`devWhen-${item.id}`} type="datetime-local" value={when} onChange={(e) => setWhen(e.target.value)} />
+                    </div>
+                  </div>
+                  <p className="muted small" style={{ marginTop: 10 }}>Scheduling uploads one copy to the server in the background — your original stays on this phone, and the server copy is deleted after the post publishes. If you are offline, the request waits below and finishes itself when you are back online.</p>
+                  <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                    <button type="button" className="btn primary small" disabled={busyId === item.id} onClick={() => schedule(item)}>{busyId === item.id ? 'Working…' : 'Schedule post'}</button>
+                    <button type="button" className="btn ghost small" onClick={() => setSchedId('')}>Cancel</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      {pending.length > 0 && (
+        <div className="mt">
+          <h3 style={{ margin: '6px 0 4px' }}>Waiting to finish</h3>
+          {pending.map((p) => (
+            <div key={p.id} className="device-row">
               <div style={{ minWidth: 0 }}>
-                <b title={item.name}>{item.name.replace(/^\d+-/, '')}</b>
-                <span className="muted small">{fmtSize(item.size)} · on device</span>
+                <b title={p.title}>{p.title}</b>
+                <span className="muted small">{p.scheduleTime ? `For ${new Date(p.scheduleTime).toLocaleString()}` : 'No time set'} · {p.status === 'failed' ? 'Not created' : 'Waiting for network'}</span>
+                {p.note && <span className="small" style={{ display: 'block', color: p.status === 'failed' ? 'var(--red)' : 'var(--muted)' }}>{p.note}</span>}
               </div>
-              <div style={{ display: 'flex', gap: 6, flex: 'none' }}>
-                <button type="button" className="btn primary small" disabled={busyName === item.name} onClick={() => upload(item)}>{busyName === item.name ? 'Uploading…' : 'Upload to library'}</button>
-                <button type="button" className="btn danger small" disabled={busyName === item.name} onClick={() => remove(item)}>Remove</button>
-              </div>
+              {p.status === 'failed' && <button type="button" className="btn ghost small" style={{ flex: 'none' }} onClick={() => dismiss(p)}>Dismiss</button>}
             </div>
           ))}
         </div>
@@ -240,7 +328,7 @@ export default function MediaLibrary({ media, loading, error, onRetry, onAddLink
         </form>
       </div>
 
-      <DeviceVideos onUploaded={onRetry} />
+      {isNativeApp() ? <DeviceLibrary onUploaded={onRetry} onUpload={onUpload} /> : null}
 
       <div className="toolbar mt2">
         <div style={{ position: 'relative', flex: 2, minWidth: 180 }}>

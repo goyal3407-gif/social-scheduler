@@ -207,13 +207,50 @@ async function ociPutObject(objectName, buffer, contentType) {
 // Object deletion is the one operation a PAR cannot perform: OCI
 // answers 404 to DELETE (and HEAD) on a write PAR — a PAR permits
 // PUT only — and DeleteObject requires a signed API request. So when
-// the optional signing settings are present (MEDIA_OCI_API_KEY_PEM +
-// tenancy/user OCIDs + fingerprint + namespace + bucket), deletes go
-// out as signed DeleteObject calls; without them, deletes fall back
-// to a best-effort DELETE against the write PAR (a no-op on OCI, so
-// published/removed copies then linger in the bucket until cleaned).
+// the signing settings are present (MEDIA_OCI_API_KEY_PEM + tenancy/
+// user OCIDs + fingerprint + namespace + bucket), deletes go out as
+// signed DeleteObject calls.
+//
+// PRODUCTION BUG (found 2026-11-17 by a live test): with the signing
+// variables sourced from Vercel environment variables, deletes failed
+// SILENTLY — the library item was removed, the API answered ok, and
+// the object stayed in the bucket as an orphan. The old code only
+// unescaped literal \n in the PEM, treated "any variable empty" as
+// "unconfigured" (falling back to the no-op PAR delete), and swallowed
+// every error. The rules below are the fix:
+//   * The PEM is normalised (literal \n escapes, CRLF, missing final
+//     newline, even a collapsed single-line body is re-wrapped) and
+//     PARSED once at startup — an unparseable key is a configuration
+//     error, reported loudly, never a silent fallback.
+//   * If ANY signing variable is set, signed mode is intended: a
+//     missing variable or bad key means deletes fail loudly (log +
+//     caller-visible warning), never the PAR no-op.
+//   * Only with NO signing variables at all does the best-effort PAR
+//     delete remain (local/dev setups without signing configured).
+//   * ociDeleteObject returns true only when the object is gone (or
+//     already was); callers use it to report honestly.
+function normalizeOciKeyPem(raw) {
+  if (typeof raw !== 'string') return '';
+  let s = raw.trim();
+  if (!s) return '';
+  if (s.includes('\\n')) s = s.replace(/\\n/g, '\n');
+  if (s.includes('\\r')) s = s.replace(/\\r/g, '');
+  s = s.replace(/\r\n?/g, '\n').trim();
+  const begin = s.match(/-----BEGIN [^-]+-----/);
+  const end = s.match(/-----END [^-]+-----/);
+  if (begin && end && s.indexOf(end[0]) > s.indexOf(begin[0])) {
+    const body = s.slice(s.indexOf(begin[0]) + begin[0].length, s.indexOf(end[0])).replace(/[^A-Za-z0-9+/=]/g, '');
+    if (body) return `${begin[0]}\n${body.replace(/(.{64})/g, '$1\n').trim()}\n${end[0]}\n`;
+    return s;
+  }
+  // No PEM armour survived (e.g. only the base64 body was pasted):
+  // re-wrap it as a PKCS#8 private key.
+  const body = s.replace(/[^A-Za-z0-9+/=]/g, '');
+  if (body.length > 100) return `-----BEGIN PRIVATE KEY-----\n${body.replace(/(.{64})/g, '$1\n').trim()}\n-----END PRIVATE KEY-----\n`;
+  return s;
+}
 const OCI_SIGN = {
-  keyPem: (process.env.MEDIA_OCI_API_KEY_PEM || '').replace(/\\n/g, '\n'),
+  keyPem: normalizeOciKeyPem(process.env.MEDIA_OCI_API_KEY_PEM || ''),
   tenancy: (process.env.MEDIA_OCI_TENANCY_OCID || '').trim(),
   user: (process.env.MEDIA_OCI_USER_OCID || '').trim(),
   fingerprint: (process.env.MEDIA_OCI_FINGERPRINT || '').trim(),
@@ -221,8 +258,33 @@ const OCI_SIGN = {
   namespace: (process.env.MEDIA_OCI_NAMESPACE || '').trim(),
   bucket: (process.env.MEDIA_OCI_BUCKET || '').trim(),
 };
-function ociSignedDeleteConfigured() {
-  return !!(OCI_SIGN.keyPem && OCI_SIGN.tenancy && OCI_SIGN.user && OCI_SIGN.fingerprint && OCI_SIGN.namespace && OCI_SIGN.bucket);
+let ociKeyObject = null;
+let ociKeyError = '';
+if (OCI_SIGN.keyPem) {
+  try { ociKeyObject = crypto.createPrivateKey(OCI_SIGN.keyPem); } catch (e) { ociKeyError = (e && e.message) || 'unparseable key'; }
+}
+const OCI_SIGN_ANY_SET = !!(OCI_SIGN.keyPem || OCI_SIGN.tenancy || OCI_SIGN.user || OCI_SIGN.fingerprint || OCI_SIGN.namespace || OCI_SIGN.bucket);
+function ociSigningProblem() {
+  if (!OCI_SIGN_ANY_SET) return '';
+  const missing = [];
+  if (!OCI_SIGN.keyPem) missing.push('MEDIA_OCI_API_KEY_PEM');
+  if (!OCI_SIGN.tenancy) missing.push('MEDIA_OCI_TENANCY_OCID');
+  if (!OCI_SIGN.user) missing.push('MEDIA_OCI_USER_OCID');
+  if (!OCI_SIGN.fingerprint) missing.push('MEDIA_OCI_FINGERPRINT');
+  if (!OCI_SIGN.namespace) missing.push('MEDIA_OCI_NAMESPACE');
+  if (!OCI_SIGN.bucket) missing.push('MEDIA_OCI_BUCKET');
+  if (missing.length) return `missing ${missing.join(', ')}`;
+  if (!ociKeyObject) return `MEDIA_OCI_API_KEY_PEM could not be parsed (${ociKeyError || 'invalid key'})`;
+  return '';
+}
+// 'signed' (ready), 'unconfigured' (nothing set — PAR fallback), or
+// 'misconfigured' (partly set / bad key — fail loudly, never fall back).
+function ociSigningState() {
+  if (!OCI_SIGN_ANY_SET) return 'unconfigured';
+  return ociSigningProblem() ? 'misconfigured' : 'signed';
+}
+if (ociSigningState() === 'misconfigured') {
+  console.error(`[oci] Signing configuration is invalid: ${ociSigningProblem()}. OCI object deletes will fail loudly until this is fixed.`);
 }
 async function ociSignedDeleteObject(objectName) {
   const host = `objectstorage.${OCI_SIGN.region}.oraclecloud.com`;
@@ -231,7 +293,7 @@ async function ociSignedDeleteObject(objectName) {
   const signingString = `(request-target): delete ${target}\nhost: ${host}\ndate: ${date}`;
   const signer = crypto.createSign('RSA-SHA256');
   signer.update(signingString);
-  const signature = signer.sign(OCI_SIGN.keyPem, 'base64');
+  const signature = signer.sign(ociKeyObject, 'base64');
   const keyId = `${OCI_SIGN.tenancy}/${OCI_SIGN.user}/${OCI_SIGN.fingerprint}`;
   const res = await fetch(`https://${host}${target}`, {
     method: 'DELETE',
@@ -242,15 +304,31 @@ async function ociSignedDeleteObject(objectName) {
     },
   });
   // 204 = deleted; 404 = already gone — both are the desired end state.
-  if (!res.ok && res.status !== 404) throw new Error(`Object storage delete failed (HTTP ${res.status})`);
+  if (!res.ok && res.status !== 404) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`Object storage delete failed (HTTP ${res.status})${body ? `: ${body.slice(0, 200)}` : ''}`);
+  }
 }
+// Returns true when the object is gone afterwards, false when it could
+// not be deleted. Failures are ALWAYS logged with their cause — a
+// cleanup that silently leaves orphans in the bucket is how the
+// production bug above hid.
 async function ociDeleteObject(objectName) {
-  // Best-effort by design: cleanup must never fail the caller's flow,
-  // and an already-gone object is the desired end state anyway.
+  const state = ociSigningState();
+  if (state === 'signed') {
+    try { await ociSignedDeleteObject(objectName); return true; } catch (e) {
+      console.error(`[oci] Signed delete failed for object ${objectName}: ${(e && e.message) || e}`);
+      return false;
+    }
+  }
+  if (state === 'misconfigured') {
+    console.error(`[oci] Delete of object ${objectName} not attempted: signing configuration is invalid (${ociSigningProblem()}).`);
+    return false;
+  }
   try {
-    if (ociSignedDeleteConfigured()) { await ociSignedDeleteObject(objectName); return; }
-    await fetch(ociObjectUrl(OCI_WRITE_BASE, objectName), { method: 'DELETE' });
-  } catch { /* ignore */ }
+    const res = await fetch(ociObjectUrl(OCI_WRITE_BASE, objectName), { method: 'DELETE' });
+    return res.ok || res.status === 404;
+  } catch { return false; }
 }
 
 // ---------- auth (email + password, scrypt hashes, signed cookie) ----------
@@ -1826,8 +1904,13 @@ async function maybeDeleteServerCopy(userId, post) {
   const stillNeeded = posts.some((p) => p.id !== post.id && p.mediaUrl === url
     && ['scheduled', 'draft', 'failed'].includes(p.status));
   if (stillNeeded) return;
-  if (ociItem) await ociDeleteObject(ociItem.objectName);
+  let removed = true;
+  if (ociItem) removed = await ociDeleteObject(ociItem.objectName);
   else await db.deleteMediaFile(fileId);
+  // If the storage delete failed (already logged with its cause), the
+  // copy is still out there — do NOT mark the item removed; the queue
+  // state must stay honest about what actually happened.
+  if (!removed) return;
   const item = ociItem || library.find((x) => x.fileId === fileId || x.url === url);
   if (item && !item.serverCopyRemoved) {
     await db.updateMedia(userId, item.id, { serverCopyRemoved: true, serverCopyRemovedAt: new Date().toISOString() });
@@ -1897,7 +1980,28 @@ async function migrateLegacyMediaItem(userId, item, base) {
 // { ok:false, retry:true, containerId, error } when Instagram is still
 // processing (press Publish again to resume the same container), or
 // { ok:false, error } on a hard failure (post is marked failed).
+// In-flight guard: two overlapping publish triggers for the same post
+// (the cron pinger firing while the user taps Publish in the app, or a
+// double-tap on Publish) must never create two Instagram posts.
+// attemptPublish claims the post in-process for the duration of one
+// attempt; a second caller gets the "still processing" answer instead.
+// (On multi-instance serverless this narrows the race to near-zero in
+// practice — the saved containerId resume below is the second line of
+// defence — but a same-process duplicate is now impossible.)
+const publishInFlight = new Set();
 async function attemptPublish(userId, post, ig, publicBaseUrl) {
+  const lockKey = `${userId}:${post && post.id}`;
+  if (publishInFlight.has(lockKey)) {
+    return { ok: false, retry: true, containerId: (post && post.containerId) || null, error: 'This post is already being published — wait a moment, then check the queue. Nothing was published twice.' };
+  }
+  publishInFlight.add(lockKey);
+  try {
+    return await attemptPublishLocked(userId, post, ig, publicBaseUrl);
+  } finally {
+    publishInFlight.delete(lockKey);
+  }
+}
+async function attemptPublishLocked(userId, post, ig, publicBaseUrl) {
   const isAutoRetry = !!(post && post._autoRetry); // set by duePostsFor for the one automatic retry
   const token = ig.token;
   const igId = ig.igUserId;
@@ -2367,9 +2471,16 @@ app.delete('/api/media/:id', ah(async (req, res) => {
   const item = library.find((x) => x.id === req.params.id) || null;
   const ok = await db.deleteMedia(req.userId, req.params.id);
   if (!ok) return res.status(404).json({ ok: false, error: 'That media file no longer exists.' });
+  let ociCleanupFailed = false;
   if (item && item.storage === 'oci') {
-    if (item.objectName) await ociDeleteObject(item.objectName);
-    if (item.posterFileId) await ociDeleteObject(item.posterFileId);
+    if (item.objectName && !(await ociDeleteObject(item.objectName))) ociCleanupFailed = true;
+    if (item.posterFileId && !(await ociDeleteObject(item.posterFileId))) ociCleanupFailed = true;
+  }
+  // The library item is gone either way (that was the user's action),
+  // but a failed storage delete is surfaced, never hidden behind a
+  // bare ok — the orphaned object is also logged server-side.
+  if (ociCleanupFailed) {
+    return res.json({ ok: true, warning: 'Removed from your library, but the stored file copy could not be deleted from object storage — the failure has been logged.' });
   }
   res.json({ ok: true });
 }));

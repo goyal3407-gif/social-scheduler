@@ -183,6 +183,57 @@ export default function App() {
 
   useEffect(() => { if (user) loadAll() }, [user, loadAll])
 
+  // Auto-bridge: schedule requests made from the on-device library
+  // while offline wait in a local pending list; this runner finishes
+  // them (upload the bridge copy + create the server post) whenever the
+  // app opens, resumes, comes back online, or every minute while open.
+  // Dynamically imported so the device-storage plugin stays out of the
+  // main bundle; in a plain browser the pending list is always empty
+  // and every call is a cheap no-op.
+  useEffect(() => {
+    if (!user) return undefined
+    let alive = true
+    let remove = null
+    let cancelled = false
+    const run = async () => {
+      try {
+        const { processPendingSchedules } = await import('./autoBridge.js')
+        const res = await processPendingSchedules()
+        if (alive && res && res.ran && (res.results || []).some((r) => r.outcome === 'scheduled' || r.outcome === 'posted-late')) {
+          showToast('A post that was waiting for network is now scheduled.')
+          loadAll()
+        }
+        if (alive && res && res.ran && (res.results || []).some((r) => r.outcome === 'failed')) {
+          showToast('A waiting post could not be created — open Media to see why.', 'error')
+        }
+      } catch { /* device storage unavailable in this context — nothing waiting */ }
+    }
+    run()
+    const timer = setInterval(run, 60000)
+    const onOnline = () => run()
+    const onVis = () => { if (document.visibilityState === 'visible') run() }
+    window.addEventListener('online', onOnline)
+    document.addEventListener('visibilitychange', onVis)
+    try {
+      if (window.Capacitor && typeof window.Capacitor.isNativePlatform === 'function' && window.Capacitor.isNativePlatform()) {
+        import('@capacitor/app').then(({ App: CapApp }) => {
+          if (cancelled) return
+          CapApp.addListener('appStateChange', ({ isActive }) => { if (isActive) run() })
+            .then((handle) => { if (!cancelled) remove = handle; else if (handle && handle.remove) handle.remove() })
+            .catch(() => { /* listener unavailable — interval/online still cover us */ })
+        }).catch(() => { /* plugin not bundled in this context */ })
+      }
+    } catch { /* not running in a native shell */ }
+    return () => {
+      alive = false; cancelled = true
+      clearInterval(timer)
+      window.removeEventListener('online', onOnline)
+      document.removeEventListener('visibilitychange', onVis)
+      if (remove && remove.remove) remove.remove()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user])
+
   const showToast = (msg) => {
     setToast(msg)
     if (toastTimer.current) clearTimeout(toastTimer.current)
