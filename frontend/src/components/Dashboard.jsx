@@ -18,7 +18,7 @@ function useCountdown(targetIso) {
   return { label: formatCountdown(targetIso), parts: { d, h, m } }
 }
 
-export default function Dashboard({ posts, stats, loading, error, onRetry, onCreate, onGoQueue, onEdit, onDelete, onPublish, publishingId, settings, onDuplicate, onReschedule, onRescheduleNextBest, overdue, onPublishDue }) {
+export default function Dashboard({ posts, stats, loading, error, onRetry, onCreate, onGoQueue, onEdit, onDelete, onPublish, publishingId, settings, onDuplicate, onReschedule, onRescheduleNextBest, overdue, onPublishDue, notifications }) {
   const [checklistDismissed, setChecklistDismissed] = useState(() => { try { return localStorage.getItem('ss-checklist-dismissed') === '1' } catch { return false } })
   const dismissChecklist = () => { setChecklistDismissed(true); try { localStorage.setItem('ss-checklist-dismissed', '1') } catch { /* ignore */ } }
   // Publishing streak (real data only): consecutive days with at least one
@@ -54,6 +54,9 @@ export default function Dashboard({ posts, stats, loading, error, onRetry, onCre
     const now = Date.now()
     return (posts || []).filter((p) => p.scheduleTime && new Date(p.scheduleTime).getTime() >= now && new Date(p.scheduleTime).getTime() < now + 7 * 86400000).length
   }, [posts])
+  const failedPosts = useMemo(() => [...(posts || [])]
+    .filter((p) => p.status === 'failed')
+    .sort((a, b) => new Date(b.failedAt || b.scheduleTime || 0) - new Date(a.failedAt || a.scheduleTime || 0)), [posts])
 
   return (
     <div>
@@ -100,6 +103,34 @@ export default function Dashboard({ posts, stats, loading, error, onRetry, onCre
             </div>
           </div>
         </div>
+      )}
+
+      {!loading && failedPosts.length > 0 && (
+        <div className="alert error" role="alert" style={{ marginTop: 16 }}>
+          <div style={{ flex: 1 }}>
+            <b>{failedPosts.length} post{failedPosts.length === 1 ? '' : 's'} failed to publish</b>
+            {failedPosts[0].retryPending ? ' — the newest one will be retried automatically in about 15 minutes.' : ' — the automatic retry has been used.'}
+            {failedPosts[0].lastPublishError && <div className="small" style={{ marginTop: 4 }}>Latest reason: {failedPosts[0].lastPublishError}</div>}
+            <div style={{ marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button type="button" className="btn ghost small" onClick={onGoQueue}>Review in Queue</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {!loading && notifications && notifications.length > 0 && (
+        <section className="card section" aria-label="Notifications">
+          <div className="card-head"><div><h2>Notifications</h2><p>Publish results — successes and failures with their reasons.</p></div></div>
+          <div>
+            {notifications.slice(0, 8).map((n) => (
+              <p key={n.id} className="small" style={{ padding: '6px 0', color: n.read ? 'var(--muted)' : 'var(--ink)' }}>
+                {n.type === 'publish-success' ? '✅ ' : '⚠️ '}<b>{n.type === 'publish-success' ? 'Published' : 'Publish problem'}</b>
+                <span className="muted"> · {fmtDateTime(n.createdAt)}</span>
+                <br /><span>{String(n.message || '').replace(/^Publish (failed|ed)[^:]*: /, '')}</span>
+              </p>
+            ))}
+          </div>
+        </section>
       )}
 
       {!loading && !checklistDismissed && !checklistDone && (

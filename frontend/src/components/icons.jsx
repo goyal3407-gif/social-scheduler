@@ -30,3 +30,4 @@ export const IconSpark = (p) => <I {...p}><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L
 export const IconEdit = (p) => <I {...p} d="M4 20h4L20 8a2.8 2.8 0 0 0-4-4L4 16v4zM13.5 6.5l4 4" />
 export const IconX = (p) => <I {...p} d="M6 6l12 12M18 6 6 18" />
 export const IconMenu = (p) => <I {...p} d="M4 7h16M4 12h16M4 17h16" />
+export const IconBell = (p) => <I {...p}><path d="M18 9a6 6 0 1 0-12 0c0 6-2.5 7-2.5 7h17S18 15 18 9z" /><path d="M10 20a2.2 2.2 0 0 0 4 0" /></I>

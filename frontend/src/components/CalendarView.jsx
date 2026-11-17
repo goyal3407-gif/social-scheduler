@@ -4,7 +4,7 @@ import { PostRow, Skeleton, Empty } from './shared.jsx'
 
 const DOW = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
-export default function CalendarView({ posts, loading, onEdit, onDelete, onPublish, publishingId }) {
+export default function CalendarView({ posts, loading, onEdit, onDelete, onPublish, publishingId, onGoQueue }) {
   const today = new Date()
   const [cursor, setCursor] = useState(new Date(today.getFullYear(), today.getMonth(), 1))
   const [selected, setSelected] = useState(today.toDateString())
@@ -57,9 +57,24 @@ export default function CalendarView({ posts, loading, onEdit, onDelete, onPubli
                 const dayPosts = byDay[k] || []
                 const isToday = k === today.toDateString()
                 const isOther = d.getMonth() !== cursor.getMonth()
+                const nSched = dayPosts.filter((p) => p.status === 'scheduled' || p.status === 'draft').length
+                const nPub = dayPosts.filter((p) => p.status === 'published').length
+                const nFail = dayPosts.filter((p) => p.status === 'failed').length
                 return (
                   <button key={k + d.getDate()} type="button" className={`cal-day ${isOther ? 'other' : ''} ${isToday ? 'today' : ''} ${dayPosts.length ? 'has' : ''}`} onClick={() => setSelected(k)} aria-label={`${d.toDateString()}, ${dayPosts.length} posts`}>
                     <b>{d.getDate()}</b>
+                    {dayPosts.length > 0 && (
+                      <span className="cal-thumbs" aria-hidden="true">
+                        {dayPosts.slice(0, 3).map((p) => (
+                          p.mediaType === 'image'
+                            ? <img key={p.id} src={p.mediaUrl} alt="" loading="lazy" />
+                            : <video key={p.id} src={p.mediaUrl} muted preload="none" />
+                        ))}
+                      </span>
+                    )}
+                    {dayPosts.length > 0 && (
+                      <span className="cal-count">{dayPosts.length} post{dayPosts.length === 1 ? '' : 's'}{nSched ? ` · ${nSched} to go` : ''}{nPub ? ` · ${nPub} live` : ''}{nFail ? ` · ${nFail} failed` : ''}</span>
+                    )}
                     {dayPosts.slice(0, 2).map((p) => (
                       <span key={p.id} className={`cal-chip ${p.status}`}>{new Date(p.scheduleTime).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })} · {(p.caption || 'Post').slice(0, 18)}</span>
                     ))}
@@ -73,7 +88,10 @@ export default function CalendarView({ posts, loading, onEdit, onDelete, onPubli
       </div>
 
       <section className="card section">
-        <div className="card-head"><div><h2>{new Date(selected).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}</h2><p>{selectedPosts.length} post{selectedPosts.length === 1 ? '' : 's'}</p></div></div>
+        <div className="card-head">
+          <div><h2>{new Date(selected).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}</h2><p>{selectedPosts.length} post{selectedPosts.length === 1 ? '' : 's'}</p></div>
+          {onGoQueue && <button type="button" className="btn ghost small" onClick={onGoQueue}>Open in Queue →</button>}
+        </div>
         {selectedPosts.length === 0 ? (
           <Empty title="Nothing on this day" body="Pick another day, or schedule a post for this one from Studio." />
         ) : selectedPosts.map((p) => (

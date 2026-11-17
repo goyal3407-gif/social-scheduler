@@ -67,7 +67,7 @@ function DeviceVideos({ onUploaded }) {
 
   const upload = async (item) => {
     setErr(''); setMsg('')
-    if (item.size > 4.5 * 1024 * 1024) { setErr(`"${item.name.replace(/^\d+-/, '')}" is over the live site's ~4 MB upload limit — it can stay on the device, but the live server cannot accept it yet.`); return }
+    if (item.size > 4.5 * 1024 * 1024) { setErr(`"${item.name.replace(/^\d+-/, '')}" is over this quick-upload path's ~4 MB limit — it can stay on the device. For bigger files, use the main Upload card above, which now uploads in pieces (up to 200 MB).`); return }
     setBusyName(item.name)
     try {
       await uploadPendingUpload(item.name, { folder: 'Uploads' })
@@ -132,6 +132,7 @@ export default function MediaLibrary({ media, loading, error, onRetry, onAddLink
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
   const [err, setErr] = useState('')
+  const [progress, setProgress] = useState(null) // { name, frac } for the file currently uploading
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE)
   const fileRef = useRef(null)
 
@@ -160,15 +161,17 @@ export default function MediaLibrary({ media, loading, error, onRetry, onAddLink
     setBusy(true)
     let ok = 0
     for (const f of list) {
-      // The live site (Vercel serverless) accepts about 4 MB per request —
-      // bigger files fail there even though local dev allows 60 MB.
-      if (f.size > 4.5 * 1024 * 1024) { setErr(`"${f.name}" is over the live site's ~4 MB upload limit and was skipped — add it by public link instead (Add by link, on the right).`); continue }
+      // Big files upload in pieces (chunked upload in api.js) — the
+      // only hard stop now is the 200 MB per-file cap.
+      if (f.size > 200 * 1024 * 1024) { setErr(`"${f.name}" is over the 200 MB per-file limit and was skipped.`); continue }
       try {
         const isVideo = /^video\//.test(f.type) || /\.(mp4|mov|webm)$/i.test(f.name)
         const meta = await probeUrl(URL.createObjectURL(f), isVideo)
-        await onUpload(f, { folder: newFolder || undefined, ...meta })
+        setProgress({ name: f.name, frac: 0 })
+        await onUpload(f, { folder: newFolder || undefined, ...meta }, (frac) => setProgress({ name: f.name, frac }))
         ok++
       } catch (e) { setErr(e.message || 'Upload failed.') }
+      setProgress(null)
     }
     setBusy(false)
     if (ok) setMsg(`Uploaded ${ok} file${ok === 1 ? '' : 's'}.`)
@@ -192,7 +195,7 @@ export default function MediaLibrary({ media, loading, error, onRetry, onAddLink
   return (
     <div>
       <h2 className="section-title">Media Library</h2>
-      <p className="section-sub">Upload videos and images (about 4 MB max per upload on the live site — bigger files: add by link) or save links. Organise with folders, tags and favourites.</p>
+      <p className="section-sub">Upload videos and images (up to 200 MB per file — big files upload in pieces automatically) or save links. Organise with folders, tags and favourites.</p>
 
       {error && <ErrorBox error={error} onRetry={onRetry} />}
       {err && <div className="alert error">{err}</div>}
@@ -211,9 +214,15 @@ export default function MediaLibrary({ media, loading, error, onRetry, onAddLink
             role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter') fileRef.current?.click() }}
           >
             <b>{busy ? 'Uploading…' : 'Drop files here, or click to browse'}</b>
-            <p className="small">MP4, MOV, JPG, PNG, WebP — max ~4 MB per file on the live site</p>
+            <p className="small">MP4, MOV, JPG, PNG, WebP — up to 200 MB per file (big files upload in pieces)</p>
             <input ref={fileRef} type="file" multiple accept="video/*,image/*" style={{ display: 'none' }} onChange={(e) => handleFiles(e.target.files)} />
           </div>
+          {progress && (
+            <div className="mt">
+              <div className="small muted" style={{ marginBottom: 4 }}>Uploading {progress.name} — {Math.round(progress.frac * 100)}%</div>
+              <div className="pbar"><span style={{ width: `${Math.round(progress.frac * 100)}%` }} /></div>
+            </div>
+          )}
           <label htmlFor="upFolder" style={{ marginTop: 14 }}>Folder for uploads</label>
           <input id="upFolder" placeholder="e.g. Reels, Tutorials, B-roll" value={newFolder} onChange={(e) => setNewFolder(e.target.value)} />
         </div>
@@ -252,13 +261,15 @@ export default function MediaLibrary({ media, loading, error, onRetry, onAddLink
           <div className="media-grid">
             {filtered.slice(0, visibleCount).map((m) => (
               <article key={m.id} className="media-card">
-                {m.kind === 'image' ? <img src={m.url} alt={m.title || ''} loading="lazy" decoding="async" /> : <video src={m.url} muted preload="none" />}
+                {m.serverCopyRemoved ? (
+                  <div className="media-removed"><b>Published ✓</b><span>Server copy removed to save space — the post is live on Instagram. Upload the file again to reuse it.</span></div>
+                ) : m.kind === 'image' ? <img src={m.url} alt={m.title || ''} loading="lazy" decoding="async" /> : <video src={m.url} muted preload="none" />}
                 <div className="mc-body">
                   <b title={m.title || m.url}>{m.title || 'Untitled'}</b>
                   <span className="muted small">{m.folder || 'Unsorted'} · {fmtDate(m.createdAt)}{m.usedCount ? ` · Used ${m.usedCount}×` : ''}{m.width && m.height ? ` · ${m.width}×${m.height}` : ''}</span>
                   {(m.tags || []).length > 0 && <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 6 }}>{m.tags.map((t) => <span key={t} className="chip">{t}</span>)}</div>}
                   <div style={{ display: 'flex', gap: 6, marginTop: 9, flexWrap: 'wrap' }}>
-                    <button type="button" className="btn primary small" onClick={() => onUse(m)}>Use in Studio</button>
+                    {!m.serverCopyRemoved && <button type="button" className="btn primary small" onClick={() => onUse(m)}>Use in Studio</button>}
                     <button type="button" className="btn ghost small" aria-label={m.favorite ? 'Remove favourite' : 'Mark favourite'} onClick={() => onToggleFav(m)}><span className={m.favorite ? 'heart' : ''}><IconHeart size={15} filled={Boolean(m.favorite)} /></span></button>
                     <button type="button" className="btn danger small" aria-label="Delete media" onClick={() => onDelete(m)}><IconTrash size={15} /></button>
                   </div>

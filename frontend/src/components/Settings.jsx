@@ -209,6 +209,19 @@ export default function Settings({ settings, dbStatus, onSave, saving, onInstagr
             {err && <div className="alert error">{err}</div>}
             {msg && <div className="alert success">{msg}</div>}
           </div>
+
+          <div className="card" style={{ marginTop: 16 }}>
+            <h2>Storage</h2>
+            <p className="muted small" style={{ marginTop: 8 }}>
+              The server only holds an uploaded file until Instagram publishes it — after a successful post, the server copy is deleted automatically to save space (the post stays live on Instagram, and the library entry is marked “Published — server copy removed”). Files still needed by scheduled posts are never deleted, and media added by link is never touched.
+            </p>
+            <label style={{ display: 'flex', gap: 10, alignItems: 'flex-start', marginTop: 12, cursor: 'pointer' }}>
+              <input type="checkbox" checked={settings?.keepServerCopyAfterPublish === true} disabled={saving}
+                onChange={async (e) => { setErr(''); setMsg(''); try { await onSave({ keepServerCopyAfterPublish: e.target.checked }); setMsg('Storage setting saved.') } catch (e2) { setErr(e2.message || 'Could not save settings.') } }}
+                style={{ width: 18, height: 18, marginTop: 2, flex: 'none' }} />
+              <span><b>Keep a server copy after publishing</b><br /><span className="muted small">Off by default. Turn it on if you want to reuse the same file for more posts later — it uses more storage.</span></span>
+            </label>
+          </div>
         </div>
         <section className="card">
           <h2>About this app</h2>

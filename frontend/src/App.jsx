@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense } fro
 import { api, nextBestTime } from './api.js'
 import Auth from './components/Auth.jsx'
 import Dashboard from './components/Dashboard.jsx'
-import { IconHome, IconCal, IconQueue, IconPlus, IconMedia, IconBulk, IconTools, IconSpark, IconSettings, IconSun, IconMoon, IconMenu, IconX } from './components/icons.jsx'
+import { IconHome, IconCal, IconQueue, IconPlus, IconMedia, IconBulk, IconTools, IconSpark, IconSettings, IconSun, IconMoon, IconMenu, IconX, IconBell } from './components/icons.jsx'
 import { Skeleton } from './components/shared.jsx'
 // Heavy tabs load on demand so the first paint is only Dashboard + shell.
 const SetupWizard = lazy(() => import('./components/SetupWizard.jsx'))
@@ -61,6 +61,8 @@ export default function App() {
   const [studioKey, setStudioKey] = useState(0)
   const [saving, setSaving] = useState(false)
   const [publishingId, setPublishingId] = useState(null)
+  const [notifications, setNotifications] = useState([])
+  const [unread, setUnread] = useState(0)
   const [confirmDelete, setConfirmDelete] = useState(null) // {type:'post'|'media'|'posts', item|items}
   const [templateSeed, setTemplateSeed] = useState(null)
   const toastTimer = useRef(null)
@@ -159,7 +161,8 @@ export default function App() {
         api.getTemplates(),
         api.getSettings(),
         api.getStats(),
-        api.dbStatus().catch(() => null)
+        api.dbStatus().catch(() => null),
+        api.getNotifications().catch(() => null)
       ])
       for (const r of results) {
         if (r.status === 'rejected' && r.reason && r.reason.status === 401) { setUser(null); return }
@@ -167,6 +170,8 @@ export default function App() {
       const value = (i, fallback) => (results[i].status === 'fulfilled' ? results[i].value : fallback)
       const firstError = results.find((r) => r.status === 'rejected')
       setPosts(value(0, [])); setMedia(value(1, [])); setTemplates(value(2, [])); setSettings(value(3, null)); setStats(value(4, null)); setDbStatus(value(5, null))
+      const notif = value(6, null)
+      if (notif) { setNotifications(notif.notifications || []); setUnread(notif.unread || 0) }
       if (firstError) setError(firstError.reason)
     } catch (e) {
       if (e && e.status === 401) { setUser(null); return }
@@ -368,13 +373,24 @@ export default function App() {
     }
   }, [refreshStats])
 
-  const handleUpload = useCallback(async (file, extra) => {
-    const created = await api.uploadMedia(file, extra)
+  const handleUpload = useCallback(async (file, extra, onProgress) => {
+    const created = await api.uploadMedia(file, extra, onProgress)
     const item = created?.media || created
     if (item && item.id) setMedia((prev) => [item, ...prev])
     else { const fresh = await api.getMedia().catch(() => null); if (fresh) setMedia(fresh) }
     refreshStats()
+    return item && item.id ? item : null
   }, [refreshStats])
+
+  // Bell: jump to the Dashboard (where notifications live) and mark
+  // everything read, locally and on the server.
+  const openNotifications = useCallback(async () => {
+    setTab('home')
+    window.scrollTo({ top: 0 })
+    setUnread(0)
+    setNotifications((prev) => prev.map((n) => ({ ...n, read: true })))
+    try { await api.markNotificationsRead() } catch { /* badge already cleared locally */ }
+  }, [])
 
   const handleAddLink = useCallback(async (data) => {
     const created = await api.createMedia({ ...data, kind: /\.(png|jpe?g|gif|webp|avif)(\?|$)/i.test(data.url) ? 'image' : 'video', tags: data.tags || [] })
@@ -451,6 +467,10 @@ export default function App() {
               <span className={`dot ${settings?.instagramConnected ? '' : 'off'}`} />
               {settings?.instagramConnected ? `IG ${settings.instagramHandle || 'connected'}` : 'IG not connected'}
             </span>
+            <button type="button" className="icon-btn bell-btn" onClick={openNotifications} aria-label={unread ? `Notifications — ${unread} unread` : 'Notifications'}>
+              <IconBell size={18} />
+              {unread > 0 && <span className="bell-badge">{unread > 9 ? '9+' : unread}</span>}
+            </button>
             <button type="button" className="icon-btn" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}>
               {theme === 'dark' ? <IconSun size={18} /> : <IconMoon size={18} />}
             </button>
@@ -518,11 +538,11 @@ export default function App() {
             onEdit={goStudio} onDelete={(p) => setConfirmDelete({ type: 'post', item: p })}
             onPublish={handlePublish} publishingId={publishingId} settings={settings}
             onDuplicate={handleDuplicate} onReschedule={handleReschedule} onRescheduleNextBest={handleRescheduleNextBest}
-            overdue={overdue} onPublishDue={handlePublishDue} />
+            overdue={overdue} onPublishDue={handlePublishDue} notifications={notifications} />
         )}
         <Suspense fallback={<TabFallback />}>
         {tab === 'calendar' && (
-          <div className="section"><CalendarView posts={posts} loading={loading} onEdit={goStudio} onDelete={(p) => setConfirmDelete({ type: 'post', item: p })} onPublish={handlePublish} publishingId={publishingId} /></div>
+          <div className="section"><CalendarView posts={posts} loading={loading} onEdit={goStudio} onDelete={(p) => setConfirmDelete({ type: 'post', item: p })} onPublish={handlePublish} publishingId={publishingId} onGoQueue={() => setTab('queue')} /></div>
         )}
         {tab === 'queue' && (
           <div className="section"><Queue posts={posts} loading={loading} onEdit={goStudio} onDelete={(p) => setConfirmDelete({ type: 'post', item: p })} onPublish={handlePublish} publishingId={publishingId} onCreate={() => goStudio(null)} onDuplicate={handleDuplicate} onReschedule={handleReschedule} onRescheduleNextBest={handleRescheduleNextBest} overdue={overdue} onPublishDue={handlePublishDue} onDeleteMany={(items) => setConfirmDelete({ type: 'posts', items })} /></div>
@@ -532,7 +552,7 @@ export default function App() {
             <Studio key={`${studioKey}-${editing?.id || 'new'}`} editing={editing} seed={templateSeed ? { caption: templateSeed.text || templateSeed.caption || '', hashtags: templateSeed.hashtags || '', cta: templateSeed.cta || '', mediaUrl: templateSeed.mediaUrl || '', mediaType: templateSeed.mediaType || 'video', scheduleTime: templateSeed.scheduleTime || '' } : null} media={media} templates={templates} onSave={handleSavePost} onCancel={() => setTab('queue')} saving={saving} posts={posts} />
           </div>
         )}
-        {tab === 'bulk' && <div className="section"><Bulk onImport={handleBulkImport} posts={posts} /></div>}
+        {tab === 'bulk' && <div className="section"><Bulk onImport={handleBulkImport} posts={posts} onUploadFile={handleUpload} /></div>}
         {tab === 'media' && (
           <div className="section"><MediaLibrary media={media} loading={loading} error={error} onRetry={loadAll}
             onAddLink={handleAddLink} onUpload={handleUpload}

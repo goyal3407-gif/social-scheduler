@@ -134,7 +134,15 @@ textarea{resize:vertical;min-height:90px}
 .cal-chip.published{background:var(--green-soft);color:var(--green)}
 .cal-chip.failed{background:var(--red-soft);color:var(--red)}
 .cal-chip.draft{background:var(--amber-soft);color:var(--amber)}
-@media(max-width:640px){.cal-day{min-height:56px}.cal-chip{display:none}.cal-day.has::after{content:"";display:block;width:7px;height:7px;border-radius:50%;background:var(--brand);margin:4px auto 0}}
+@media(max-width:640px){.cal-day{min-height:56px}.cal-chip{display:none}.cal-thumbs{display:none}.cal-count{display:none}.cal-day.has::after{content:"";display:block;width:7px;height:7px;border-radius:50%;background:var(--brand);margin:4px auto 0}}
+.cal-thumbs{display:flex;gap:3px;margin:2px 0 1px}
+.cal-thumbs img,.cal-thumbs video{width:26px;height:34px;object-fit:cover;border-radius:5px;background:var(--surface);border:1px solid var(--line-2);display:block}
+.cal-count{display:block;font-size:10.5px;color:var(--muted);margin-top:2px;line-height:1.35}
+.pbar{height:8px;border-radius:999px;background:var(--surface-2);border:1px solid var(--line);overflow:hidden}
+.pbar span{display:block;height:100%;background:var(--brand);transition:width .2s ease}
+.media-removed{aspect-ratio:4/5;display:flex;flex-direction:column;gap:6px;align-items:center;justify-content:center;text-align:center;padding:14px;background:var(--surface-2);color:var(--muted);font-size:12.5px;line-height:1.5}
+.bell-btn{position:relative}
+.bell-badge{position:absolute;top:-5px;right:-5px;min-width:17px;height:17px;padding:0 4px;border-radius:999px;background:var(--red);color:#fff;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center}
 
 .kanban{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;align-items:start}
 @media(max-width:900px){.kanban{grid-template-columns:repeat(2,1fr)}}

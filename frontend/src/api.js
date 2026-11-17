@@ -79,16 +79,51 @@ export const api = {
 
   getMedia: async () => asArray(await req('/api/media?limit=500'), 'media'),
   createMedia: async (media) => (await req('/api/media', { method: 'POST', body: JSON.stringify(media) })).media,
-  uploadMedia: async (file, extra = {}) => {
-    // Server accepts base64 JSON (no multipart parser on the server).
-    const dataUrl = await new Promise((resolve, reject) => {
+  // Upload a file to the Media Library. Small files go in one request;
+  // bigger ones are split into 3 MB pieces (init → chunk(s) →
+  // complete) because a single request is capped at ~4.5 MB on the
+  // host — a 14 MB Reel used to fail outright. onProgress(frac) is
+  // called with 0..1 as the upload advances. The server enforces a
+  // 200 MB per-file cap and returns the same /media/<id> item either
+  // way, so callers cannot tell the two paths apart.
+  uploadMedia: async (file, extra = {}, onProgress) => {
+    const readAsDataUrl = (blob) => new Promise((resolve, reject) => {
       const r = new FileReader()
       r.onload = () => resolve(r.result)
       r.onerror = () => reject(new Error('Could not read file'))
-      r.readAsDataURL(file)
+      r.readAsDataURL(blob)
     })
-    return req('/api/media/upload', { method: 'POST', body: JSON.stringify({ name: extra.title || file.name, dataUrl, folder: extra.folder || 'Uploads', tags: extra.tags || [], width: extra.width || 0, height: extra.height || 0, duration: extra.duration || 0 }) }).then((d) => d.media || d)
+    const name = extra.title || file.name
+    const meta = { folder: extra.folder || 'Uploads', tags: extra.tags || [], width: extra.width || 0, height: extra.height || 0, duration: extra.duration || 0 }
+    const CHUNK = 3 * 1024 * 1024
+    if (file.size <= CHUNK) {
+      const dataUrl = await readAsDataUrl(file)
+      const d = await req('/api/media/upload', { method: 'POST', body: JSON.stringify({ name, dataUrl, ...meta }) })
+      if (onProgress) onProgress(1)
+      return d.media || d
+    }
+    const init = await req('/api/media/upload/init', { method: 'POST', body: JSON.stringify({ name, size: file.size, contentType: file.type || '', ...meta }) })
+    const uploadId = init.uploadId
+    const chunkSize = init.chunkSize || CHUNK
+    const chunkCount = init.chunkCount || Math.ceil(file.size / chunkSize)
+    try {
+      for (let i = 0; i < chunkCount; i++) {
+        const blob = file.slice(i * chunkSize, Math.min(file.size, (i + 1) * chunkSize))
+        const dataUrl = await readAsDataUrl(blob)
+        await req('/api/media/upload/chunk', { method: 'POST', body: JSON.stringify({ uploadId, index: i, dataUrl }) })
+        if (onProgress) onProgress((i + 1) / chunkCount)
+      }
+      const d = await req('/api/media/upload/complete', { method: 'POST', body: JSON.stringify({ uploadId }) })
+      return d.media || d
+    } catch (e) {
+      // Tell the server to drop the partial upload so no orphan pieces
+      // or library items are left behind.
+      try { await req(`/api/media/upload/${encodeURIComponent(uploadId)}`, { method: 'DELETE' }) } catch { /* best effort */ }
+      throw e
+    }
   },
+  getNotifications: () => req('/api/notifications'),
+  markNotificationsRead: () => req('/api/notifications/read', { method: 'POST', body: JSON.stringify({}) }),
   updateMedia: async (id, patch) => (await req(`/api/media/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) })).media,
   deleteMedia: (id) => req(`/api/media/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
