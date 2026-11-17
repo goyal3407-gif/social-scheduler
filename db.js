@@ -547,7 +547,19 @@ async function getSettings(userId) {
     return (doc && doc.data) || {};
   }
   const all = load(JSON_FILES.settings, {});
-  return (all && all[userId]) || (Array.isArray(all) ? {} : all) || {};
+  if (!all || typeof all !== 'object' || Array.isArray(all)) return {};
+  if (all[userId] && typeof all[userId] === 'object') return all[userId];
+  if (all[userId]) return {}; // non-object entry: not valid settings
+  // No per-user entry. A legacy FLAT settings object (values are simple
+  // settings, saved before per-user storage) belongs to the owner only —
+  // never hand one user's settings (or the whole per-user map) to
+  // another user.
+  const looksPerUserMap = Object.values(all).some((v) => v && typeof v === 'object');
+  if (!looksPerUserMap) {
+    const owner = await ownerId();
+    if (userId && owner && userId === owner) return all;
+  }
+  return {};
 }
 async function saveSettings(userId, settings) {
   await ensureMongo();
@@ -580,7 +592,18 @@ async function getInstagram(userId) {
   }
   const all = load(JSON_FILES.instagram, {});
   const obj = (all && typeof all === 'object' && !Array.isArray(all)) ? all : {};
-  const doc = obj[userId] || obj;
+  let doc = obj[userId];
+  if (!doc) {
+    // A legacy FLAT connection doc (token fields at the top level, saved
+    // before per-user storage) belongs to the owner only — falling back
+    // to the whole object for any other user would hand them the
+    // owner's Instagram token.
+    const looksFlat = !!(obj.token || obj.tokenEnc || obj.igUserId);
+    if (looksFlat) {
+      const owner = await ownerId();
+      if (userId && owner && userId === owner) doc = obj;
+    }
+  }
   if (!doc || typeof doc !== 'object') return {};
   if (doc.token && !doc.tokenEnc) return { token: doc.token, igUserId: doc.igUserId || '', username: doc.username || '', pageId: doc.pageId || '', profile: doc.profile || null, connectedAt: doc.connectedAt || '', importedAt: doc.importedAt || '', encrypted: false, ...instagramHealthFields(doc) };
   return { token: decryptToken(doc), igUserId: doc.igUserId || '', username: doc.username || '', pageId: doc.pageId || '', profile: doc.profile || null, connectedAt: doc.connectedAt || '', importedAt: doc.importedAt || '', encrypted: !!doc.encrypted, ...instagramHealthFields(doc) };

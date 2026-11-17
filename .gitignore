@@ -12,6 +12,15 @@ frontend/public/favicon-16.png
 frontend/public/favicon-32.png
 data/*.json
 .env
+.env.*
+!.env.example
+# Signing material / private keys — never commit
+*.jks
+*.keystore
+keystore.properties
+*.p12
+*.pem
+*.key
 .DS_Store
 # Local-only transformation working docs (Stages 2-4) — never commit.
 TRANSFORMATION_100_IDEAS.md

@@ -40,13 +40,16 @@ app.use(express.urlencoded({ extended: true, limit: '15mb' }));
 
 // Security headers (no new dependency): nosniff, no framing, no referrer
 // leak, a real CSP that still allows Instagram CDN media + data: uploads,
-// and a locked-down permissions policy. API JSON is never cached.
+// and a locked-down permissions policy. API JSON is never cached. HSTS is
+// sent only on secure requests (production / HTTPS) — over plain HTTP it
+// is meaningless and browsers ignore it anyway.
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'no-referrer');
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
-  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; media-src 'self' https: data: blob:; font-src 'self'; connect-src 'self' https://graph.facebook.com; frame-ancestors 'none'; base-uri 'self'");
+  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; media-src 'self' https: data: blob:; font-src 'self'; connect-src 'self' https://graph.facebook.com; frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self'");
+  if (isSecureRequest(req)) res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
   if (req.path.startsWith('/api')) res.setHeader('Cache-Control', 'no-store');
   next();
 });
@@ -156,14 +159,22 @@ function publicBase(req) {
 // /media/<id> URL is public by design — Instagram must fetch it without
 // logging in — so the id itself is the access control.
 function newMediaFileId() { return 'f' + crypto.randomBytes(16).toString('hex'); }
+// Uploadable media types: raster images and the video formats Instagram
+// takes. Deliberately NOT a bare image/* wildcard — image/svg+xml is an
+// XML document that can carry script, and anything served back from
+// /media/<id> must be inert bytes, never an executable document type.
+const SAFE_MEDIA_TYPES = new Set([
+  'image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/avif',
+  'video/mp4', 'video/quicktime', 'video/webm',
+]);
 // Parse a data: URL into { contentType, buffer }, or null when it is not
-// a decodable image/video data URL.
+// a decodable image/video data URL of an allowed type.
 function parseDataUrl(s) {
   if (typeof s !== 'string') return null;
   const m = /^data:([^;,]+)?(;base64)?,([\s\S]*)$/.exec(s);
   if (!m) return null;
   const contentType = (m[1] || '').toLowerCase();
-  if (!/^(image|video)\//.test(contentType)) return null;
+  if (!SAFE_MEDIA_TYPES.has(contentType)) return null;
   try {
     const buffer = m[2] ? Buffer.from(m[3], 'base64') : Buffer.from(decodeURIComponent(m[3]), 'utf8');
     return buffer.length ? { contentType, buffer } : null;
@@ -407,9 +418,23 @@ function graphApiBase(tokenHost) {
 async function getInstagramCreds(x) {
   const userId = uidOf(x);
   const stored = await getInstagramStored(userId);
-  const token = stored.token || process.env.INSTAGRAM_ACCESS_TOKEN || '';
-  const igUserId = stored.igUserId || process.env.IG_USER_ID || '';
-  return { token, igUserId, username: stored.username || '', tokenHost: stored.tokenHost || '', pageId: stored.pageId || '', source: stored.token ? 'stored' : (process.env.INSTAGRAM_ACCESS_TOKEN ? 'env' : 'none') };
+  // The INSTAGRAM_ACCESS_TOKEN / IG_USER_ID env vars are the OWNER's
+  // last-resort connection (see the header note). They must apply ONLY
+  // to the owner's own account: handing them to every signed-in user
+  // would let any signup publish to the owner's Instagram.
+  let envToken = '';
+  let envIgUserId = '';
+  if (process.env.INSTAGRAM_ACCESS_TOKEN || process.env.IG_USER_ID) {
+    let isOwner = false;
+    try { const owner = await db.ownerId(); isOwner = !!userId && !!owner && userId === owner; } catch { /* no owner resolvable: no env fallback */ }
+    if (isOwner) {
+      envToken = process.env.INSTAGRAM_ACCESS_TOKEN || '';
+      envIgUserId = process.env.IG_USER_ID || '';
+    }
+  }
+  const token = stored.token || envToken;
+  const igUserId = stored.igUserId || envIgUserId;
+  return { token, igUserId, username: stored.username || '', tokenHost: stored.tokenHost || '', pageId: stored.pageId || '', source: stored.token ? 'stored' : (envToken ? 'env' : 'none') };
 }
 function maskToken(t) {
   if (!t) return '';
@@ -1411,6 +1436,9 @@ function validPostInput(b, { requireMedia = true } = {}) {
   if (needsMedia && !b.mediaUrl) return 'Add a media link first — a post needs a video or image URL.';
   if (b.mediaUrl && typeof b.mediaUrl !== 'string') return 'That media link is not valid.';
   if (b.mediaUrl && !/^(https?:\/\/|data:image\/|data:video\/)/i.test(b.mediaUrl)) return 'That media link is not valid — paste a full https:// link to a video or image.';
+  // liveUrl is rendered as a clickable href in the UI — only web links,
+  // never javascript:/data: payloads.
+  if (b.liveUrl && !/^https?:\/\//i.test(b.liveUrl)) return 'That live link is not valid — paste a full https:// link.';
   if (b.status && !STATUSES.includes(b.status)) return 'That post status is not valid.';
   if (b.format && !FORMATS.includes(b.format)) return 'That format is not valid — use REELS, FEED or STORY.';
   if (b.platform && !PLATFORMS.includes(b.platform)) return 'That platform is not valid.';
@@ -1825,6 +1853,14 @@ app.get('/media/:id', ah(async (req, res) => {
   if (!file) return res.status(404).json({ ok: false, error: 'That media file no longer exists.' });
   const buf = file.buffer;
   res.setHeader('Content-Type', file.contentType);
+  // Uploaded bytes are user content served from the app's own origin:
+  // pin them down so they can never be reinterpreted as a document.
+  // The sandbox CSP makes any script-bearing payload (e.g. a legacy
+  // SVG) inert even on a direct top-level visit; nosniff stops type
+  // guessing. Subresource loads (<img>/<video>, Instagram's fetcher)
+  // are unaffected by either header.
+  res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+  res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
   res.setHeader('Accept-Ranges', 'bytes');
   const range = typeof req.headers.range === 'string' ? /^bytes=(\d*)-(\d*)$/.exec(req.headers.range.trim()) : null;
