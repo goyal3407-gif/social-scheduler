@@ -1,18 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
-import { api } from '../api.js'
-
-const APP_DASHBOARD_URL = 'https://developers.facebook.com/apps/1671693167666941'
+import { api, openInstagramConnect } from '../api.js'
 
 // Two-step setup wizard shown after first login:
-// 1. Connect Instagram (guided token flow, verified live).
+// 1. Connect Instagram (Meta login, verified live).
 // 2. Import the connected account's profile + existing posts.
 // Followers and DMs cannot be imported — Meta does not allow it.
 // Either step can be skipped.
 export default function SetupWizard({ settings, onDone, onInstagramChanged }) {
   const [step, setStep] = useState(settings?.instagramConnected ? 2 : 1)
-  const [token, setToken] = useState('')
-  const [igUserId, setIgUserId] = useState('')
-  const [connecting, setConnecting] = useState(false)
+  const [connectBusy, setConnectBusy] = useState(false)
   const [connectMsg, setConnectMsg] = useState('')
   const [err, setErr] = useState('')
   const [importing, setImporting] = useState(false)
@@ -29,21 +25,31 @@ export default function SetupWizard({ settings, onDone, onInstagramChanged }) {
     onDone()
   }
 
-  const connect = async (e) => {
-    e.preventDefault()
+  const startConnect = async () => {
     setErr(''); setConnectMsg('')
-    if (!token.trim()) { setErr('Paste your access token first.'); return }
-    setConnecting(true)
+    setConnectBusy(true)
     try {
-      const res = await api.connectInstagram(token.trim(), igUserId.trim() || undefined)
-      setConnectMsg(res.username ? `Connected as @${res.username}.` : 'Connected — token verified with Instagram.')
-      setToken('')
-      if (onInstagramChanged) await onInstagramChanged()
-      setStep(2)
-    } catch (e2) {
-      setErr(e2.message || 'Could not verify this token.')
-    } finally { setConnecting(false) }
+      await openInstagramConnect()
+      // In the app, the Meta login is now open in the system browser and
+      // this screen stays put; the focus/visibility refresh below flips
+      // Step 1 to "Already connected" when the user returns.
+      setConnectMsg('Meta login opened — approve access there, then come back here. This screen updates itself when you return.')
+    } finally { setConnectBusy(false) }
   }
+
+  // Returning from the Meta login: refresh the connection state when
+  // this screen becomes visible / regains focus, no manual reload.
+  useEffect(() => {
+    if (!onInstagramChanged) return undefined
+    const refresh = () => { onInstagramChanged() }
+    const onVisible = () => { if (document.visibilityState === 'visible') refresh() }
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('focus', refresh)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('focus', refresh)
+    }
+  }, [onInstagramChanged])
 
   const startImport = async () => {
     setErr(''); setJob(null)
@@ -85,39 +91,31 @@ export default function SetupWizard({ settings, onDone, onInstagramChanged }) {
         {['Connect Instagram', 'Import your posts'].map((label, i) => (
           <button key={label} type="button" className={`step ${step === i + 1 ? 'active' : ''}`} onClick={() => setStep(i + 1)}>
             <b><span className="step-num">{i + 1}</span>{label}</b>
-            <span className="muted small">{['Paste your token, verified live', 'Profile + existing media into your library'][i]}</span>
+            <span className="muted small">{['Log in with Meta, approve once', 'Profile + existing media into your library'][i]}</span>
           </button>
         ))}
       </div>
 
       {step === 1 && (
-        <form className="card" onSubmit={connect}>
+        <div className="card">
           <h2>Step 1 — Connect Instagram</h2>
           {settings?.instagramConnected ? (
-            <p className="muted small" style={{ marginTop: 8 }}>Already connected{settings.instagramUsername ? ` as @${settings.instagramUsername}` : ''}. You can paste a new token to reconnect, or continue.</p>
+            <p className="muted small" style={{ marginTop: 8 }}>Already connected{settings.instagramUsername ? ` as @${settings.instagramUsername}` : ''}. You can reconnect with a fresh Meta login, or continue.</p>
           ) : (
-            <ol className="muted small" style={{ marginTop: 10, paddingLeft: 18, lineHeight: 2 }}>
-              <li>Open your Meta app dashboard: <a href={APP_DASHBOARD_URL} target="_blank" rel="noreferrer">developers.facebook.com/apps/1671693167666941</a></li>
-              <li>Go to <b style={{ color: 'var(--ink)' }}>API Setup</b> &gt; <b style={{ color: 'var(--ink)' }}>Generate token</b></li>
-              <li>Copy the token</li>
-              <li>Paste it below and press “Save &amp; test connection”</li>
-            </ol>
+            <p className="muted small" style={{ marginTop: 8 }}>
+              Tap the button and log in with Meta — Meta opens its own login page, you approve access once, and from then on the connection renews itself automatically. Your Instagram must be a Business or Creator account linked to a Facebook Page.
+            </p>
           )}
-          <p className="muted small" style={{ marginTop: 10 }}>
-            This works for your own Instagram only — the app is in development mode, so no App Review is needed for your own account.
-          </p>
-          <label htmlFor="wizToken" style={{ marginTop: 14 }}>Access token</label>
-          <input id="wizToken" type="password" autoComplete="off" placeholder="Paste your Instagram access token" value={token} onChange={(e) => setToken(e.target.value)} />
-          <label htmlFor="wizIgId" style={{ marginTop: 14 }}>Instagram User ID <span className="muted">(optional if set on the server)</span></label>
-          <input id="wizIgId" placeholder="e.g. 178414…" value={igUserId} onChange={(e) => setIgUserId(e.target.value)} />
           {err && <div className="alert error">{err}</div>}
           {connectMsg && <div className="alert success">{connectMsg}</div>}
           <div style={{ display: 'flex', gap: 8, marginTop: 16, flexWrap: 'wrap' }}>
-            <button type="submit" className="btn primary" disabled={connecting || !token.trim()}>{connecting ? 'Testing…' : 'Save & test connection'}</button>
+            <button type="button" className="btn primary" disabled={connectBusy} onClick={startConnect}>
+              {connectBusy ? 'Opening Meta login…' : settings?.instagramConnected ? 'Reconnect Instagram' : 'Connect Instagram'}
+            </button>
             {settings?.instagramConnected && <button type="button" className="btn ghost" onClick={() => setStep(2)}>Continue →</button>}
             <button type="button" className="btn ghost" disabled={finishing} onClick={markDone}>Skip setup</button>
           </div>
-        </form>
+        </div>
       )}
 
       {step === 2 && (

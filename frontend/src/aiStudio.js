@@ -185,7 +185,7 @@ export function profileAudit({ settings, posts }) {
   const daysSincePublished = lastPublished ? Math.floor((now - lastPublished) / 86400000) : null
 
   if (!connected) {
-    checks.push({ label: 'Instagram connection', status: 'warn', detail: 'Instagram is not connected, so this audit uses only your saved posts.', fix: 'Connect Instagram in Settings (paste your access token) to audit your real profile too.' })
+    checks.push({ label: 'Instagram connection', status: 'warn', detail: 'Instagram is not connected, so this audit uses only your saved posts.', fix: 'Connect Instagram in Settings to audit your real profile too.' })
   } else {
     checks.push({ label: 'Instagram connection', status: 'ok', detail: `Connected${settings?.instagramUsername ? ` as @${settings.instagramUsername}` : ''}.`, fix: '' })
   }

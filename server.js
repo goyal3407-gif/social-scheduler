@@ -9,8 +9,8 @@
 // HMAC-signed httpOnly session cookie (SESSION_SECRET from env — set it in
 // Vercel or logins die on every redeploy/restart).
 // Instagram connection: "Connect Instagram" Meta login (OAuth) in Settings
-// is the primary flow; pasting a token there is the manual fallback. Either
-// way the token is verified live and stored encrypted at rest in MongoDB.
+// is the ONLY flow (the token-paste flow was removed). The token from the
+// login is verified live and stored encrypted at rest in MongoDB.
 // INSTAGRAM_ACCESS_TOKEN / IG_USER_ID env vars are the last-resort fallback.
 // Never commit a token, a password hash, or any credential.
 const express = require('express');
@@ -234,6 +234,14 @@ app.use('/api', ah(async (req, res, next) => {
   // Make sure the database connection is up (no-op when already connected
   // or when no MONGODB_URI is set — JSON fallback is used then).
   await db.ensureMongo();
+  // The Instagram OAuth connect + callback GETs authenticate themselves:
+  // connect accepts the session cookie OR a signed one-time connect link
+  // (?t=, minted by the logged-in app), and the callback's user is bound
+  // into the HMAC-signed OAuth state. The browser that finishes a Meta
+  // login — e.g. the system browser the Android app hands off to — has
+  // no session cookie, so these two GETs must not require one; without
+  // valid self-authentication they answer with a friendly HTML page.
+  if (req.method === 'GET' && (req.path === '/instagram/connect' || req.path === '/instagram/callback')) return next();
   return requireAuth(req, res, next);
 }));
 
@@ -349,7 +357,7 @@ async function getSettings(req) {
   const s = await db.getSettings(req.userId);
   return { instagramHandle: s.instagramHandle || '', ...s };
 }
-// Instagram credentials: a token pasted in Settings is stored server-side
+// Instagram credentials: the token from the Connect Instagram login is stored server-side
 // (encrypted in MongoDB) and takes priority; env vars are the fallback.
 // The full token is never sent to the frontend — only a masked form.
 // Accepts either a req-like object ({ userId }) or a bare userId string
@@ -378,7 +386,7 @@ async function igConfigured(req) { const c = await getInstagramCreds(req); retur
 // ---------- Instagram token keeper (self-renewing connection) ----------
 // One login, unlimited use: the server watches the stored token's real
 // expiry (Meta's debug_token) and renews it BEFORE it expires, so the
-// user never has to generate/paste a fresh token on a schedule again.
+// user never has to reconnect on a schedule again.
 // Renewal paths, tried in order:
 //   1. Instagram Login tokens — GET graph.instagram.com/refresh_access_token
 //      (grant_type=ig_refresh_token). Needs no app secret.
@@ -701,64 +709,38 @@ app.post('/api/settings', ah(async (req, res) => {
   res.json({ ok: true, instagramHandle: s.instagramHandle || ig.username || '', instagramConnected: !!(ig.token && ig.igUserId), tokenConfigured: !!(ig.token && ig.igUserId), instagramUsername: ig.username || '', maskedToken: maskToken(ig.token), tokenSource: ig.source, igUserIdSet: !!ig.igUserId, tokenEncrypted: stored.token ? !!stored.encrypted : null, instagramProfile: stored.profile || null, connectedAt: stored.connectedAt || '', instagramHealth: instagramHealth(stored), setupDone: s.setupDone === true });
 }));
 
-// ---------- Instagram connect (paste token, verified live) ----------
+// ---------- Instagram connect (Meta login only) ----------
+// The manual token-paste flow was removed: connecting happens ONLY
+// through the Meta login flow below (the owner's instruction). This
+// route stays as a 410 so an old client gets a clear answer instead of
+// a 404. Stored connections and the token keeper are unaffected.
 async function graphGet(url) {
   const r = await fetch(url, { signal: AbortSignal.timeout(15000) });
   return r.json().catch(() => null);
 }
-app.post('/api/instagram/connect', ah(async (req, res) => {
-  const token = String(req.body?.token || '').trim();
-  let igUserId = String(req.body?.igUserId || '').trim();
-  if (!token) return res.status(400).json({ ok: false, error: 'Paste your Instagram access token first.' });
-  if (!igUserId) igUserId = process.env.IG_USER_ID || '';
-  if (!igUserId) {
-    // No User ID given: try to resolve it from the token itself. /me with
-    // a valid token returns the account; we only accept it if a second
-    // check proves it is an Instagram Business account (has media_count).
-    try {
-      const me = await graphGet('https://graph.facebook.com/v27.0/me?fields=id,username&access_token=' + encodeURIComponent(token));
-      if (me && me.id && !me.error) {
-        const check = await graphGet('https://graph.facebook.com/v27.0/' + encodeURIComponent(me.id) + '?fields=username,media_count&access_token=' + encodeURIComponent(token));
-        if (check && check.id && check.media_count !== undefined) igUserId = me.id;
-      }
-    } catch { /* fall through to the missing-ID error below */ }
-  }
-  if (!igUserId) return res.status(400).json({ ok: false, error: 'Instagram User ID is missing — paste it below (it is the number in your Meta app, API Setup page), or set IG_USER_ID on the server.' });
-  // Verify the token live against the Graph API before storing anything.
-  let data;
-  try {
-    data = await graphGet('https://graph.facebook.com/v27.0/' + encodeURIComponent(igUserId) + '?fields=username&access_token=' + encodeURIComponent(token));
-  } catch (e) {
-    return res.status(502).json({ ok: false, error: 'Could not reach Instagram to verify the token — check your connection and try again.' });
-  }
-  if (!data || data.error) {
-    return res.status(400).json({ ok: false, error: friendlyGraphError(data, 'Instagram rejected this token. Generate a fresh token in the Meta app dashboard and try again.') });
-  }
-  if (!data.id) return res.status(400).json({ ok: false, error: 'Instagram did not recognise this token for that User ID. Check the User ID and generate a fresh token, then try again.' });
-  await db.saveInstagram(req.userId, { token, igUserId, username: data.username || '', connectedAt: new Date().toISOString(), tokenExpiresAt: '', tokenNeverExpires: false, tokenType: '', tokenHost: '', lastTokenCheckAt: '', lastRefreshAt: '', tokenRefreshError: '', lastDebugError: '', lastRefreshError: '' });
-  // Learn the token's real type + expiry from Meta right away so the
-  // keeper can renew it before it expires (no more manual re-pasting).
-  const health = await ensureInstagramTokenFresh(req.userId, { force: true }).catch(() => null);
-  res.json({ ok: true, username: data.username || '', igUserId, maskedToken: maskToken(token), instagramConnected: true, tokenSource: 'stored', instagramHealth: health });
-}));
+app.post('/api/instagram/connect', (req, res) => {
+  res.status(410).json({ ok: false, error: 'Pasting a token is no longer supported. Use the \u201cConnect Instagram\u201d button \u2014 one Meta login, and the connection renews itself automatically.' });
+});
 app.post('/api/instagram/disconnect', ah(async (req, res) => {
   await db.clearInstagram(req.userId);
   const ig = await getInstagramCreds(req);
   res.json({ ok: true, instagramConnected: !!(ig.token && ig.igUserId), tokenSource: ig.source, maskedToken: maskToken(ig.token), instagramUsername: ig.username || '' });
 }));
 
-// ---------- Instagram connect via Meta login (OAuth, primary flow) ----------
-// GET /api/instagram/connect sends the logged-in user to Meta's Facebook
-// Login for Business dialog; Meta returns them to the callback with a
-// short-lived code; the callback exchanges it (code -> short-lived ->
-// long-lived), finds the Instagram professional account linked to one of
-// the user's Facebook Pages, and stores the long-lived token encrypted —
-// exactly like the paste flow, so the token keeper renews it the same
-// way. One login, unlimited use: the user only repeats this if Meta
-// revokes the connection. The OAuth `state` is HMAC-signed with the
-// session secret, bound to the session user, and expires in 10 minutes.
-// Codes and tokens are never logged (the request logger records paths
-// only, never query strings).
+// ---------- Instagram connect via Meta login (OAuth, the only flow) ----------
+// GET /api/instagram/connect sends the user to Meta's Facebook Login for
+// Business dialog; Meta returns them to the callback with a short-lived
+// code; the callback exchanges it (code -> short-lived -> long-lived),
+// finds the Instagram professional account linked to one of the user's
+// Facebook Pages, and stores the long-lived token encrypted — the token
+// keeper then renews it automatically. One login, unlimited use: the
+// user only repeats this if Meta revokes the connection. The OAuth
+// `state` is HMAC-signed with the session secret, bound to the user it
+// was minted for, and expires in 10 minutes — the callback takes the
+// user id FROM the verified state, because the browser that returns
+// from Meta (the phone's system browser, when the app handed off) has
+// no session cookie. Codes and tokens are never logged (the request
+// logger records paths only, never query strings).
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 function signOAuthState(userId) {
   const exp = Date.now() + OAUTH_STATE_TTL_MS;
@@ -766,41 +748,128 @@ function signOAuthState(userId) {
   const sig = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('hex');
   return Buffer.from(payload, 'utf8').toString('base64url') + '.' + sig;
 }
-function verifyOAuthState(state, userId) {
+// Verifies the state signature + expiry and returns the user id bound
+// into it, or '' when the state is forged, malformed or expired.
+function userIdFromOAuthState(state) {
   try {
-    if (!state || typeof state !== 'string') return false;
+    if (!state || typeof state !== 'string') return '';
     const dot = state.lastIndexOf('.');
-    if (dot < 0) return false;
+    if (dot < 0) return '';
     const payload = Buffer.from(state.slice(0, dot), 'base64url').toString('utf8');
     const sig = state.slice(dot + 1);
     const expected = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('hex');
     const a = Buffer.from(sig, 'utf8'); const b = Buffer.from(expected, 'utf8');
-    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return false;
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return '';
     const parts = payload.split('.');
-    if (parts.length !== 4 || parts[0] !== 'igstate' || parts[1] !== userId) return false;
-    if (!parts[3] || Number(parts[3]) < Date.now()) return false;
-    return true;
-  } catch { return false; }
+    if (parts.length !== 4 || parts[0] !== 'igstate' || !parts[1]) return '';
+    if (!parts[3] || Number(parts[3]) < Date.now()) return '';
+    return parts[1];
+  } catch { return ''; }
 }
-app.get('/api/instagram/connect', (req, res) => {
-  // Login is enforced by the /api auth middleware before this runs.
+function verifyOAuthState(state, userId) {
+  return !!userId && userIdFromOAuthState(state) === userId;
+}
+
+// ---------- One-time connect links (app / system-browser handoff) ----------
+// Inside the Android app the Connect button lives in a WebView, but the
+// Meta dialog is handed to the system browser, which has no session
+// cookie — a session-only /connect could never work from the app (it
+// answered raw "Please log in first" JSON). Instead the app, while
+// logged in, asks POST /api/instagram/connect-link for a signed
+// one-time link: HMAC over SESSION_SECRET, bound to the user,
+// purpose-tagged, good for 10 minutes. Opening the link starts the
+// normal dialog flow. The link carries no Instagram credential.
+const CONNECT_TOKEN_TTL_MS = 10 * 60 * 1000;
+function signConnectToken(userId) {
+  const exp = Date.now() + CONNECT_TOKEN_TTL_MS;
+  const payload = `igconnect.${userId}.${crypto.randomBytes(16).toString('hex')}.${exp}`;
+  const sig = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('hex');
+  return Buffer.from(payload, 'utf8').toString('base64url') + '.' + sig;
+}
+// Returns the user id the link was minted for, or '' when invalid/expired.
+function verifyConnectToken(token) {
+  try {
+    if (!token || typeof token !== 'string') return '';
+    const dot = token.lastIndexOf('.');
+    if (dot < 0) return '';
+    const payload = Buffer.from(token.slice(0, dot), 'base64url').toString('utf8');
+    const sig = token.slice(dot + 1);
+    const expected = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('hex');
+    const a = Buffer.from(sig, 'utf8'); const b = Buffer.from(expected, 'utf8');
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return '';
+    const parts = payload.split('.');
+    if (parts.length !== 4 || parts[0] !== 'igconnect' || !parts[1]) return '';
+    if (!parts[3] || Number(parts[3]) < Date.now()) return '';
+    return parts[1];
+  } catch { return ''; }
+}
+
+// Friendly self-contained result pages for the browser that finishes a
+// Meta login (often the phone's system browser, not the app): no SPA and
+// no login needed — just the outcome and what to do next. Inline styles
+// only (the CSP allows style-src 'unsafe-inline'; there are no scripts).
+function igResultPage(res, status, { ok, title, message }) {
+  const esc = (s) => String(s || '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  return res.status(status).type('html').send(`<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${esc(title)} — KiluaAI</title></head>
+<body style="margin:0;font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;background:#0e1325;color:#f5f1e6;display:flex;min-height:100vh;align-items:center;justify-content:center;padding:24px;box-sizing:border-box">
+<main style="max-width:430px;text-align:center">
+<div style="font-size:52px;line-height:1;color:${ok ? '#7dd87d' : '#e8c268'}">${ok ? '✓' : '!'}</div>
+<h1 style="font-size:24px;margin:16px 0 10px;color:#e8c268">${esc(title)}</h1>
+<p style="font-size:16px;line-height:1.55;margin:0 0 26px">${esc(message)}</p>
+<a href="/" style="display:inline-block;background:#e8c268;color:#0e1325;text-decoration:none;font-weight:700;padding:12px 22px;border-radius:10px">Open KiluaAI</a>
+<p style="font-size:13px;opacity:.65;margin-top:18px">You can close this tab — nothing else is needed here.</p>
+</main></body></html>`);
+}
+const IG_OAUTH_REASONS = {
+  denied: 'Meta login was cancelled or not approved, so nothing was connected. Go back to the KiluaAI app and tap “Connect Instagram” to try again.',
+  state: 'That login link expired or was already used. Go back to the KiluaAI app and tap “Connect Instagram” — then finish the login in one go.',
+  exchange: 'Meta did not complete the login. Go back to the KiluaAI app and tap “Connect Instagram” to try again — if it keeps failing, let the app owner know.',
+  no_instagram: 'No Instagram professional account was found for that login. Instagram must be a Business or Creator account linked to a Facebook Page — link them in the Instagram app under Settings → Accounts Centre, then try again from the KiluaAI app.',
+  config: 'Instagram login is not fully set up on the server yet. Let the app owner know to finish the Meta setup.',
+};
+// Session-authenticated (the /api middleware ran requireAuth): mints
+// the one-time connect link the app opens in the system browser.
+app.post('/api/instagram/connect-link', (req, res) => {
+  const proto = isSecureRequest(req) ? 'https' : 'http';
+  const host = req.get('host') || 'social-scheduler-one-sandy.vercel.app';
+  const url = `${proto}://${host}/api/instagram/connect?t=${encodeURIComponent(signConnectToken(req.userId))}`;
+  res.json({ ok: true, url });
+});
+app.get('/api/instagram/connect', ah(async (req, res) => {
+  // Self-authenticating (see the /api middleware note): the session
+  // cookie (normal browser use) OR a valid one-time connect link.
+  let userId = '';
+  const sessionUser = await getAuthUser(req).catch(() => null);
+  if (sessionUser) userId = sessionUser.id;
+  if (!userId && req.query && req.query.t) userId = verifyConnectToken(String(req.query.t));
+  if (!userId) {
+    return igResultPage(res, 401, {
+      ok: false,
+      title: 'This connect link has expired',
+      message: 'Connect links work for 10 minutes. Go back to the KiluaAI app and tap “Connect Instagram” again — or open KiluaAI in this browser, log in, and connect from Settings here.',
+    });
+  }
   const dialog = 'https://www.facebook.com/' + GRAPH_API_VERSION + '/dialog/oauth'
     + '?client_id=' + encodeURIComponent(META_APP_ID)
     + '&config_id=' + encodeURIComponent(META_LOGIN_CONFIG_ID)
     + '&response_type=code'
     + '&redirect_uri=' + encodeURIComponent(META_OAUTH_REDIRECT_URI)
-    + '&state=' + encodeURIComponent(signOAuthState(req.userId));
-  res.redirect(302, dialog);
-});
+    + '&state=' + encodeURIComponent(signOAuthState(userId));
+  return res.redirect(302, dialog);
+}));
 app.get('/api/instagram/callback', ah(async (req, res) => {
-  const back = (params) => res.redirect(302, '/?' + new URLSearchParams(params).toString());
+  // The browser landing here usually has no session (system-browser
+  // handoff), so every outcome is a friendly result page, not a redirect
+  // into the SPA. The user is identified by the signed OAuth state.
+  const fail = (reason) => igResultPage(res, 200, { ok: false, title: 'Instagram was not connected', message: IG_OAUTH_REASONS[reason] || IG_OAUTH_REASONS.exchange });
   const q = req.query || {};
-  if (q.error) return back({ ig_oauth: 'error', ig_reason: 'denied' });
+  if (q.error) return fail('denied');
   const code = String(q.code || '');
-  if (!code || !verifyOAuthState(String(q.state || ''), req.userId)) {
-    return back({ ig_oauth: 'error', ig_reason: 'state' });
-  }
-  if (!META_APP_SECRET) return back({ ig_oauth: 'error', ig_reason: 'config' });
+  const userId = userIdFromOAuthState(String(q.state || ''));
+  if (!code || !userId) return fail('state');
+  if (!META_APP_SECRET) return fail('config');
   const oauthBase = 'https://graph.facebook.com/' + GRAPH_API_VERSION + '/oauth/access_token';
   // 1) code -> short-lived user token.
   let shortTok = null;
@@ -811,7 +880,7 @@ app.get('/api/instagram/callback', ah(async (req, res) => {
       + '&redirect_uri=' + encodeURIComponent(META_OAUTH_REDIRECT_URI)
       + '&code=' + encodeURIComponent(code));
   } catch { /* handled below as an exchange failure */ }
-  if (!shortTok || !shortTok.access_token) return back({ ig_oauth: 'error', ig_reason: 'exchange' });
+  if (!shortTok || !shortTok.access_token) return fail('exchange');
   // 2) short-lived -> long-lived (~60 days; the keeper renews it from here).
   let longTok = null;
   try {
@@ -821,7 +890,7 @@ app.get('/api/instagram/callback', ah(async (req, res) => {
       + '&client_secret=' + encodeURIComponent(META_APP_SECRET)
       + '&fb_exchange_token=' + encodeURIComponent(shortTok.access_token));
   } catch { /* handled below */ }
-  if (!longTok || !longTok.access_token) return back({ ig_oauth: 'error', ig_reason: 'exchange' });
+  if (!longTok || !longTok.access_token) return fail('exchange');
   const token = longTok.access_token;
   const expiresIn = Number(longTok.expires_in) || 0;
   // 3) Resolve the Instagram professional account: the user's Pages, then
@@ -844,8 +913,8 @@ app.get('/api/instagram/callback', ah(async (req, res) => {
       }
     } catch { /* try the next Page */ }
   }
-  if (!igAccount) return back({ ig_oauth: 'error', ig_reason: 'no_instagram' });
-  await db.saveInstagram(req.userId, {
+  if (!igAccount) return fail('no_instagram');
+  await db.saveInstagram(userId, {
     token, igUserId: igAccount.id, username: igAccount.username || '', pageId,
     connectedAt: new Date().toISOString(),
     tokenExpiresAt: expiresIn > 0 ? new Date(Date.now() + expiresIn * 1000).toISOString() : '',
@@ -854,8 +923,14 @@ app.get('/api/instagram/callback', ah(async (req, res) => {
   });
   // Learn the token's real type + exact expiry from Meta right away so
   // the keeper's records are precise from day one.
-  await ensureInstagramTokenFresh(req.userId, { force: true }).catch(() => null);
-  return back({ ig_oauth: 'success', ig_user: igAccount.username || '' });
+  await ensureInstagramTokenFresh(userId, { force: true }).catch(() => null);
+  return igResultPage(res, 200, {
+    ok: true,
+    title: 'Instagram connected ✓',
+    message: igAccount.username
+      ? `@${igAccount.username} is connected — switch back to the KiluaAI app, it will show Connected. The connection renews itself automatically from here.`
+      : 'Your Instagram is connected — switch back to the KiluaAI app, it will show Connected. The connection renews itself automatically from here.',
+  });
 }));
 
 // ---------- Instagram import (profile + existing media) ----------
@@ -876,7 +951,7 @@ async function runInstagramImport(job) {
     if (!ig.token || !ig.igUserId) throw new Error('Instagram is not connected — connect it first.');
     const base = 'https://graph.facebook.com/v27.0';
     const profile = await graphGet(base + '/' + encodeURIComponent(ig.igUserId) + '?fields=username,profile_picture_url,biography,media_count&access_token=' + encodeURIComponent(ig.token));
-    if (!profile || profile.error) throw new Error(friendlyGraphError(profile, 'Instagram rejected the request. The token may lack permission — generate a fresh token with instagram_business_basic and try again.'));
+    if (!profile || profile.error) throw new Error(friendlyGraphError(profile, 'Instagram rejected the request. The connection may lack permission — reconnect Instagram in Settings and try again.'));
     job.profile = {
       username: profile.username || '',
       profilePictureUrl: profile.profile_picture_url || '',

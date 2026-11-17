@@ -97,10 +97,34 @@ export const api = {
 
   getSettings: () => req('/api/settings'),
   saveSettings: (settings) => req('/api/settings', { method: 'POST', body: JSON.stringify(settings) }),
-  connectInstagram: (token, igUserId) => req('/api/instagram/connect', { method: 'POST', body: JSON.stringify({ token, igUserId }) }),
+  instagramConnectLink: () => req('/api/instagram/connect-link', { method: 'POST', body: JSON.stringify({}) }),
   disconnectInstagram: () => req('/api/instagram/disconnect', { method: 'POST', body: JSON.stringify({}) }),
   startInstagramImport: () => req('/api/instagram/import', { method: 'POST', body: JSON.stringify({}) }),
   getInstagramImport: (jobId) => req(`/api/instagram/import/${encodeURIComponent(jobId)}`)
+}
+
+/**
+ * Start the "Connect Instagram" Meta login. Asks the server (with the
+ * session) for a signed one-time connect link, then opens it: in the
+ * Android app in the system browser (window.open '_system'), which is
+ * where the Meta dialog belongs — the browser has no session cookie,
+ * and the signed link is what authorises it — and in a normal browser
+ * by navigating this tab. If the link request itself fails, falls back
+ * to the plain session-based /api/instagram/connect URL.
+ */
+export async function openInstagramConnect() {
+  let url = '/api/instagram/connect'
+  try {
+    const res = await api.instagramConnectLink()
+    if (res && res.url) url = res.url
+  } catch { /* keep the fallback URL */ }
+  let native = false
+  try {
+    const { Capacitor } = await import('@capacitor/core')
+    native = !!Capacitor.isNativePlatform()
+  } catch { native = false }
+  if (native) window.open(url, '_system')
+  else window.location.href = url
 }
 
 /**
