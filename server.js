@@ -144,6 +144,32 @@ if (fs.existsSync(path.join(DIST, 'index.html'))) {
 function uid(prefix) { return prefix + '-' + Date.now().toString(36) + '-' + crypto.randomBytes(3).toString('hex'); }
 const ah = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
+// The app's own public origin, used to build URLs that outside services
+// (Instagram's media fetcher) download from — same host derivation as
+// the connect links: the request's host, falling back to production.
+function publicBase(req) {
+  const proto = req && isSecureRequest(req) ? 'https' : 'http';
+  const host = (req && req.get('host')) || 'social-scheduler-one-sandy.vercel.app';
+  return `${proto}://${host}`;
+}
+// Unguessable id for a stored media file (128 bits of randomness): the
+// /media/<id> URL is public by design — Instagram must fetch it without
+// logging in — so the id itself is the access control.
+function newMediaFileId() { return 'f' + crypto.randomBytes(16).toString('hex'); }
+// Parse a data: URL into { contentType, buffer }, or null when it is not
+// a decodable image/video data URL.
+function parseDataUrl(s) {
+  if (typeof s !== 'string') return null;
+  const m = /^data:([^;,]+)?(;base64)?,([\s\S]*)$/.exec(s);
+  if (!m) return null;
+  const contentType = (m[1] || '').toLowerCase();
+  if (!/^(image|video)\//.test(contentType)) return null;
+  try {
+    const buffer = m[2] ? Buffer.from(m[3], 'base64') : Buffer.from(decodeURIComponent(m[3]), 'utf8');
+    return buffer.length ? { contentType, buffer } : null;
+  } catch { return null; }
+}
+
 // ---------- auth (email + password, scrypt hashes, signed cookie) ----------
 function hashPassword(password, salt) {
   return crypto.scryptSync(password, salt, 64).toString('hex');
@@ -1557,19 +1583,61 @@ async function markFailed(userId, postId, error) {
   });
   return short;
 }
+// Instagram can only publish media it can download from a public URL.
+// Posts whose media is still a data: URL (library items uploaded before
+// uploads were stored server-side, or posts created straight from a
+// file) are migrated here, once, at publish time: the bytes are stored
+// as a media file, and the post — plus the library item it came from,
+// when there is one — is rewritten to the public /media/<id> URL, so
+// every later publish (and the queue) uses the URL directly. Returns
+// the (possibly updated) post; a data: URL that cannot be decoded is
+// left untouched and the caller reports it.
+async function ensurePublishableMedia(userId, post, base) {
+  const url = post && post.mediaUrl;
+  if (typeof url !== 'string' || !url.startsWith('data:')) return post;
+  const parsed = parseDataUrl(url);
+  if (!parsed) return post;
+  let libraryItem = null;
+  let fileId = '';
+  try {
+    const library = await db.listMedia(userId, { all: true });
+    libraryItem = library.find((m) => m.url === url) || null;
+    if (libraryItem && libraryItem.fileId) fileId = libraryItem.fileId;
+  } catch { /* the migration still works without the library lookup */ }
+  if (!fileId) {
+    fileId = newMediaFileId();
+    await db.saveMediaFile({ id: fileId, userId, contentType: parsed.contentType, buffer: parsed.buffer });
+  }
+  const publicUrl = `${base}/media/${fileId}`;
+  await db.updatePost(userId, post.id, { mediaUrl: publicUrl });
+  post.mediaUrl = publicUrl;
+  if (libraryItem && libraryItem.url !== publicUrl) {
+    try { await db.updateMedia(userId, libraryItem.id, { url: publicUrl, fileId }); } catch { /* nicety — the post itself is already migrated */ }
+  }
+  return post;
+}
 // Publish one post via the Graph API. Reusable by the manual Publish
 // button, by /api/publish-due and by the cron endpoint — the logic lives
 // here once. Returns { ok, liveUrl, mediaId } on success,
 // { ok:false, retry:true, containerId, error } when Instagram is still
 // processing (press Publish again to resume the same container), or
 // { ok:false, error } on a hard failure (post is marked failed).
-async function attemptPublish(userId, post, ig) {
+async function attemptPublish(userId, post, ig, publicBaseUrl) {
   const token = ig.token;
   const igId = ig.igUserId;
   const base = graphApiBase(ig.tokenHost);
   let containerId = post.containerId || null;
   try {
     await db.updatePost(userId, post.id, { publishAttempts: (post.publishAttempts || 0) + 1 });
+    // Uploaded files must reach Instagram as a public URL: migrate a
+    // data: media URL to a stored file + /media/<id> URL first (no-op
+    // for link media, which is already public).
+    await ensurePublishableMedia(userId, post, publicBaseUrl || 'https://social-scheduler-one-sandy.vercel.app');
+    if (typeof post.mediaUrl === 'string' && post.mediaUrl.startsWith('data:')) {
+      const err = 'This post’s media could not be prepared for publishing — upload the file again from the Media Library, then publish.';
+      await markFailed(userId, post.id, err);
+      return { ok: false, error: err };
+    }
     if (containerId) {
       // Resume a container from an earlier attempt instead of duplicating it.
       const s = await graph('/' + containerId + '?fields=status_code&access_token=' + encodeURIComponent(token), 'GET', undefined, base);
@@ -1638,22 +1706,20 @@ app.post('/api/posts/:id/publish', ah(async (req, res) => {
   }
   const post = await db.getPost(req.userId, req.params.id);
   if (!post) return res.status(404).json({ ok: false, error: 'That post no longer exists — it may have been deleted.' });
-  if (typeof post.mediaUrl === 'string' && post.mediaUrl.startsWith('data:')) {
-    return res.status(400).json({ ok: false, error: 'This post’s media was uploaded as a file stored in the app, and Instagram can only publish from a public web link. Add the same video by public link (Media Library → Add by link), then publish that post.' });
-  }
-  const result = await attemptPublish(req.userId, post, ig);
+  const result = await attemptPublish(req.userId, post, ig, publicBase(req));
   if (result.ok) return res.json({ ok: true, liveUrl: result.liveUrl, mediaId: result.mediaId });
   if (result.retry) return res.json({ ok: false, retry: true, containerId: result.containerId, error: result.error });
   return res.status(502).json({ ok: false, error: result.error });
 }));
 // Posts that are due for one user: scheduled posts whose time has passed
-// (and that have a public link), plus failed posts that have been tried
+// (uploaded-file posts are included — attemptPublish migrates their
+// media to a public URL first), plus failed posts that have been tried
 // fewer than twice (one automatic retry for transient Graph errors).
 async function duePostsFor(userId, max) {
   const now = Date.now();
   const posts = await db.listPosts(userId, { all: true });
   const due = posts
-    .filter((p) => p.mediaUrl && !String(p.mediaUrl).startsWith('data:') && p.scheduleTime && new Date(p.scheduleTime).getTime() <= now)
+    .filter((p) => p.mediaUrl && p.scheduleTime && new Date(p.scheduleTime).getTime() <= now)
     .filter((p) => p.status === 'scheduled' || (p.status === 'failed' && (p.publishAttempts || 0) < 2))
     .sort((a, b) => new Date(a.scheduleTime) - new Date(b.scheduleTime));
   return due.slice(0, max);
@@ -1674,7 +1740,7 @@ app.post('/api/publish-due', ah(async (req, res) => {
   const failed = [];
   const retrying = [];
   for (const post of due) {
-    const result = await attemptPublish(req.userId, post, ig);
+    const result = await attemptPublish(req.userId, post, ig, publicBase(req));
     if (result.ok) published.push({ id: post.id, liveUrl: result.liveUrl });
     else if (result.retry) retrying.push({ id: post.id, error: result.error });
     else failed.push({ id: post.id, error: result.error });
@@ -1708,7 +1774,7 @@ const cronPublishDue = ah(async (req, res) => {
     const due = await duePostsFor(user.id, 3);
     let published = 0; let failed = 0;
     for (const post of due) {
-      const result = await attemptPublish(user.id, post, ig);
+      const result = await attemptPublish(user.id, post, ig, publicBase(req));
       if (result.ok) published++;
       else if (!result.retry) failed++;
     }
@@ -1746,6 +1812,45 @@ const cronTokenRefresh = ah(async (req, res) => {
 app.get('/api/cron/token-refresh', cronTokenRefresh);
 app.post('/api/cron/token-refresh', cronTokenRefresh);
 
+// ---------- uploaded media files (public, by unguessable id) ----------
+// Serves the binaries stored by /api/media/upload. Deliberately NOT
+// under /api and NOT authenticated: Instagram's fetcher must download
+// the file without logging in. The 128-bit random id is the only access
+// control; there is no listing endpoint and nothing about the owner is
+// exposed — just the media bytes, their type, and immutable caching
+// (content at an id never changes). Range requests are supported
+// because video fetchers (and browsers previewing a Reel) ask for them.
+app.get('/media/:id', ah(async (req, res) => {
+  const file = await db.getMediaFile(req.params.id);
+  if (!file) return res.status(404).json({ ok: false, error: 'That media file no longer exists.' });
+  const buf = file.buffer;
+  res.setHeader('Content-Type', file.contentType);
+  res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+  res.setHeader('Accept-Ranges', 'bytes');
+  const range = typeof req.headers.range === 'string' ? /^bytes=(\d*)-(\d*)$/.exec(req.headers.range.trim()) : null;
+  if (range && (range[1] || range[2])) {
+    let start; let end;
+    if (range[1] === '') { // suffix range: the last N bytes
+      const suffix = Number(range[2]);
+      if (!Number.isFinite(suffix) || suffix <= 0) { res.setHeader('Content-Range', `bytes */${buf.length}`); return res.status(416).end(); }
+      start = Math.max(buf.length - suffix, 0); end = buf.length - 1;
+    } else {
+      start = Number(range[1]);
+      end = range[2] === '' ? buf.length - 1 : Math.min(Number(range[2]), buf.length - 1);
+    }
+    if (!Number.isFinite(start) || !Number.isFinite(end) || start > end || start >= buf.length) {
+      res.setHeader('Content-Range', `bytes */${buf.length}`);
+      return res.status(416).end();
+    }
+    res.status(206);
+    res.setHeader('Content-Range', `bytes ${start}-${end}/${buf.length}`);
+    res.setHeader('Content-Length', String(end - start + 1));
+    return res.end(buf.subarray(start, end + 1));
+  }
+  res.setHeader('Content-Length', String(buf.length));
+  return res.end(buf);
+}));
+
 // ---------- media library ----------
 app.get('/api/media', ah(async (req, res) => res.json({ ok: true, media: await db.listMedia(req.userId, { limit: req.query.limit, offset: req.query.offset }) })));
 app.post('/api/media', ah(async (req, res) => {
@@ -1768,25 +1873,31 @@ app.post('/api/media', ah(async (req, res) => {
 }));
 // Upload: the frontend sends base64 in JSON (no multipart parser).
 // POST /api/media/upload { name, dataUrl, folder, tags }.
-// Limits: Vercel serverless requests cap at ~4.5 MB, and one MongoDB
-// document caps at 16 MB — so on the live site a file upload must stay
-// small. Anything bigger: add it by public link instead.
+// The binary is stored server-side (db mediafiles) and the library item
+// gets a public /media/<id> URL served by this app — Instagram can only
+// publish media it can download from a public URL, so uploads must not
+// stay as data: URLs. Limits: Vercel serverless requests cap at ~4.5 MB,
+// and one MongoDB document caps at 16 MB — so on the live site a file
+// upload must stay small. Anything bigger: add it by public link instead.
 app.post('/api/media/upload', ah(async (req, res) => {
   const b = req.body || {};
   if (!b.dataUrl || !b.name) return res.status(400).json({ ok: false, error: 'Choose a file to upload first.' });
   if (!/^data:(image|video)\//i.test(b.dataUrl)) return res.status(400).json({ ok: false, error: 'That file does not look like an image or video — choose an MP4, MOV, JPG, PNG or WebP file.' });
-  const decodedBytes = Math.round((b.dataUrl.length * 3) / 4);
+  const parsed = parseDataUrl(b.dataUrl);
+  if (!parsed) return res.status(400).json({ ok: false, error: 'That file does not look like an image or video — choose an MP4, MOV, JPG, PNG or WebP file.' });
   const mongoMode = db.isMongo();
   const maxBytes = mongoMode ? 9 * 1024 * 1024 : 60 * 1024 * 1024;
-  if (decodedBytes > maxBytes) {
+  if (parsed.buffer.length > maxBytes) {
     return res.status(413).json({ ok: false, error: mongoMode
       ? 'That file is too big to store in the database (about 9 MB max). Add it by public link instead (Media Library → Add by link), or use a smaller file.'
       : 'That file is over the 60 MB limit — use a smaller file, or add it by link.' });
   }
+  const fileId = newMediaFileId();
+  await db.saveMediaFile({ id: fileId, userId: req.userId, contentType: parsed.contentType, buffer: parsed.buffer });
   const item = {
-    id: uid('media'), userId: req.userId, url: b.dataUrl, title: b.name,
+    id: uid('media'), userId: req.userId, url: `${publicBase(req)}/media/${fileId}`, fileId, title: b.name,
     kind: /\.(mp4|mov|webm)$/i.test(b.name) ? 'video' : 'image',
-    size: decodedBytes, duration: Number.isFinite(Number(b.duration)) ? Number(b.duration) : 0,
+    size: parsed.buffer.length, duration: Number.isFinite(Number(b.duration)) ? Number(b.duration) : 0,
     width: Number.isFinite(Number(b.width)) ? Number(b.width) : 0,
     height: Number.isFinite(Number(b.height)) ? Number(b.height) : 0,
     folder: b.folder || 'Uploads', tags: Array.isArray(b.tags) ? b.tags : [], favorite: false, usedCount: 0,

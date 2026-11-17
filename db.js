@@ -13,8 +13,9 @@
 // (Atlas free tier has no IPv6), errors sanitised so a URI/credential can
 // never leak into a log or API response.
 //
-// Collections: users, sessions, posts, media, templates, settings,
-// instagram (one doc per user), importjobs. Data is scoped per user
+// Collections: users, sessions, posts, media, mediafiles (uploaded
+// binaries), templates, settings, instagram (one doc per user),
+// importjobs. Data is scoped per user
 // (userId); docs saved before per-user scoping (no userId) belong to the
 // first/owner account. The Instagram token is encrypted at rest
 // (AES-256-GCM, key from TOKEN_ENCRYPTION_KEY or SESSION_SECRET env vars);
@@ -38,7 +39,7 @@ function save(name, data) {
 }
 const JSON_FILES = {
   users: 'users.json', sessions: 'sessions.json', posts: 'posts.json',
-  media: 'media.json', templates: 'templates.json', settings: 'settings.json',
+  media: 'media.json', mediaFiles: 'media-files.json', templates: 'templates.json', settings: 'settings.json',
   instagram: 'instagram.json', importJobs: 'import-jobs.json',
 };
 
@@ -74,6 +75,17 @@ const mediaSchema = new mongoose.Schema({
 }, { strict: false });
 mediaSchema.index({ userId: 1, createdAt: -1 });
 mediaSchema.index({ userId: 1, instagramId: 1 }, { unique: true, sparse: true, partialFilterExpression: { instagramId: { $exists: true } } });
+// Uploaded media binaries, kept apart from the media library metadata:
+// the library doc holds only a public /media/<id> URL, the bytes live
+// here so Instagram's fetcher can download them from the app itself.
+// One doc per file (uploads are capped well under MongoDB's 16 MB
+// document limit by the upload endpoint).
+const mediaFileSchema = new mongoose.Schema({
+  id: { type: String, unique: true, index: true },
+  userId: { type: String, index: true },
+  contentType: String, size: Number, data: Buffer,
+  createdAt: String,
+}, { strict: false });
 const templateSchema = new mongoose.Schema({
   id: { type: String, unique: true, index: true },
   userId: { type: String, index: true }, name: String, text: String,
@@ -111,6 +123,7 @@ const User = mongoose.models.SsUser || mongoose.model('SsUser', userSchema, 'use
 const Session = mongoose.models.SsSession || mongoose.model('SsSession', sessionSchema, 'sessions');
 const Post = mongoose.models.SsPost || mongoose.model('SsPost', postSchema, 'posts');
 const Media = mongoose.models.SsMedia || mongoose.model('SsMedia', mediaSchema, 'media');
+const MediaFile = mongoose.models.SsMediaFile || mongoose.model('SsMediaFile', mediaFileSchema, 'mediafiles');
 const Template = mongoose.models.SsTemplate || mongoose.model('SsTemplate', templateSchema, 'templates');
 const SettingsDoc = mongoose.models.SsSettings || mongoose.model('SsSettings', settingsSchema, 'settings');
 const InstagramDoc = mongoose.models.SsInstagram || mongoose.model('SsInstagram', instagramSchema, 'instagram');
@@ -298,6 +311,7 @@ async function deleteUserData(userId) {
       Session.deleteMany({ userId }),
       Post.deleteMany({ userId }),
       Media.deleteMany({ userId }),
+      MediaFile.deleteMany({ userId }),
       Template.deleteMany({ userId }),
       SettingsDoc.deleteOne({ userId }),
       InstagramDoc.deleteOne({ userId }),
@@ -309,6 +323,7 @@ async function deleteUserData(userId) {
   jsonSave('sessions', jsonList('sessions').filter((x) => x.userId !== userId));
   jsonSave('posts', jsonList('posts').filter((x) => x.userId !== userId));
   jsonSave('media', jsonList('media').filter((x) => x.userId !== userId));
+  jsonSave('mediaFiles', jsonList('mediaFiles').filter((x) => x.userId !== userId));
   jsonSave('templates', jsonList('templates').filter((x) => x.userId !== userId));
   const settings = load(JSON_FILES.settings, {});
   if (settings && typeof settings === 'object') { delete settings[userId]; save(JSON_FILES.settings, settings); }
@@ -462,13 +477,53 @@ async function updateMedia(userId, id, patch) {
 async function deleteMedia(userId, id) {
   await ensureMongo();
   const all = await listMedia(userId, { all: true });
-  if (!all.some((m) => m.id === id)) return false;
+  const item = all.find((m) => m.id === id);
+  if (!item) return false;
   if (isMongo()) {
     const owner = await ownerId();
     await Media.deleteOne({ $and: [{ id }, scopeFilter(userId, owner)] });
-    return true;
+  } else {
+    jsonSave('media', jsonList('media').filter((x) => x.id !== id));
   }
-  jsonSave('media', jsonList('media').filter((x) => x.id !== id)); return true;
+  // Remove the stored binary too, so deleted uploads do not linger
+  // behind their (now-dead) public URL.
+  if (item.fileId) { try { await deleteMediaFile(item.fileId); } catch { /* metadata is gone either way */ } }
+  return true;
+}
+
+// ---------- media files (uploaded binaries behind /media/<id>) ----------
+async function saveMediaFile(file) {
+  await ensureMongo();
+  const doc = {
+    id: file.id, userId: file.userId, contentType: file.contentType || 'application/octet-stream',
+    size: file.buffer ? file.buffer.length : 0, createdAt: new Date().toISOString(),
+  };
+  if (isMongo()) { await MediaFile.create({ ...doc, data: file.buffer }); return doc; }
+  const list = jsonList('mediaFiles');
+  list.push({ ...doc, dataB64: file.buffer ? file.buffer.toString('base64') : '' });
+  jsonSave('mediaFiles', list);
+  return doc;
+}
+async function getMediaFile(id) {
+  await ensureMongo();
+  if (!id || typeof id !== 'string') return null;
+  if (isMongo()) {
+    const d = await MediaFile.findOne({ id }).lean();
+    if (!d) return null;
+    const raw = d.data;
+    const buffer = Buffer.isBuffer(raw) ? raw : (raw && raw.buffer ? Buffer.from(raw.buffer) : Buffer.from(raw || []));
+    return { id: d.id, contentType: d.contentType || 'application/octet-stream', size: d.size || buffer.length, buffer };
+  }
+  const f = jsonList('mediaFiles').find((x) => x.id === id);
+  if (!f) return null;
+  const buffer = Buffer.from(f.dataB64 || '', 'base64');
+  return { id: f.id, contentType: f.contentType || 'application/octet-stream', size: f.size || buffer.length, buffer };
+}
+async function deleteMediaFile(id) {
+  await ensureMongo();
+  if (!id) return;
+  if (isMongo()) { await MediaFile.deleteOne({ id }); return; }
+  jsonSave('mediaFiles', jsonList('mediaFiles').filter((x) => x.id !== id));
 }
 
 // ---------- templates ----------
@@ -585,6 +640,7 @@ module.exports = {
   createSession, revokeSession, isSessionRevoked, listSessions,
   listPosts, getPost, savePost, savePostsBulk, updatePost, deletePost,
   listMedia, saveMedia, saveMediaBulk, updateMedia, deleteMedia,
+  saveMediaFile, getMediaFile, deleteMediaFile,
   listTemplates, saveTemplate,
   getSettings, saveSettings,
   getInstagram, saveInstagram, clearInstagram,
