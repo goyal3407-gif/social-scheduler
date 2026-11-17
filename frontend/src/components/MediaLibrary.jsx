@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { fmtDate } from '../api.js'
-import { Skeleton, Empty, ErrorBox } from './shared.jsx'
+import { Skeleton, Empty, ErrorBox, MediaVisual } from './shared.jsx'
 import { IconHeart, IconTrash, IconSearch } from './icons.jsx'
 import { isNativeApp, savePickedVideo, listPendingUploads, uploadPendingUpload, deletePendingUpload } from '../localMedia.js'
 
@@ -263,7 +263,7 @@ export default function MediaLibrary({ media, loading, error, onRetry, onAddLink
               <article key={m.id} className="media-card">
                 {m.serverCopyRemoved ? (
                   <div className="media-removed"><b>Published ✓</b><span>Server copy removed to save space — the post is live on Instagram. Upload the file again to reuse it.</span></div>
-                ) : m.kind === 'image' ? <img src={m.url} alt={m.title || ''} loading="lazy" decoding="async" /> : <video src={m.url} muted preload="none" />}
+                ) : <MediaVisual url={m.url} kind={m.kind} posterUrl={m.posterUrl} />}
                 <div className="mc-body">
                   <b title={m.title || m.url}>{m.title || 'Untitled'}</b>
                   <span className="muted small">{m.folder || 'Unsorted'} · {fmtDate(m.createdAt)}{m.usedCount ? ` · Used ${m.usedCount}×` : ''}{m.width && m.height ? ` · ${m.width}×${m.height}` : ''}</span>

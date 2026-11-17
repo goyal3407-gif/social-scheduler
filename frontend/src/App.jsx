@@ -26,7 +26,9 @@ const NAV = [
   { id: 'media', label: 'Media', Icon: IconMedia },
   { id: 'bulk', label: 'Bulk', Icon: IconBulk },
   { id: 'tools', label: 'Tools', Icon: IconTools },
-  { id: 'ai', label: 'AI Studio', Icon: IconSpark },
+  // Dock slots are ~41px wide on phones: the full "AI Studio" label
+  // truncated to "AI Stud…", so the dock renders it on two lines.
+  { id: 'ai', label: 'AI Studio', dockLabel: 'AI\nStudio', Icon: IconSpark },
   { id: 'settings', label: 'Settings', Icon: IconSettings }
 ]
 
@@ -549,7 +551,7 @@ export default function App() {
         )}
         {tab === 'studio' && (
           <div className="section">
-            <Studio key={`${studioKey}-${editing?.id || 'new'}`} editing={editing} seed={templateSeed ? { caption: templateSeed.text || templateSeed.caption || '', hashtags: templateSeed.hashtags || '', cta: templateSeed.cta || '', mediaUrl: templateSeed.mediaUrl || '', mediaType: templateSeed.mediaType || 'video', scheduleTime: templateSeed.scheduleTime || '' } : null} media={media} templates={templates} onSave={handleSavePost} onCancel={() => setTab('queue')} saving={saving} posts={posts} />
+            <Studio key={`${studioKey}-${editing?.id || 'new'}`} editing={editing} seed={templateSeed ? { caption: templateSeed.text || templateSeed.caption || '', hashtags: templateSeed.hashtags || '', cta: templateSeed.cta || '', mediaUrl: templateSeed.mediaUrl || '', mediaType: templateSeed.mediaType || 'video', posterUrl: templateSeed.posterUrl || '', scheduleTime: templateSeed.scheduleTime || '' } : null} media={media} templates={templates} onSave={handleSavePost} onCancel={() => setTab('queue')} saving={saving} posts={posts} />
           </div>
         )}
         {tab === 'bulk' && <div className="section"><Bulk onImport={handleBulkImport} posts={posts} onUploadFile={handleUpload} /></div>}
@@ -558,7 +560,7 @@ export default function App() {
             onAddLink={handleAddLink} onUpload={handleUpload}
             onToggleFav={async (m) => { const u = await api.updateMedia(m.id, { favorite: !m.favorite }); setMedia((prev) => prev.map((x) => (x.id === m.id ? { ...x, ...(u || {}), favorite: !m.favorite } : x))) }}
             onDelete={(m) => setConfirmDelete({ type: 'media', item: m })}
-            onUse={(m) => { setEditing(null); setTemplateSeed({ mediaUrl: m.url, mediaType: m.kind === 'image' ? 'image' : 'video', caption: '', scheduleTime: '' }); setStudioKey((k) => k + 1); setTab('studio'); window.scrollTo({ top: 0 }) }} /></div>
+            onUse={(m) => { setEditing(null); setTemplateSeed({ mediaUrl: m.url, mediaType: m.kind === 'image' ? 'image' : 'video', posterUrl: m.posterUrl || '', caption: '', scheduleTime: '' }); setStudioKey((k) => k + 1); setTab('studio'); window.scrollTo({ top: 0 }) }} /></div>
         )}
         {tab === 'tools' && (
           <div className="section"><Tools posts={posts} stats={statsFallback} templates={templates} onCreateTemplate={handleCreateTemplate} onUseTemplate={useInStudio} /></div>
@@ -579,15 +581,15 @@ export default function App() {
       </main>
 
       <nav className="dock" aria-label="Main navigation">
-        {NAV.slice(0, 3).map(({ id, label, Icon }) => (
+        {NAV.slice(0, 3).map(({ id, label, dockLabel, Icon }) => (
           <button key={id} type="button" className={`dock-btn ${tab === id ? 'active' : ''}`} onClick={() => setTab(id)} aria-current={tab === id ? 'page' : undefined}>
-            <Icon size={20} /><span className="dock-label">{label}</span>
+            <Icon size={20} /><span className={`dock-label${dockLabel ? ' dock-label-wrap' : ''}`}>{dockLabel || label}</span>
           </button>
         ))}
         <button type="button" className="dock-create" onClick={() => goStudio(null)} aria-label="Create a post"><IconPlus size={24} /></button>
-        {NAV.slice(3).map(({ id, label, Icon }) => (
+        {NAV.slice(3).map(({ id, label, dockLabel, Icon }) => (
           <button key={id} type="button" className={`dock-btn ${tab === id ? 'active' : ''}`} onClick={() => setTab(id)} aria-current={tab === id ? 'page' : undefined}>
-            <Icon size={20} /><span className="dock-label">{label}</span>
+            <Icon size={20} /><span className={`dock-label${dockLabel ? ' dock-label-wrap' : ''}`}>{dockLabel || label}</span>
           </button>
         ))}
       </nav>

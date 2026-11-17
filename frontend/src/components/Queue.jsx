@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { fmtDateTime } from '../api.js'
-import { PostRow, Skeleton, Empty, StatusBadge, PlatformBadge } from './shared.jsx'
+import { PostRow, Skeleton, Empty, StatusBadge, PlatformBadge, Thumb } from './shared.jsx'
 
 const STATUSES = ['scheduled', 'draft', 'published', 'failed']
 const LABELS = { scheduled: 'Scheduled', draft: 'Drafts', published: 'Published', failed: 'Failed' }
@@ -106,6 +106,7 @@ export default function Queue({ posts, loading, onEdit, onDelete, onPublish, pub
                 {col.length === 0 && <p className="muted small">No {LABELS[status].toLowerCase()}.</p>}
                 {col.map((p) => (
                   <article key={p.id} className="kan-card">
+                    {(p.mediaUrl || p.posterUrl) && <div className="kan-thumb"><Thumb post={p} /></div>}
                     <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginBottom: 7 }}>
                       <StatusBadge status={p.status} />
                       <PlatformBadge platform={p.platform} />

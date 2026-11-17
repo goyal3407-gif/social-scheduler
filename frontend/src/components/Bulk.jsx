@@ -148,6 +148,7 @@ export default function Bulk({ onImport, posts, onUploadFile }) {
         rows.push({
           mediaUrl: item.url, caption: slot.caption, hashtags: fHashtags, cta: fCta, platform: 'Instagram',
           mediaType: /\.(png|jpe?g|gif|webp|avif)$/i.test(f.name) ? 'image' : 'video',
+          posterUrl: item.posterUrl || '',
           format: 'REELS', status: 'scheduled', scheduleTime: slot.when.toISOString(),
         })
       } catch (e) {

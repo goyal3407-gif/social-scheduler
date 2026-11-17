@@ -1501,7 +1501,7 @@ const PLATFORMS = ['Instagram', 'YouTube', 'Facebook', 'TikTok'];
 function validPostInput(b, { requireMedia = true } = {}) {
   // Field values must be plain strings — an object/array value used to be
   // cast to a string by the database layer and corrupt the saved post.
-  const STR_FIELDS = ['mediaUrl', 'mediaType', 'caption', 'hashtags', 'cta', 'platform', 'scheduleTime', 'status', 'format', 'liveUrl'];
+  const STR_FIELDS = ['mediaUrl', 'mediaType', 'caption', 'hashtags', 'cta', 'platform', 'scheduleTime', 'status', 'format', 'liveUrl', 'posterUrl'];
   for (const k of STR_FIELDS) if (b[k] !== undefined && typeof b[k] !== 'string') return 'One of the fields in that post is not valid — please try again.';
   // Drafts are plans: they may be saved without media or a time yet, and
   // the media is added later in Studio. Scheduled posts must have media.
@@ -1536,6 +1536,9 @@ function buildPost(b, userId) {
     status: b.status || 'scheduled',
     format: b.format || 'REELS',
     liveUrl: b.liveUrl || '',
+    // Poster frame for video posts (captured client-side at upload).
+    // Only app-served or web URLs are kept — anything else is dropped.
+    posterUrl: typeof b.posterUrl === 'string' && b.posterUrl.length <= 2000 && /^(\/|https?:\/\/)/i.test(b.posterUrl) ? b.posterUrl : '',
     createdAt: new Date().toISOString(),
   };
 }
@@ -1582,9 +1585,11 @@ app.patch('/api/posts/:id', ah(async (req, res) => {
   const b = req.body || {};
   const err = validPostInput(b, { requireMedia: false });
   if (err) return res.status(400).json({ ok: false, error: err });
-  const allowed = ['mediaUrl', 'mediaType', 'caption', 'hashtags', 'cta', 'platform', 'scheduleTime', 'status', 'format', 'liveUrl'];
+  const allowed = ['mediaUrl', 'mediaType', 'caption', 'hashtags', 'cta', 'platform', 'scheduleTime', 'status', 'format', 'liveUrl', 'posterUrl'];
   const patch = {};
   for (const k of allowed) if (b[k] !== undefined) patch[k] = b[k];
+  // Same poster rule as buildPost: only app-served or web URLs survive.
+  if (patch.posterUrl !== undefined && !/^(\/|https?:\/\/)/i.test(patch.posterUrl || '')) patch.posterUrl = '';
   const updated = await db.updatePost(req.userId, req.params.id, patch);
   if (!updated) return res.status(404).json({ ok: false, error: 'That post no longer exists — it may have been deleted. Refresh the queue.' });
   res.json({ ok: true, post: updated });
@@ -2096,6 +2101,27 @@ app.post('/api/media', ah(async (req, res) => {
 // stay as data: URLs. Limits: Vercel serverless requests cap at ~4.5 MB,
 // and one MongoDB document caps at 16 MB — so on the live site a file
 // upload must stay small. Anything bigger: add it by public link instead.
+// Optional client-captured poster frame for a video upload: a small
+// image data URL sent alongside the file. The binary goes into the
+// SAME mediafiles store as uploads, and the library item points at it
+// via posterUrl so Queue/Media can show a real frame without loading
+// the video itself. Anything invalid is ignored — a poster is
+// decoration, never a reason to fail an upload.
+async function storePosterFile(req, posterDataUrl) {
+  const empty = { posterUrl: '', posterFileId: '' };
+  if (typeof posterDataUrl !== 'string' || !posterDataUrl) return empty;
+  const parsed = parseDataUrl(posterDataUrl);
+  if (!parsed || !/^image\//.test(parsed.contentType) || parsed.buffer.length > 2 * 1024 * 1024) return empty;
+  const posterFileId = newMediaFileId();
+  await db.saveMediaFile({ id: posterFileId, userId: req.userId, contentType: parsed.contentType, buffer: parsed.buffer });
+  return { posterUrl: `${publicBase(req)}/media/${posterFileId}`, posterFileId };
+}
+function validPosterDataUrl(s) {
+  if (typeof s !== 'string' || !s || s.length > 3 * 1024 * 1024) return '';
+  const parsed = parseDataUrl(s);
+  if (!parsed || !/^image\//.test(parsed.contentType) || parsed.buffer.length > 2 * 1024 * 1024) return '';
+  return s;
+}
 app.post('/api/media/upload', ah(async (req, res) => {
   const b = req.body || {};
   if (!b.dataUrl || !b.name) return res.status(400).json({ ok: false, error: 'Choose a file to upload first.' });
@@ -2111,12 +2137,14 @@ app.post('/api/media/upload', ah(async (req, res) => {
   }
   const fileId = newMediaFileId();
   await db.saveMediaFile({ id: fileId, userId: req.userId, contentType: parsed.contentType, buffer: parsed.buffer });
+  const poster = await storePosterFile(req, b.posterDataUrl);
   const item = {
     id: uid('media'), userId: req.userId, url: `${publicBase(req)}/media/${fileId}`, fileId, title: b.name,
     kind: /\.(mp4|mov|webm)$/i.test(b.name) ? 'video' : 'image',
     size: parsed.buffer.length, duration: Number.isFinite(Number(b.duration)) ? Number(b.duration) : 0,
     width: Number.isFinite(Number(b.width)) ? Number(b.width) : 0,
     height: Number.isFinite(Number(b.height)) ? Number(b.height) : 0,
+    posterUrl: poster.posterUrl, posterFileId: poster.posterFileId,
     folder: b.folder || 'Uploads', tags: Array.isArray(b.tags) ? b.tags : [], favorite: false, usedCount: 0,
     createdAt: new Date().toISOString(),
   };
@@ -2163,6 +2191,8 @@ app.post('/api/media/upload/init', ah(async (req, res) => {
     width: Number.isFinite(Number(b.width)) ? Number(b.width) : 0,
     height: Number.isFinite(Number(b.height)) ? Number(b.height) : 0,
     duration: Number.isFinite(Number(b.duration)) ? Number(b.duration) : 0,
+    // Poster frame captured client-side; stored as a file at /complete.
+    posterDataUrl: validPosterDataUrl(b.posterDataUrl),
     chunkCount: Math.ceil(size / UPLOAD_CHUNK_BYTES), received: 0,
     createdAt: new Date(now).toISOString(), expiresAt: new Date(now + UPLOAD_SESSION_TTL_MS).toISOString(),
   };
@@ -2198,11 +2228,13 @@ app.post('/api/media/upload/complete', ah(async (req, res) => {
   }
   const fileId = newMediaFileId();
   await db.saveMediaFile({ id: fileId, userId: req.userId, contentType: session.contentType, buffer });
+  const poster = await storePosterFile(req, session.posterDataUrl);
   const item = {
     id: uid('media'), userId: req.userId, url: `${publicBase(req)}/media/${fileId}`, fileId, title: session.name,
     kind: /\.(mp4|mov|webm)$/i.test(session.name) ? 'video' : 'image',
     size: buffer.length, duration: session.duration || 0,
     width: session.width || 0, height: session.height || 0,
+    posterUrl: poster.posterUrl, posterFileId: poster.posterFileId,
     folder: session.folder || 'Uploads', tags: session.tags || [], favorite: false, usedCount: 0,
     createdAt: new Date().toISOString(),
   };
@@ -2217,9 +2249,10 @@ app.delete('/api/media/upload/:id', ah(async (req, res) => {
   res.json({ ok: true });
 }));
 app.patch('/api/media/:id', ah(async (req, res) => {
-  const allowed = ['title', 'folder', 'tags', 'favorite', 'usedCount'];
+  const allowed = ['title', 'folder', 'tags', 'favorite', 'usedCount', 'posterUrl'];
   const patch = {};
   for (const k of allowed) if (req.body && req.body[k] !== undefined) patch[k] = req.body[k];
+  if (patch.posterUrl !== undefined && (typeof patch.posterUrl !== 'string' || patch.posterUrl.length > 2000 || (patch.posterUrl && !/^(\/|https?:\/\/)/i.test(patch.posterUrl)))) return res.status(400).json({ ok: false, error: 'That media entry is not valid — please try again.' });
   if ((patch.title !== undefined && typeof patch.title !== 'string') || (patch.folder !== undefined && typeof patch.folder !== 'string')) return res.status(400).json({ ok: false, error: 'That media entry is not valid — please try again.' });
   if (patch.tags !== undefined && (!Array.isArray(patch.tags) || patch.tags.some((t) => typeof t !== 'string'))) return res.status(400).json({ ok: false, error: 'Tags must be plain text — please try again.' });
   if (patch.favorite !== undefined && typeof patch.favorite !== 'boolean') return res.status(400).json({ ok: false, error: 'That media entry is not valid — please try again.' });

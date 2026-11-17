@@ -63,7 +63,7 @@ const postSchema = new mongoose.Schema({
   mediaUrl: String, mediaType: String, caption: String, hashtags: String,
   cta: String, platform: String, scheduleTime: String,
   status: { type: String, default: 'scheduled' }, format: String,
-  liveUrl: String, instagramId: String, containerId: String, createdAt: String,
+  liveUrl: String, posterUrl: String, instagramId: String, containerId: String, createdAt: String,
 }, { strict: false });
 postSchema.index({ userId: 1, status: 1, scheduleTime: 1 });
 postSchema.index({ userId: 1, instagramId: 1 }, { unique: true, sparse: true, partialFilterExpression: { instagramId: { $exists: true } } });
@@ -71,6 +71,7 @@ const mediaSchema = new mongoose.Schema({
   id: { type: String, unique: true, index: true },
   userId: { type: String, index: true },
   url: String, title: String, kind: String, size: Number, duration: Number,
+  posterUrl: String, posterFileId: String,
   folder: String, tags: [String], favorite: Boolean, usedCount: Number,
   instagramId: String, permalink: String, createdAt: String,
 }, { strict: false });
@@ -136,6 +137,7 @@ const uploadSessionSchema = new mongoose.Schema({
   userId: { type: String, index: true },
   name: String, contentType: String, size: Number, folder: String,
   tags: [String], width: Number, height: Number, duration: Number,
+  posterDataUrl: String,
   chunkCount: Number, received: { type: Number, default: 0 },
   createdAt: String, expiresAt: String,
 }, { strict: false });
@@ -534,6 +536,7 @@ async function deleteMedia(userId, id) {
   // Remove the stored binary too, so deleted uploads do not linger
   // behind their (now-dead) public URL.
   if (item.fileId) { try { await deleteMediaFile(item.fileId); } catch { /* metadata is gone either way */ } }
+  if (item.posterFileId) { try { await deleteMediaFile(item.posterFileId); } catch { /* metadata is gone either way */ } }
   return true;
 }
 

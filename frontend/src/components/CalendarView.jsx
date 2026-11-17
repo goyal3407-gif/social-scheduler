@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { fmtDateTime } from '../api.js'
-import { PostRow, Skeleton, Empty } from './shared.jsx'
+import { PostRow, Skeleton, Empty, MediaVisual } from './shared.jsx'
 
 const DOW = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
@@ -66,9 +66,7 @@ export default function CalendarView({ posts, loading, onEdit, onDelete, onPubli
                     {dayPosts.length > 0 && (
                       <span className="cal-thumbs" aria-hidden="true">
                         {dayPosts.slice(0, 3).map((p) => (
-                          p.mediaType === 'image'
-                            ? <img key={p.id} src={p.mediaUrl} alt="" loading="lazy" />
-                            : <video key={p.id} src={p.mediaUrl} muted preload="none" />
+                          <MediaVisual key={p.id} url={p.mediaUrl} kind={p.mediaType} posterUrl={p.posterUrl} />
                         ))}
                       </span>
                     )}

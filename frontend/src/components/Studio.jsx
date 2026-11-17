@@ -4,7 +4,7 @@ import { IconWarn, IconCheck } from './icons.jsx'
 
 const PLATFORMS = ['Instagram', 'YouTube', 'Facebook', 'TikTok']
 const FORMATS = ['REELS', 'FEED', 'STORY']
-const EMPTY = { mediaUrl: '', mediaType: 'video', caption: '', hashtags: '', cta: '', platform: 'Instagram', scheduleTime: '', status: 'scheduled', format: 'REELS' }
+const EMPTY = { mediaUrl: '', mediaType: 'video', posterUrl: '', caption: '', hashtags: '', cta: '', platform: 'Instagram', scheduleTime: '', status: 'scheduled', format: 'REELS' }
 
 export default function Studio({ editing, seed, media, templates, onSave, onCancel, saving, posts }) {
   const [form, setForm] = useState(EMPTY)
@@ -114,7 +114,7 @@ export default function Studio({ editing, seed, media, templates, onSave, onCanc
   }
 
   const pickMedia = (m) => {
-    setForm((f) => ({ ...f, mediaUrl: m.url, mediaType: m.kind === 'image' ? 'image' : 'video', title: m.title }))
+    setForm((f) => ({ ...f, mediaUrl: m.url, mediaType: m.kind === 'image' ? 'image' : 'video', posterUrl: m.posterUrl || '', title: m.title }))
   }
 
   return (
@@ -138,7 +138,7 @@ export default function Studio({ editing, seed, media, templates, onSave, onCanc
               <h2>Step 1 — Media</h2>
               <p className="muted small mb">Paste a direct media link, or pick from your library.</p>
               <label htmlFor="mediaUrl">Media URL</label>
-              <input id="mediaUrl" type="url" placeholder="https://…/video.mp4 or image.jpg" value={form.mediaUrl} onChange={(e) => set({ mediaUrl: e.target.value, mediaType: /\.(png|jpe?g|gif|webp|avif)(\?|$)/i.test(e.target.value) ? 'image' : 'video' })} />
+              <input id="mediaUrl" type="url" placeholder="https://…/video.mp4 or image.jpg" value={form.mediaUrl} onChange={(e) => set({ mediaUrl: e.target.value, mediaType: /\.(png|jpe?g|gif|webp|avif)(\?|$)/i.test(e.target.value) ? 'image' : 'video', posterUrl: '' })} />
               <div className="two-col mt">
                 <div>
                   <label htmlFor="mediaType">Media type</label>

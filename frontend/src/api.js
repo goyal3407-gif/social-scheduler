@@ -58,6 +58,67 @@ async function req(path, options = {}) {
   }
 }
 
+/**
+ * Capture a poster frame from a video File, entirely client-side:
+ * an offscreen <video> seeks to ~1s (or 10% of the duration) and the
+ * frame is drawn to a canvas and exported as a JPEG data URL (~480px
+ * wide). Returns null on ANY failure (codec, timeout, tainted canvas)
+ * — a poster is decoration and must never block or fail an upload.
+ */
+export async function captureVideoPoster(file) {
+  try {
+    if (!file || !(/^video\//.test(file.type || '') || /\.(mp4|mov|webm)$/i.test(file.name || ''))) return null
+    const blob = await new Promise((resolve) => {
+      const url = URL.createObjectURL(file)
+      const video = document.createElement('video')
+      let settled = false
+      const done = (b) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        try { video.removeAttribute('src'); video.load() } catch { /* noop */ }
+        URL.revokeObjectURL(url)
+        resolve(b || null)
+      }
+      const timer = setTimeout(() => done(null), 8000)
+      const draw = () => {
+        try {
+          const w = video.videoWidth || 0
+          const h = video.videoHeight || 0
+          if (!w || !h) { done(null); return }
+          const canvas = document.createElement('canvas')
+          canvas.width = 480
+          canvas.height = Math.max(2, Math.round(480 * h / w))
+          const ctx = canvas.getContext('2d')
+          if (!ctx) { done(null); return }
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+          if (canvas.toBlob) canvas.toBlob((b) => done(b), 'image/jpeg', 0.82)
+          else done(null)
+        } catch { done(null) }
+      }
+      video.muted = true
+      video.playsInline = true
+      video.preload = 'auto'
+      video.addEventListener('loadedmetadata', () => {
+        const d = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 0
+        let t = d ? Math.min(1, d * 0.1) : 1
+        if (d && t >= d) t = d / 2
+        try { video.currentTime = t } catch { draw() }
+      })
+      video.addEventListener('seeked', draw)
+      video.addEventListener('error', () => done(null))
+      video.src = url
+    })
+    if (!blob) return null
+    return await new Promise((resolve, reject) => {
+      const r = new FileReader()
+      r.onload = () => resolve(r.result)
+      r.onerror = () => reject(new Error('Could not read poster'))
+      r.readAsDataURL(blob)
+    }).catch(() => null)
+  } catch { return null }
+}
+
 function asArray(data, key) {
   if (Array.isArray(data)) return data
   if (data && Array.isArray(data[key])) return data[key]
@@ -113,6 +174,12 @@ export const api = {
     })
     const name = extra.title || file.name
     const meta = { folder: extra.folder || 'Uploads', tags: extra.tags || [], width: extra.width || 0, height: extra.height || 0, duration: extra.duration || 0 }
+    // Poster frame for videos, captured from the file itself before the
+    // upload starts; the server stores it in the media-file store and
+    // sets posterUrl on the item. Null (capture failed) just means the
+    // item has no poster — display falls back to the video's first frame.
+    const posterDataUrl = await captureVideoPoster(file).catch(() => null)
+    if (posterDataUrl) meta.posterDataUrl = posterDataUrl
     const CHUNK = 3 * 1024 * 1024
     if (file.size <= CHUNK) {
       const dataUrl = await readAsDataUrl(file)
