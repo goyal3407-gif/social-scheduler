@@ -630,29 +630,76 @@ function instagramHealth(stored) {
 }
 
 const tokenCheckInFlight = new Map();
+// Is a full Meta check due for this stored record? A check is due
+// unless the last one ran <24h ago AND the token is comfortably valid
+// (never expires, or >10 days left, or a Meta-side refresh failure
+// already settled it). A past refresh failure settles the keeper into
+// a quiet daily rhythm — but only when the failure was Meta-side: a
+// failure caused by missing server config (the app secret not yet set
+// when the attempt ran) must never settle the keeper, otherwise the
+// connection would report "refresh blocked" forever on the strength of
+// one stale error string.
+function keeperCheckDue(stored, now) {
+  if (!stored || !stored.token) return false;
+  const expMs = stored.tokenExpiresAt ? new Date(stored.tokenExpiresAt).getTime() : 0;
+  const daysLeft = stored.tokenNeverExpires ? Infinity : (expMs ? (expMs - now) / 86400000 : null);
+  const lastCheck = stored.lastTokenCheckAt ? new Date(stored.lastTokenCheckAt).getTime() : 0;
+  const refreshFailureWasConfig = /META_APP_SECRET not set/i.test(stored.lastRefreshError || '');
+  const settled = !!lastCheck && now - lastCheck < 24 * 3600 * 1000
+    && (stored.tokenNeverExpires || (daysLeft !== null && daysLeft > TOKEN_REFRESH_WINDOW_DAYS) || (stored.tokenRefreshError === 'auto-refresh-unavailable' && stored.tokenHost && !refreshFailureWasConfig));
+  return !settled;
+}
+// A due check is URGENT when its outcome changes what happens next:
+// the token is inside the refresh window (a renewal must complete) or
+// its expiry is unknown (it must be learned). A due check on a
+// comfortably healthy token is ROUTINE — pure bookkeeping
+// (lastTokenCheckAt, debug fields) that no response needs to wait for.
+function keeperCheckUrgent(stored, now) {
+  if (!stored || !stored.token || stored.tokenNeverExpires) return false;
+  if (!keeperCheckDue(stored, now)) return false;
+  const expMs = stored.tokenExpiresAt ? new Date(stored.tokenExpiresAt).getTime() : 0;
+  if (!expMs) return true;
+  return (expMs - now) / 86400000 <= TOKEN_REFRESH_WINDOW_DAYS;
+}
 // Check (and if needed renew) one user's stored token. Throttled: a full
 // Meta check runs at most once per 24h per user per instance unless the
 // expiry is inside the refresh window. Returns instagramHealth() or null.
+// With { background: true } (page loads: Settings, db-status), a ROUTINE
+// due check is started in the background — registered in the in-flight
+// map, so a foreground caller can still await the same run — and the
+// STORED health is returned immediately; a routine check used to block
+// these pages for seconds on debug_token calls. An URGENT due check
+// still runs in the foreground, exactly as before, so a renewal or a
+// revocation is always reflected in the response that triggered it.
+// Foreground callers (publish paths, connect callbacks) are unchanged.
 async function ensureInstagramTokenFresh(userId, opts = {}) {
   if (!userId) return null;
-  if (tokenCheckInFlight.has(userId)) return tokenCheckInFlight.get(userId);
-  const run = (async () => {
+  if (tokenCheckInFlight.has(userId)) {
+    if (opts.background) { const s = await getInstagramStored(userId).catch(() => ({})); return instagramHealth(s); }
+    return tokenCheckInFlight.get(userId);
+  }
+  if (opts.background && !opts.force) {
+    const stored = await getInstagramStored(userId).catch(() => ({}));
+    if (!stored.token) return null;
+    if (!keeperCheckDue(stored, Date.now())) return instagramHealth(stored);
+    if (!keeperCheckUrgent(stored, Date.now())) {
+      const run = runKeeperCheck(userId, {});
+      tokenCheckInFlight.set(userId, run);
+      run.catch(() => { /* background check: failures land in the health fields */ })
+        .finally(() => { if (tokenCheckInFlight.get(userId) === run) tokenCheckInFlight.delete(userId); });
+      return instagramHealth(stored);
+    }
+    // Urgent: fall through to the foreground run below.
+  }
+  const run = runKeeperCheck(userId, opts);
+  tokenCheckInFlight.set(userId, run);
+  try { return await run; } finally { if (tokenCheckInFlight.get(userId) === run) tokenCheckInFlight.delete(userId); }
+}
+async function runKeeperCheck(userId, opts = {}) {
     const stored = await getInstagramStored(userId);
     if (!stored.token) return null; // env token or not connected — nothing stored to renew
     const now = Date.now();
-    const expMs = stored.tokenExpiresAt ? new Date(stored.tokenExpiresAt).getTime() : 0;
-    const daysLeft = stored.tokenNeverExpires ? Infinity : (expMs ? (expMs - now) / 86400000 : null);
-    const lastCheck = stored.lastTokenCheckAt ? new Date(stored.lastTokenCheckAt).getTime() : 0;
-    // A past refresh failure settles the keeper into a quiet daily
-    // rhythm — but only when the failure was Meta-side. A failure
-    // caused by missing server config (the app secret not yet set when
-    // the attempt ran) must never settle the keeper: once the config
-    // is fixed, the very next check has to retry, otherwise the
-    // connection reports "refresh blocked" forever on the strength of
-    // one stale error string.
-    const refreshFailureWasConfig = /META_APP_SECRET not set/i.test(stored.lastRefreshError || '');
-    if (!opts.force && lastCheck && now - lastCheck < 24 * 3600 * 1000
-      && (stored.tokenNeverExpires || (daysLeft !== null && daysLeft > TOKEN_REFRESH_WINDOW_DAYS) || (stored.tokenRefreshError === 'auto-refresh-unavailable' && stored.tokenHost && !refreshFailureWasConfig))) {
+    if (!opts.force && !keeperCheckDue(stored, now)) {
       return instagramHealth(stored);
     }
     let current = { ...stored };
@@ -744,9 +791,6 @@ async function ensureInstagramTokenFresh(userId, opts = {}) {
       }
     }
     return instagramHealth(current);
-  })();
-  tokenCheckInFlight.set(userId, run);
-  try { return await run; } finally { tokenCheckInFlight.delete(userId); }
 }
 
 // Plain-words version of an Instagram Graph API error.
@@ -794,7 +838,7 @@ app.get('/api/db-status', ah(async (req, res) => {
       if (st && (st.igUserId || st.connectedAt)) igDiag.docsFound += 1;
       if (st && st.token) { igDiag.tokensReadable += 1; if (!connectedUserId) connectedUserId = u.id; }
     }
-    if (connectedUserId) ownerInstagram = await ensureInstagramTokenFresh(connectedUserId);
+    if (connectedUserId) ownerInstagram = await ensureInstagramTokenFresh(connectedUserId, { background: true });
   } catch (e) { igDiag.keeperError = String((e && e.message) || e).slice(0, 200); }
   res.json({
     ok: true,
@@ -839,9 +883,11 @@ app.get('/api/export', ah(async (req, res) => {
 // ---------- settings ----------
 app.get('/api/settings', ah(async (req, res) => {
   const s = await getSettings(req);
-  // Opening Settings is a keeper checkpoint: verify the token with Meta
-  // (throttled to once a day) and renew it if it is inside the window.
-  const health = await ensureInstagramTokenFresh(req.userId).catch(() => null);
+  // Opening Settings is a keeper checkpoint: if a token check is due it
+  // runs in the BACKGROUND (throttled to once a day) — this response
+  // answers from the stored health and never waits on Meta, so the page
+  // loads fast even on the day a check falls due.
+  const health = await ensureInstagramTokenFresh(req.userId, { background: true }).catch(() => null);
   const ig = await getInstagramCreds(req);
   const stored = await getInstagramStored(req);
   const settingsResponse = {
@@ -858,6 +904,7 @@ app.get('/api/settings', ah(async (req, res) => {
     connectedAt: stored.connectedAt || '',
     instagramHealth: health || instagramHealth(stored),
     setupDone: s.setupDone === true,
+    keepServerCopyAfterPublish: s.keepServerCopyAfterPublish === true,
   };
   res.json(settingsResponse);
 }));
@@ -877,7 +924,7 @@ app.post('/api/settings', ah(async (req, res) => {
   await db.saveSettings(req.userId, s);
   const ig = await getInstagramCreds(req);
   const stored = await getInstagramStored(req);
-  res.json({ ok: true, instagramHandle: s.instagramHandle || ig.username || '', instagramConnected: !!(ig.token && ig.igUserId), tokenConfigured: !!(ig.token && ig.igUserId), instagramUsername: ig.username || '', maskedToken: maskToken(ig.token), tokenSource: ig.source, igUserIdSet: !!ig.igUserId, tokenEncrypted: stored.token ? !!stored.encrypted : null, instagramProfile: stored.profile || null, connectedAt: stored.connectedAt || '', instagramHealth: instagramHealth(stored), setupDone: s.setupDone === true });
+  res.json({ ok: true, instagramHandle: s.instagramHandle || ig.username || '', instagramConnected: !!(ig.token && ig.igUserId), tokenConfigured: !!(ig.token && ig.igUserId), instagramUsername: ig.username || '', maskedToken: maskToken(ig.token), tokenSource: ig.source, igUserIdSet: !!ig.igUserId, tokenEncrypted: stored.token ? !!stored.encrypted : null, instagramProfile: stored.profile || null, connectedAt: stored.connectedAt || '', instagramHealth: instagramHealth(stored), setupDone: s.setupDone === true, keepServerCopyAfterPublish: s.keepServerCopyAfterPublish === true });
 }));
 
 // ---------- Instagram connect (Meta login only) ----------
@@ -1603,13 +1650,66 @@ function publishContainerBody(post, token) {
     ? { media_type: 'VIDEO', video_url: post.mediaUrl, caption, access_token: token }
     : { image_url: post.mediaUrl, caption, access_token: token };
 }
-async function markFailed(userId, postId, error) {
+// In-app notification (publish success/failure). Best-effort by
+// design: a notification write must never break a publish.
+async function notifyUser(userId, type, postId, message) {
+  try {
+    await db.saveNotification({
+      id: uid('ntf'), userId, type, postId: postId || '',
+      message: String(message || '').slice(0, 300), createdAt: new Date().toISOString(),
+    });
+  } catch { /* notifications are a nicety */ }
+}
+const AUTO_RETRY_DELAY_MS = 15 * 60 * 1000;
+// Mark a post failed after a publish attempt. The FIRST failure arms
+// the one automatic retry (~15 minutes later, run by publish-due /
+// cron): retryPending + retryAt are set here, duePostsFor picks the
+// post up when retryAt passes, and retryCount records how many
+// automatic retries have been consumed so a post can never loop. A
+// failure of the automatic retry itself (isAutoRetry) is final.
+async function markFailed(userId, post, error, { isAutoRetry = false } = {}) {
   const short = String(error || 'Publish failed.').slice(0, 200);
-  await db.updatePost(userId, postId, {
+  const retriesUsed = (post.retryCount || 0) + (isAutoRetry ? 1 : 0);
+  const patch = {
     status: 'failed', containerId: null,
     lastPublishError: short, failedAt: new Date().toISOString(),
-  });
+    retryCount: retriesUsed, retryPending: false, retryAt: '',
+  };
+  if (retriesUsed < 1) {
+    patch.retryPending = true;
+    patch.retryAt = new Date(Date.now() + AUTO_RETRY_DELAY_MS).toISOString();
+  }
+  await db.updatePost(userId, post.id, patch);
+  await notifyUser(userId, 'publish-failure', post.id,
+    `Publish failed: ${short}${patch.retryPending ? ' It will be retried automatically in about 15 minutes.' : ''}`);
   return short;
+}
+// Server-copy auto-delete (the owner's storage model: the server is
+// only a bridge — Instagram has the post now, so the uploaded bytes do
+// not need to live here). After a successful publish, delete the stored
+// binary behind the post's /media/<id> URL and mark the library item
+// "serverCopyRemoved" — UNLESS the user opted to keep copies
+// (keepServerCopyAfterPublish setting, default off), the media is a
+// link (not ours), or another unpublished post still references the
+// same file. Best-effort: cleanup never fails a publish.
+async function maybeDeleteServerCopy(userId, post) {
+  const url = post && post.mediaUrl;
+  if (typeof url !== 'string') return;
+  const m = /\/media\/(f[0-9a-f]{32})$/.exec(url.trim());
+  if (!m) return; // link media or an external URL — not stored here
+  const fileId = m[1];
+  const settings = await db.getSettings(userId).catch(() => ({}));
+  if (settings && settings.keepServerCopyAfterPublish === true) return;
+  const posts = await db.listPosts(userId, { all: true }).catch(() => []);
+  const stillNeeded = posts.some((p) => p.id !== post.id && p.mediaUrl === url
+    && ['scheduled', 'draft', 'failed'].includes(p.status));
+  if (stillNeeded) return;
+  await db.deleteMediaFile(fileId);
+  const library = await db.listMedia(userId, { all: true }).catch(() => []);
+  const item = library.find((x) => x.fileId === fileId || x.url === url);
+  if (item && !item.serverCopyRemoved) {
+    await db.updateMedia(userId, item.id, { serverCopyRemoved: true, serverCopyRemovedAt: new Date().toISOString() });
+  }
 }
 // Instagram can only publish media it can download from a public URL.
 // Posts whose media is still a data: URL (library items uploaded before
@@ -1651,6 +1751,7 @@ async function ensurePublishableMedia(userId, post, base) {
 // processing (press Publish again to resume the same container), or
 // { ok:false, error } on a hard failure (post is marked failed).
 async function attemptPublish(userId, post, ig, publicBaseUrl) {
+  const isAutoRetry = !!(post && post._autoRetry); // set by duePostsFor for the one automatic retry
   const token = ig.token;
   const igId = ig.igUserId;
   const base = graphApiBase(ig.tokenHost);
@@ -1663,7 +1764,7 @@ async function attemptPublish(userId, post, ig, publicBaseUrl) {
     await ensurePublishableMedia(userId, post, publicBaseUrl || 'https://social-scheduler-one-sandy.vercel.app');
     if (typeof post.mediaUrl === 'string' && post.mediaUrl.startsWith('data:')) {
       const err = 'This post’s media could not be prepared for publishing — upload the file again from the Media Library, then publish.';
-      await markFailed(userId, post.id, err);
+      await markFailed(userId, post, err, { isAutoRetry });
       return { ok: false, error: err };
     }
     if (containerId) {
@@ -1680,7 +1781,7 @@ async function attemptPublish(userId, post, ig, publicBaseUrl) {
       const created = await graph(`/${igId}/media`, 'POST', publishContainerBody(post, token), base);
       if (!created || created.error) {
         const err = friendlyGraphError(created, 'Instagram could not create this post. Check the media link is a public video/image and try again.');
-        await markFailed(userId, post.id, err);
+        await markFailed(userId, post, err, { isAutoRetry });
         return { ok: false, error: err };
       }
       containerId = created.id;
@@ -1696,7 +1797,7 @@ async function attemptPublish(userId, post, ig, publicBaseUrl) {
       if (status === 'FINISHED') break;
       if (status === 'ERROR' || (s && s.error)) {
         const err = 'Instagram could not process this media — the file may be in a format Instagram does not accept. Try a standard MP4 (H.264) or JPG and publish again.';
-        await markFailed(userId, post.id, err);
+        await markFailed(userId, post, err, { isAutoRetry });
         return { ok: false, error: err };
       }
       await new Promise((r) => setTimeout(r, 5000));
@@ -1707,23 +1808,28 @@ async function attemptPublish(userId, post, ig, publicBaseUrl) {
     const published = await graph(`/${igId}/media_publish`, 'POST', { creation_id: containerId, access_token: token }, base);
     if (!published || published.error) {
       const err = friendlyGraphError(published, 'Instagram could not publish this post.');
-      await markFailed(userId, post.id, err);
+      await markFailed(userId, post, err, { isAutoRetry });
       return { ok: false, error: err };
     }
     const media = await graph('/' + published.id + '?fields=permalink,media_type&access_token=' + encodeURIComponent(token), 'GET', undefined, base);
-    await db.updatePost(userId, post.id, { status: 'published', liveUrl: (media && media.permalink) || '', containerId: null, lastPublishError: '' });
+    await db.updatePost(userId, post.id, { status: 'published', liveUrl: (media && media.permalink) || '', containerId: null, lastPublishError: '', retryPending: false, retryAt: '' });
     // The library item this came from has now been used once.
     try {
       const library = await db.listMedia(userId, { all: true });
       const item = library.find((m) => m.url && post.mediaUrl && m.url === post.mediaUrl);
       if (item) await db.updateMedia(userId, item.id, { usedCount: (item.usedCount || 0) + 1 });
     } catch { /* usedCount is a nicety, never fail a publish over it */ }
+    await notifyUser(userId, 'publish-success', post.id, `Published to Instagram: “${String(post.caption || 'Untitled post').slice(0, 80)}”`);
+    // The server was only a bridge for uploaded media: now that
+    // Instagram has the post, drop the stored copy (unless the user
+    // keeps copies, or another unpublished post still needs the file).
+    try { await maybeDeleteServerCopy(userId, post); } catch { /* cleanup never fails a publish */ }
     return { ok: true, liveUrl: (media && media.permalink) || '', mediaId: published.id };
   } catch (e) {
     // A failed publish attempt — including a network failure reaching
     // Instagram — marks the post failed so it is visible in the Queue as
     // needing attention, instead of silently staying "scheduled".
-    try { await markFailed(userId, post.id, 'Could not reach Instagram — check your connection and try publishing again in a minute.'); } catch { /* post may have been deleted; the error below still stands */ }
+    try { await markFailed(userId, post, 'Could not reach Instagram — check your connection and try publishing again in a minute.', { isAutoRetry }); } catch { /* post may have been deleted; the error below still stands */ }
     return { ok: false, error: 'Could not reach Instagram — check your connection and try publishing again in a minute.' };
   }
 }
@@ -1741,16 +1847,20 @@ app.post('/api/posts/:id/publish', ah(async (req, res) => {
 }));
 // Posts that are due for one user: scheduled posts whose time has passed
 // (uploaded-file posts are included — attemptPublish migrates their
-// media to a public URL first), plus failed posts that have been tried
-// fewer than twice (one automatic retry for transient Graph errors).
+// media to a public URL first), plus failed posts whose ONE automatic
+// retry is due (retryAt passed — markFailed sets it ~15 minutes after
+// the first failure). Due retries are tagged _autoRetry in memory only,
+// so attemptPublish knows a failure there is final.
 async function duePostsFor(userId, max) {
   const now = Date.now();
   const posts = await db.listPosts(userId, { all: true });
   const due = posts
     .filter((p) => p.mediaUrl && p.scheduleTime && new Date(p.scheduleTime).getTime() <= now)
-    .filter((p) => p.status === 'scheduled' || (p.status === 'failed' && (p.publishAttempts || 0) < 2))
+    .filter((p) => p.status === 'scheduled'
+      || (p.status === 'failed' && p.retryPending && p.retryAt
+        && new Date(p.retryAt).getTime() <= now && (p.retryCount || 0) < 1))
     .sort((a, b) => new Date(a.scheduleTime) - new Date(b.scheduleTime));
-  return due.slice(0, max);
+  return due.slice(0, max).map((p) => (p.status === 'failed' ? { ...p, _autoRetry: true } : p));
 }
 // Publish everything that is due for the signed-in user, right now.
 // This is what the Dashboard/Queue "Publish due" button calls, and what a
@@ -1942,6 +2052,99 @@ app.post('/api/media/upload', ah(async (req, res) => {
   await db.saveMedia(item);
   res.json({ ok: true, media: item });
 }));
+// Chunked upload — for files too big for one request. Vercel caps a
+// single request at ~4.5 MB, which used to make even a 14 MB Reel fail
+// outright. The UI splits the file into 3 MB binary chunks (≈4 MB as
+// base64 JSON), sends init → chunk(s) → complete, and the server
+// assembles the chunks into the SAME mediafiles store, so the result
+// is the identical public /media/<id> URL contract as a small upload.
+// Sessions expire after 2 hours; expired/aborted sessions are deleted
+// with all their chunks, so an abandoned upload leaves nothing behind.
+const UPLOAD_CHUNK_BYTES = 3 * 1024 * 1024;
+const UPLOAD_MAX_BYTES = 200 * 1024 * 1024;
+const UPLOAD_SESSION_TTL_MS = 2 * 3600 * 1000;
+function mimeFromFileName(name) {
+  const ext = String(name || '').toLowerCase().split('.').pop();
+  return { mp4: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm', jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif', avif: 'image/avif' }[ext] || '';
+}
+function parseBase64Chunk(dataUrl) {
+  if (typeof dataUrl !== 'string') return null;
+  const i = dataUrl.indexOf('base64,');
+  if (i < 0) return null;
+  try { return Buffer.from(dataUrl.slice(i + 7), 'base64'); } catch { return null; }
+}
+app.post('/api/media/upload/init', ah(async (req, res) => {
+  const b = req.body || {};
+  const name = typeof b.name === 'string' ? b.name.slice(0, 200) : '';
+  const size = Number(b.size);
+  if (!name) return res.status(400).json({ ok: false, error: 'Choose a file to upload first.' });
+  if (!Number.isFinite(size) || size <= 0) return res.status(400).json({ ok: false, error: 'That file looks empty — choose another file.' });
+  if (size > UPLOAD_MAX_BYTES) return res.status(413).json({ ok: false, error: `That file is too big — the limit is ${Math.round(UPLOAD_MAX_BYTES / 1048576)} MB per file. Try a shorter or smaller video.` });
+  const contentType = SAFE_MEDIA_TYPES.has(b.contentType) ? b.contentType : mimeFromFileName(name);
+  if (!SAFE_MEDIA_TYPES.has(contentType)) return res.status(400).json({ ok: false, error: 'That file does not look like an image or video — choose an MP4, MOV, JPG, PNG or WebP file.' });
+  await db.deleteExpiredUploadSessions().catch(() => 0);
+  const now = Date.now();
+  const session = {
+    id: 'up-' + crypto.randomBytes(12).toString('hex'), userId: req.userId,
+    name, contentType, size: Math.round(size),
+    folder: typeof b.folder === 'string' ? b.folder.slice(0, 60) : 'Uploads',
+    tags: Array.isArray(b.tags) ? b.tags.filter((t) => typeof t === 'string').slice(0, 20) : [],
+    width: Number.isFinite(Number(b.width)) ? Number(b.width) : 0,
+    height: Number.isFinite(Number(b.height)) ? Number(b.height) : 0,
+    duration: Number.isFinite(Number(b.duration)) ? Number(b.duration) : 0,
+    chunkCount: Math.ceil(size / UPLOAD_CHUNK_BYTES), received: 0,
+    createdAt: new Date(now).toISOString(), expiresAt: new Date(now + UPLOAD_SESSION_TTL_MS).toISOString(),
+  };
+  await db.createUploadSession(session);
+  res.json({ ok: true, uploadId: session.id, chunkSize: UPLOAD_CHUNK_BYTES, chunkCount: session.chunkCount, maxBytes: UPLOAD_MAX_BYTES });
+}));
+app.post('/api/media/upload/chunk', ah(async (req, res) => {
+  const b = req.body || {};
+  const session = await db.getUploadSession(req.userId, b.uploadId);
+  if (!session) return res.status(404).json({ ok: false, error: 'That upload session is gone — start the upload again.' });
+  if (session.expiresAt && session.expiresAt <= new Date().toISOString()) {
+    await db.deleteUploadSession(session.id).catch(() => {});
+    return res.status(410).json({ ok: false, error: 'That upload took too long and expired — start the upload again.' });
+  }
+  const index = Number(b.index);
+  if (!Number.isInteger(index) || index < 0 || index >= session.chunkCount) return res.status(400).json({ ok: false, error: 'That upload piece is out of range — start the upload again.' });
+  const buffer = parseBase64Chunk(b.dataUrl);
+  if (!buffer || !buffer.length) return res.status(400).json({ ok: false, error: 'A piece of that upload arrived empty — start the upload again.' });
+  if (buffer.length > UPLOAD_CHUNK_BYTES) return res.status(413).json({ ok: false, error: 'A piece of that upload was too big — start the upload again.' });
+  const received = await db.saveUploadChunk(req.userId, session.id, index, buffer);
+  res.json({ ok: true, received, chunkCount: session.chunkCount });
+}));
+app.post('/api/media/upload/complete', ah(async (req, res) => {
+  const b = req.body || {};
+  const session = await db.getUploadSession(req.userId, b.uploadId);
+  if (!session) return res.status(404).json({ ok: false, error: 'That upload session is gone — start the upload again.' });
+  const chunks = await db.getUploadChunks(session.id, session.chunkCount);
+  if (!chunks) return res.status(400).json({ ok: false, error: 'Some pieces of that upload are missing — try uploading the file again.' });
+  const buffer = Buffer.concat(chunks);
+  if (buffer.length !== session.size) {
+    await db.deleteUploadSession(session.id).catch(() => {});
+    return res.status(400).json({ ok: false, error: 'That upload arrived incomplete — try uploading the file again.' });
+  }
+  const fileId = newMediaFileId();
+  await db.saveMediaFile({ id: fileId, userId: req.userId, contentType: session.contentType, buffer });
+  const item = {
+    id: uid('media'), userId: req.userId, url: `${publicBase(req)}/media/${fileId}`, fileId, title: session.name,
+    kind: /\.(mp4|mov|webm)$/i.test(session.name) ? 'video' : 'image',
+    size: buffer.length, duration: session.duration || 0,
+    width: session.width || 0, height: session.height || 0,
+    folder: session.folder || 'Uploads', tags: session.tags || [], favorite: false, usedCount: 0,
+    createdAt: new Date().toISOString(),
+  };
+  await db.saveMedia(item);
+  await db.deleteUploadSession(session.id).catch(() => {});
+  res.json({ ok: true, media: item });
+}));
+app.delete('/api/media/upload/:id', ah(async (req, res) => {
+  const session = await db.getUploadSession(req.userId, req.params.id);
+  if (!session) return res.status(404).json({ ok: false, error: 'That upload session is gone.' });
+  await db.deleteUploadSession(session.id);
+  res.json({ ok: true });
+}));
 app.patch('/api/media/:id', ah(async (req, res) => {
   const allowed = ['title', 'folder', 'tags', 'favorite', 'usedCount'];
   const patch = {};
@@ -1966,6 +2169,19 @@ const SEED_TEMPLATES = [
   { id: 'tpl-2', name: 'Behind the scenes', text: 'A little behind the scenes from today. What do you want to see next?' },
   { id: 'tpl-3', name: 'Question post', text: 'Quick question for you all — drop your answer in the comments!' },
 ];
+// ---------- notifications (publish successes/failures) ----------
+app.get('/api/notifications', ah(async (req, res) => {
+  const [notifications, unread] = await Promise.all([
+    db.listNotifications(req.userId, { limit: req.query.limit }),
+    db.countUnreadNotifications(req.userId),
+  ]);
+  res.json({ ok: true, notifications, unread });
+}));
+app.post('/api/notifications/read', ah(async (req, res) => {
+  await db.markNotificationsRead(req.userId);
+  res.json({ ok: true, unread: 0 });
+}));
+
 app.get('/api/templates', ah(async (req, res) => {
   const t = await getTemplates(req);
   res.json({ ok: true, templates: t.length ? t : SEED_TEMPLATES });

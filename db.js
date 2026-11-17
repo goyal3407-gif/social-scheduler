@@ -41,6 +41,7 @@ const JSON_FILES = {
   users: 'users.json', sessions: 'sessions.json', posts: 'posts.json',
   media: 'media.json', mediaFiles: 'media-files.json', templates: 'templates.json', settings: 'settings.json',
   instagram: 'instagram.json', importJobs: 'import-jobs.json',
+  notifications: 'notifications.json', uploadSessions: 'upload-sessions.json',
 };
 
 // ---------- Mongoose models ----------
@@ -118,6 +119,31 @@ const importJobSchema = new mongoose.Schema({
   profile: { type: mongoose.Schema.Types.Mixed, default: null },
   error: String, message: String, startedAt: String, updatedAt: String,
 }, { strict: false });
+// In-app notifications (publish successes/failures). One doc per event.
+const notificationSchema = new mongoose.Schema({
+  id: { type: String, unique: true, index: true },
+  userId: { type: String, index: true },
+  type: String, postId: String, message: String,
+  read: { type: Boolean, default: false }, createdAt: String,
+}, { strict: false });
+notificationSchema.index({ userId: 1, createdAt: -1 });
+// Chunked-upload sessions: metadata here, chunk bytes in uploadchunks
+// (one doc per chunk, each well under the 16 MB document limit). A
+// session is created by /api/media/upload/init, filled chunk by chunk,
+// and deleted by /complete, /abort, or the expiry sweep.
+const uploadSessionSchema = new mongoose.Schema({
+  id: { type: String, unique: true, index: true },
+  userId: { type: String, index: true },
+  name: String, contentType: String, size: Number, folder: String,
+  tags: [String], width: Number, height: Number, duration: Number,
+  chunkCount: Number, received: { type: Number, default: 0 },
+  createdAt: String, expiresAt: String,
+}, { strict: false });
+const uploadChunkSchema = new mongoose.Schema({
+  sessionId: { type: String, index: true },
+  userId: String, index: Number, data: Buffer,
+}, { strict: false });
+uploadChunkSchema.index({ sessionId: 1, index: 1 }, { unique: true });
 
 const User = mongoose.models.SsUser || mongoose.model('SsUser', userSchema, 'users');
 const Session = mongoose.models.SsSession || mongoose.model('SsSession', sessionSchema, 'sessions');
@@ -128,6 +154,9 @@ const Template = mongoose.models.SsTemplate || mongoose.model('SsTemplate', temp
 const SettingsDoc = mongoose.models.SsSettings || mongoose.model('SsSettings', settingsSchema, 'settings');
 const InstagramDoc = mongoose.models.SsInstagram || mongoose.model('SsInstagram', instagramSchema, 'instagram');
 const ImportJob = mongoose.models.SsImportJob || mongoose.model('SsImportJob', importJobSchema, 'importjobs');
+const Notification = mongoose.models.SsNotification || mongoose.model('SsNotification', notificationSchema, 'notifications');
+const UploadSession = mongoose.models.SsUploadSession || mongoose.model('SsUploadSession', uploadSessionSchema, 'uploadsessions');
+const UploadChunk = mongoose.models.SsUploadChunk || mongoose.model('SsUploadChunk', uploadChunkSchema, 'uploadchunks');
 
 // ---------- connect (cached promise + one retry, PureNest pattern) ----------
 let mongoReady = false;
@@ -255,9 +284,16 @@ const stripAll = (list) => (list || []).map(strip).filter(Boolean);
 
 // Docs saved before per-user scoping have no userId — they belong to the
 // owner (first account). Everyone else only sees their own docs.
+// The owner is always the FIRST user and can never change, so a resolved
+// owner id is cached: listUsers() is a full scan and ownerId() runs on
+// nearly every list/update — this keeps hot read paths cheap.
+let ownerCache = { id: null, at: 0 };
 async function ownerId() {
+  if (ownerCache.id && Date.now() - ownerCache.at < 60000) return ownerCache.id;
   const users = await listUsers();
-  return users.length ? users[0].id : null;
+  const id = users.length ? users[0].id : null;
+  if (id) ownerCache = { id, at: Date.now() };
+  return id;
 }
 function visibleTo(docs, userId, owner) {
   return (docs || []).filter((d) => !d || d.userId === userId || (!d.userId && userId === owner));
@@ -316,6 +352,9 @@ async function deleteUserData(userId) {
       SettingsDoc.deleteOne({ userId }),
       InstagramDoc.deleteOne({ userId }),
       ImportJob.deleteMany({ userId }),
+      Notification.deleteMany({ userId }),
+      UploadSession.deleteMany({ userId }),
+      UploadChunk.deleteMany({ userId }),
     ]);
     return;
   }
@@ -330,6 +369,9 @@ async function deleteUserData(userId) {
   const ig = load(JSON_FILES.instagram, {});
   if (ig && typeof ig === 'object') { delete ig[userId]; save(JSON_FILES.instagram, ig); }
   jsonSave('importJobs', jsonList('importJobs').filter((x) => x.userId !== userId));
+  jsonSave('notifications', jsonList('notifications').filter((x) => x.userId !== userId));
+  for (const s of jsonList('uploadSessions').filter((x) => x.userId === userId)) deleteUploadChunkFiles(s.id);
+  jsonSave('uploadSessions', jsonList('uploadSessions').filter((x) => x.userId !== userId));
 }
 async function countUsers() { return (await listUsers()).length; }
 
@@ -655,6 +697,127 @@ async function saveImportJob(job) {
   return job;
 }
 
+// ---------- notifications (publish successes/failures, in-app) ----------
+async function saveNotification(n) {
+  await ensureMongo();
+  const doc = { read: false, ...n };
+  if (isMongo()) { await Notification.create(doc); return doc; }
+  const list = jsonList('notifications'); list.push(doc); jsonSave('notifications', list); return doc;
+}
+async function listNotifications(userId, { limit = 50 } = {}) {
+  await ensureMongo();
+  const lim = Math.min(Math.max(Number(limit) || 50, 1), 200);
+  if (isMongo()) {
+    const docs = await Notification.find({ userId }).sort({ createdAt: -1 }).limit(lim).lean();
+    return stripAll(docs);
+  }
+  return jsonList('notifications')
+    .filter((n) => n.userId === userId)
+    .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
+    .slice(0, lim);
+}
+async function countUnreadNotifications(userId) {
+  await ensureMongo();
+  if (isMongo()) return Notification.countDocuments({ userId, read: { $ne: true } });
+  return jsonList('notifications').filter((n) => n.userId === userId && !n.read).length;
+}
+async function markNotificationsRead(userId) {
+  await ensureMongo();
+  if (isMongo()) { await Notification.updateMany({ userId, read: { $ne: true } }, { $set: { read: true } }); return; }
+  const list = jsonList('notifications');
+  let changed = false;
+  for (const n of list) if (n.userId === userId && !n.read) { n.read = true; changed = true; }
+  if (changed) jsonSave('notifications', list);
+}
+
+// ---------- chunked upload sessions ----------
+// JSON mode keeps chunk bytes as files (a 200 MB upload must never be
+// rewritten into one JSON document per chunk); Mongo mode keeps one
+// document per chunk. Session ids are server-generated, but the path
+// builder still strips anything that is not a plain id character.
+function uploadChunkDir(sessionId) {
+  const safe = String(sessionId || '').replace(/[^a-zA-Z0-9_-]/g, '');
+  return path.join(DATA, 'upload-chunks', safe);
+}
+function deleteUploadChunkFiles(sessionId) {
+  try { fs.rmSync(uploadChunkDir(sessionId), { recursive: true, force: true }); } catch { /* dev-only store */ }
+}
+async function createUploadSession(doc) {
+  await ensureMongo();
+  if (isMongo()) { await UploadSession.create(doc); return doc; }
+  const list = jsonList('uploadSessions'); list.push(doc); jsonSave('uploadSessions', list); return doc;
+}
+async function getUploadSession(userId, id) {
+  await ensureMongo();
+  if (!id) return null;
+  if (isMongo()) { const s = await UploadSession.findOne({ id }).lean(); return s && s.userId === userId ? strip(s) : null; }
+  return jsonList('uploadSessions').find((s) => s.id === id && s.userId === userId) || null;
+}
+async function saveUploadChunk(userId, sessionId, index, buffer) {
+  await ensureMongo();
+  if (isMongo()) {
+    await UploadChunk.updateOne({ sessionId, index }, { $set: { sessionId, userId, index, data: buffer } }, { upsert: true });
+    const received = await UploadChunk.countDocuments({ sessionId });
+    await UploadSession.updateOne({ id: sessionId }, { $set: { received } });
+    return received;
+  }
+  const dir = uploadChunkDir(sessionId);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, `${index}.bin`), buffer);
+  const received = fs.readdirSync(dir).filter((f) => f.endsWith('.bin')).length;
+  const list = jsonList('uploadSessions');
+  const s = list.find((x) => x.id === sessionId);
+  if (s) { s.received = received; jsonSave('uploadSessions', list); }
+  return received;
+}
+async function getUploadChunks(sessionId, chunkCount) {
+  await ensureMongo();
+  const out = [];
+  if (isMongo()) {
+    const docs = await UploadChunk.find({ sessionId }).sort({ index: 1 }).lean();
+    const byIndex = new Map(docs.map((d) => [d.index, d]));
+    for (let i = 0; i < chunkCount; i++) {
+      const d = byIndex.get(i);
+      if (!d) return null;
+      const raw = d.data;
+      out.push(Buffer.isBuffer(raw) ? raw : (raw && raw.buffer ? Buffer.from(raw.buffer) : Buffer.from(raw || [])));
+    }
+    return out;
+  }
+  const dir = uploadChunkDir(sessionId);
+  for (let i = 0; i < chunkCount; i++) {
+    const p = path.join(dir, `${i}.bin`);
+    if (!fs.existsSync(p)) return null;
+    out.push(fs.readFileSync(p));
+  }
+  return out;
+}
+async function deleteUploadSession(sessionId) {
+  await ensureMongo();
+  if (!sessionId) return;
+  if (isMongo()) {
+    await UploadChunk.deleteMany({ sessionId });
+    await UploadSession.deleteOne({ id: sessionId });
+    return;
+  }
+  deleteUploadChunkFiles(sessionId);
+  jsonSave('uploadSessions', jsonList('uploadSessions').filter((x) => x.id !== sessionId));
+}
+// Sweep sessions whose expiry has passed (abandoned uploads). Called
+// opportunistically on init so no cron is needed.
+async function deleteExpiredUploadSessions() {
+  await ensureMongo();
+  const nowIso = new Date().toISOString();
+  if (isMongo()) {
+    const expired = await UploadSession.find({ expiresAt: { $lte: nowIso } }).lean();
+    for (const s of expired) await deleteUploadSession(s.id);
+    return expired.length;
+  }
+  const expired = jsonList('uploadSessions').filter((s) => s.expiresAt && s.expiresAt <= nowIso);
+  for (const s of expired) await deleteUploadSession(s.id);
+  return expired.length;
+}
+
 module.exports = {
   connect, ensureMongo, isMongo, getStatus, getLastError: () => lastError,
   DB_NAME, load, save,
@@ -668,4 +831,6 @@ module.exports = {
   getSettings, saveSettings,
   getInstagram, saveInstagram, clearInstagram,
   getImportJob, saveImportJob,
+  saveNotification, listNotifications, countUnreadNotifications, markNotificationsRead,
+  createUploadSession, getUploadSession, saveUploadChunk, getUploadChunks, deleteUploadSession, deleteExpiredUploadSessions,
 };
