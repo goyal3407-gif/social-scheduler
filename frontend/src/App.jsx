@@ -463,9 +463,9 @@ export default function App() {
             </div>
           </div>
           <div className="top-actions">
-            <span className="pill" title={settings?.instagramConnected ? 'Instagram connected' : 'Instagram not connected'}>
-              <span className={`dot ${settings?.instagramConnected ? '' : 'off'}`} />
-              {settings?.instagramConnected ? `IG ${settings.instagramHandle || 'connected'}` : 'IG not connected'}
+            <span className="pill" title={!settings ? 'Checking Instagram connection' : settings.instagramConnected ? 'Instagram connected' : 'Instagram not connected'}>
+              <span className={`dot ${!settings ? 'amber' : settings.instagramConnected ? '' : 'off'}`} />
+              {!settings ? 'IG checking…' : settings.instagramConnected ? `IG ${settings.instagramHandle || 'connected'}` : 'IG not connected'}
             </span>
             <button type="button" className="icon-btn bell-btn" onClick={openNotifications} aria-label={unread ? `Notifications — ${unread} unread` : 'Notifications'}>
               <IconBell size={18} />
@@ -506,9 +506,9 @@ export default function App() {
               </button>
             </nav>
             <div className="drawer-foot">
-              <span className="pill" title={settings?.instagramConnected ? 'Instagram connected' : 'Instagram not connected'}>
-                <span className={`dot ${settings?.instagramConnected ? '' : 'off'}`} />
-                {settings?.instagramConnected ? `IG ${settings.instagramHandle || 'connected'}` : 'IG not connected'}
+              <span className="pill" title={!settings ? 'Checking Instagram connection' : settings.instagramConnected ? 'Instagram connected' : 'Instagram not connected'}>
+                <span className={`dot ${!settings ? 'amber' : settings.instagramConnected ? '' : 'off'}`} />
+                {!settings ? 'IG checking…' : settings.instagramConnected ? `IG ${settings.instagramHandle || 'connected'}` : 'IG not connected'}
               </span>
               <p className="muted small" style={{ marginTop: 10 }}>{user.email}</p>
               <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>

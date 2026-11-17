@@ -296,7 +296,7 @@ export default function Studio({ editing, seed, media, templates, onSave, onCanc
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           {onCancel && <button type="button" className="btn ghost small" onClick={onCancel}>Cancel</button>}
           <button type="button" className="btn ghost small" disabled={!canSaveDraft || saving} onClick={() => submit('draft')}>Save draft</button>
-          <button type="button" className="btn primary small" disabled={!canSave || saving} onClick={() => submit('scheduled')}>{saving ? 'Saving…' : 'Schedule post'}</button>
+          <button type="button" className="btn primary small" disabled={!canSave || saving} onClick={() => submit('scheduled')}>{saving ? 'Saving…' : editing ? 'Save changes' : 'Schedule post'}</button>
         </div>
       </div>
     </div>
