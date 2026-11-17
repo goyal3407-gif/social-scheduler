@@ -410,20 +410,26 @@ async function debugInstagramToken(token) {
 
 // Which host accepts this token? Instagram Login tokens answer on
 // graph.instagram.com; Facebook-host tokens answer on graph.facebook.com
-// via the IG user id. A 200 here proves the token is alive even when
-// debug_token refuses to describe it.
+// via the IG user id (the exact call the connect flow verifies with).
+// Returns { host } or { host:'', error, dead } — dead=true when Meta's
+// answer proves the token itself is invalid/expired (code 190).
 async function probeInstagramTokenHost(token, igUserId) {
   try {
     const me = await graphGet('https://graph.instagram.com/me?fields=id,username&access_token=' + encodeURIComponent(token));
-    if (me && me.id && !me.error) return 'instagram';
+    if (me && me.id && !me.error) return { host: 'instagram' };
   } catch { /* fall through */ }
   if (igUserId) {
     try {
       const chk = await graphGet('https://graph.facebook.com/v27.0/' + encodeURIComponent(igUserId) + '?fields=username&access_token=' + encodeURIComponent(token));
-      if (chk && chk.id && !chk.error) return 'facebook';
-    } catch { /* fall through */ }
+      if (chk && chk.id && !chk.error) return { host: 'facebook' };
+      if (chk && chk.error) {
+        const msg = String(chk.error.message || chk.error.type || 'facebook check failed').slice(0, 200);
+        const dead = chk.error.code === 190 || /invalid oauth|expired|invalid token/i.test(msg);
+        return { host: '', error: msg, dead };
+      }
+    } catch (e) { return { host: '', error: String((e && e.message) || e).slice(0, 200), dead: false }; }
   }
-  return '';
+  return { host: '', error: 'no host accepted the token', dead: false };
 }
 
 // Returns { token, expiresIn, via } or { error } with Meta's messages.
@@ -483,7 +489,7 @@ async function ensureInstagramTokenFresh(userId, opts = {}) {
     const daysLeft = stored.tokenNeverExpires ? Infinity : (expMs ? (expMs - now) / 86400000 : null);
     const lastCheck = stored.lastTokenCheckAt ? new Date(stored.lastTokenCheckAt).getTime() : 0;
     if (!opts.force && lastCheck && now - lastCheck < 24 * 3600 * 1000
-      && (stored.tokenNeverExpires || (daysLeft !== null && daysLeft > TOKEN_REFRESH_WINDOW_DAYS) || stored.tokenRefreshError === 'auto-refresh-unavailable')) {
+      && (stored.tokenNeverExpires || (daysLeft !== null && daysLeft > TOKEN_REFRESH_WINDOW_DAYS) || (stored.tokenRefreshError === 'auto-refresh-unavailable' && stored.tokenHost))) {
       return instagramHealth(stored);
     }
     let current = { ...stored };
@@ -503,8 +509,12 @@ async function ensureInstagramTokenFresh(userId, opts = {}) {
       // probe which host accepts it, so we still know it is alive.
       patch.lastDebugError = (dbgRes && dbgRes.error) || 'debug_token failed';
       if (!current.tokenHost) {
-        const host = await probeInstagramTokenHost(current.token, current.igUserId).catch(() => '');
-        if (host) patch.tokenHost = host;
+        const probe = await probeInstagramTokenHost(current.token, current.igUserId).catch((e) => ({ host: '', error: String((e && e.message) || e).slice(0, 200), dead: false }));
+        if (probe.host) patch.tokenHost = probe.host;
+        else {
+          if (probe.error) patch.lastDebugError = (patch.lastDebugError + ' | live check: ' + probe.error).slice(0, 300);
+          if (probe.dead) patch.tokenRefreshError = 'revoked-or-expired';
+        }
       }
     }
     await db.saveInstagram(userId, patch);
