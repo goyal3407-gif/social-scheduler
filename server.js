@@ -406,7 +406,14 @@ async function igConfigured(req) { const c = await getInstagramCreds(req); retur
 // debug_token then reports is_valid=false and health.needsReconnect is set.
 // The token value itself is never logged or returned anywhere here.
 const META_APP_ID = process.env.META_APP_ID || '1671693167666941';
-const META_APP_SECRET = process.env.META_APP_SECRET || '';
+// The Meta app secret has exactly ONE source — this accessor, reading
+// the META_APP_SECRET env var at call time. db-status, both OAuth
+// callbacks and the token keeper all go through it, so they can never
+// disagree about whether the secret is configured. (A module-load
+// snapshot is how the keeper once kept reporting "META_APP_SECRET not
+// set" — and, via the sticky throttle below, never retried — long
+// after the secret had been set in Vercel and db-status said so.)
+function metaAppSecret() { return process.env.META_APP_SECRET || ''; }
 const TOKEN_REFRESH_WINDOW_DAYS = 10;
 // "Connect Instagram" (Facebook Login for Business / Unified Login): the
 // user approves access in Meta's own dialog — no token pasting — and the
@@ -418,19 +425,30 @@ const TOKEN_REFRESH_WINDOW_DAYS = 10;
 const GRAPH_API_VERSION = 'v27.0';
 const META_LOGIN_CONFIG_ID = process.env.META_LOGIN_CONFIG_ID || '2385364258963804';
 const META_OAUTH_REDIRECT_URI = process.env.META_OAUTH_REDIRECT_URI || 'https://social-scheduler-one-sandy.vercel.app/api/instagram/callback';
-// "Instagram API with Instagram Login" (direct Instagram login): the
-// user logs in with Instagram itself — no Facebook account and no
-// Facebook Page needed. These are the INSTAGRAM app's own credentials
-// (Meta dashboard > Instagram API > API setup with Instagram login),
-// NOT the Facebook app's above. Until both are set in env, the direct
-// flow answers with a friendly "not configured yet" page and the
-// Facebook flow above remains the working route. The redirect URI must
-// match the Instagram app's Valid OAuth Redirect URIs EXACTLY.
+// "Instagram API with Unified Login" (the primary "Connect Instagram"
+// flow, /api/instagram/ig-connect): Meta no longer offers "API setup
+// with Instagram login" to newer apps — this app has no Instagram
+// platform app of its own, so the old instagram.com/oauth/authorize
+// dialog answered "Invalid platform app". Unified Login is the
+// documented replacement: the SAME Facebook Login for Business dialog
+// as above (facebook.com/dialog/oauth + the configuration ID), which
+// lets the user continue with Instagram OR Facebook, needs no Facebook
+// Page, and returns a business system-user token whose Instagram
+// accounts are discovered via /me/assigned_instagram_accounts (see the
+// ig-callback). It uses the Meta app's own credentials — there is no
+// separate Instagram app ID/secret. The redirect URI must be the one
+// registered for this configuration in the Meta app dashboard EXACTLY;
+// it is a DIFFERENT callback path from the Facebook flow's above.
+const IG_LOGIN_REDIRECT_URI = process.env.IG_LOGIN_REDIRECT_URI || 'https://social-scheduler-one-sandy.vercel.app/api/instagram/ig-callback';
+function unifiedLoginConfigured() { return !!(META_APP_ID && META_LOGIN_CONFIG_ID && metaAppSecret()); }
+// db-status keeps reporting this under its historical field name; it
+// now describes the Unified Login setup above.
+function instagramLoginConfigured() { return unifiedLoginConfigured(); }
+// Legacy, kept only so the keeper can still debug a stored Instagram
+// Login token (tokenHost 'instagram') from the retired direct-Instagram
+// setup. No connect flow reads these any more.
 const INSTAGRAM_APP_ID = process.env.INSTAGRAM_APP_ID || '';
 const INSTAGRAM_APP_SECRET = process.env.INSTAGRAM_APP_SECRET || '';
-const IG_LOGIN_REDIRECT_URI = process.env.IG_LOGIN_REDIRECT_URI || 'https://social-scheduler-one-sandy.vercel.app/api/instagram/ig-callback';
-const IG_LOGIN_SCOPE = 'instagram_business_basic,instagram_business_content_publish';
-function instagramLoginConfigured() { return !!(INSTAGRAM_APP_ID && INSTAGRAM_APP_SECRET); }
 
 // Returns { data } on success or { error: "Meta's message" } — the error
 // text is Meta's own wording about the token (never the token itself),
@@ -442,26 +460,45 @@ function instagramLoginConfigured() { return !!(INSTAGRAM_APP_ID && INSTAGRAM_AP
 // order. For an Instagram-host token the Facebook attempts remain as a
 // harmless fallback.
 async function debugInstagramToken(token, tokenHost) {
+  // Attempts are [endpoint, inspector, isAppToken]. The app access
+  // token (appId|appSecret) is tried FIRST wherever the app secret is
+  // configured: debug_token requires it for tokens the caller does not
+  // own outright (system-user tokens included) — self-inspection with
+  // the token itself only answers "(#100) You must provide an app
+  // access token..." for those. When every attempt fails, the APP
+  // token attempt's error is the one reported: it is Meta's verdict on
+  // the token, while a self-inspection failure only says the token
+  // could not inspect itself and would mask the real reason.
   const attempts = [];
   if (tokenHost === 'instagram') {
     const igInspectors = [];
-    if (INSTAGRAM_APP_ID && INSTAGRAM_APP_SECRET) igInspectors.push(`${INSTAGRAM_APP_ID}|${INSTAGRAM_APP_SECRET}`);
-    igInspectors.push(token); // self-inspection
-    for (const inspector of igInspectors) attempts.push(['https://graph.instagram.com/debug_token', inspector]);
+    if (INSTAGRAM_APP_ID && INSTAGRAM_APP_SECRET) igInspectors.push([`${INSTAGRAM_APP_ID}|${INSTAGRAM_APP_SECRET}`, true]);
+    igInspectors.push([token, false]); // self-inspection
+    for (const [inspector, isApp] of igInspectors) attempts.push(['https://graph.instagram.com/debug_token', inspector, isApp]);
   }
   const inspectors = [];
-  if (META_APP_SECRET) inspectors.push(`${META_APP_ID}|${META_APP_SECRET}`);
-  inspectors.push(token); // self-inspection
-  for (const inspector of inspectors) attempts.push(['https://graph.facebook.com/v27.0/debug_token', inspector]);
+  const secret = metaAppSecret();
+  if (secret) inspectors.push([`${META_APP_ID}|${secret}`, true]);
+  inspectors.push([token, false]); // self-inspection
+  for (const [inspector, isApp] of inspectors) attempts.push(['https://graph.facebook.com/v27.0/debug_token', inspector, isApp]);
   let lastError = 'debug_token returned nothing';
-  for (const [endpoint, inspector] of attempts) {
+  let appTokenError = '';
+  for (const [endpoint, inspector, isApp] of attempts) {
     try {
       const out = await graphGet(endpoint + '?input_token=' + encodeURIComponent(token) + '&access_token=' + encodeURIComponent(inspector));
       if (out && out.data) return { data: out.data };
-      if (out && out.error) lastError = String(out.error.message || out.error.type || 'debug_token error').slice(0, 200);
-    } catch (e) { lastError = String((e && e.message) || e).slice(0, 200); }
+      if (out && out.error) {
+        const msg = String(out.error.message || out.error.type || 'debug_token error').slice(0, 200);
+        lastError = msg;
+        if (isApp && !appTokenError) appTokenError = msg;
+      }
+    } catch (e) {
+      const msg = String((e && e.message) || e).slice(0, 200);
+      lastError = msg;
+      if (isApp && !appTokenError) appTokenError = msg;
+    }
   }
-  return { error: lastError };
+  return { error: appTokenError || lastError };
 }
 
 // Which host accepts this token? Instagram Login tokens answer on
@@ -505,9 +542,10 @@ async function tryRefreshInstagramToken(token, tokenHost) {
     } catch (e) { errors.push('instagram-refresh: ' + String((e && e.message) || e).slice(0, 150)); }
   }
   if (tokenHost !== 'instagram') {
-    if (META_APP_SECRET) {
+    const secret = metaAppSecret();
+    if (secret) {
       try {
-        const out = await graphGet('https://graph.facebook.com/v27.0/oauth/access_token?grant_type=fb_exchange_token&client_id=' + encodeURIComponent(META_APP_ID) + '&client_secret=' + encodeURIComponent(META_APP_SECRET) + '&fb_exchange_token=' + encodeURIComponent(token));
+        const out = await graphGet('https://graph.facebook.com/v27.0/oauth/access_token?grant_type=fb_exchange_token&client_id=' + encodeURIComponent(META_APP_ID) + '&client_secret=' + encodeURIComponent(secret) + '&fb_exchange_token=' + encodeURIComponent(token));
         if (out && out.access_token) return { token: out.access_token, expiresIn: Number(out.expires_in) || 0, via: 'facebook-exchange' };
         if (out && out.error) errors.push('facebook-exchange: ' + String(out.error.message || out.error.type || 'error').slice(0, 150));
       } catch (e) { errors.push('facebook-exchange: ' + String((e && e.message) || e).slice(0, 150)); }
@@ -554,8 +592,16 @@ async function ensureInstagramTokenFresh(userId, opts = {}) {
     const expMs = stored.tokenExpiresAt ? new Date(stored.tokenExpiresAt).getTime() : 0;
     const daysLeft = stored.tokenNeverExpires ? Infinity : (expMs ? (expMs - now) / 86400000 : null);
     const lastCheck = stored.lastTokenCheckAt ? new Date(stored.lastTokenCheckAt).getTime() : 0;
+    // A past refresh failure settles the keeper into a quiet daily
+    // rhythm — but only when the failure was Meta-side. A failure
+    // caused by missing server config (the app secret not yet set when
+    // the attempt ran) must never settle the keeper: once the config
+    // is fixed, the very next check has to retry, otherwise the
+    // connection reports "refresh blocked" forever on the strength of
+    // one stale error string.
+    const refreshFailureWasConfig = /META_APP_SECRET not set/i.test(stored.lastRefreshError || '');
     if (!opts.force && lastCheck && now - lastCheck < 24 * 3600 * 1000
-      && (stored.tokenNeverExpires || (daysLeft !== null && daysLeft > TOKEN_REFRESH_WINDOW_DAYS) || (stored.tokenRefreshError === 'auto-refresh-unavailable' && stored.tokenHost))) {
+      && (stored.tokenNeverExpires || (daysLeft !== null && daysLeft > TOKEN_REFRESH_WINDOW_DAYS) || (stored.tokenRefreshError === 'auto-refresh-unavailable' && stored.tokenHost && !refreshFailureWasConfig))) {
       return instagramHealth(stored);
     }
     let current = { ...stored };
@@ -596,7 +642,34 @@ async function ensureInstagramTokenFresh(userId, opts = {}) {
     const needsRefresh = !current.tokenNeverExpires
       && ((daysLeft2 !== null && daysLeft2 < TOKEN_REFRESH_WINDOW_DAYS)
         || (daysLeft2 === null && anchorAgeDays > 1));
+    if (!needsRefresh && current.tokenRefreshError === 'auto-refresh-unavailable'
+      && /META_APP_SECRET not set/i.test(current.lastRefreshError || '')) {
+      // Self-heal: the only recorded refresh failure was the missing
+      // app secret, this run proves the token is valid with time to
+      // spare, and the secret lookup above now succeeds — clear the
+      // stale "refresh blocked" state instead of reporting it forever.
+      const patch3 = { tokenRefreshError: '', lastRefreshError: '' };
+      await db.saveInstagram(userId, patch3);
+      current = { ...current, ...patch3 };
+    }
     if (needsRefresh) {
+      // Learn the token's host before renewing when it was never
+      // recorded (legacy records): renewal is attempted only on the
+      // token's own host, so a Facebook-host token never wastes an
+      // ig_refresh_token attempt — that attempt fails with a token
+      // parse error and pollutes the recorded refresh error.
+      if (!current.tokenHost) {
+        const probe = await probeInstagramTokenHost(current.token, current.igUserId).catch((e) => ({ host: '', error: String((e && e.message) || e).slice(0, 200), dead: false }));
+        if (probe.host) {
+          const patchH = { tokenHost: probe.host };
+          await db.saveInstagram(userId, patchH);
+          current = { ...current, ...patchH };
+        } else if (probe.dead) {
+          const patchH = { tokenRefreshError: 'revoked-or-expired' };
+          await db.saveInstagram(userId, patchH);
+          return instagramHealth({ ...current, ...patchH });
+        }
+      }
       const refreshed = await tryRefreshInstagramToken(current.token, current.tokenHost).catch((e) => ({ error: String((e && e.message) || e).slice(0, 200) }));
       if (refreshed && refreshed.token) {
         const patch2 = { token: refreshed.token, lastRefreshAt: new Date().toISOString(), lastTokenCheckAt: new Date().toISOString(), tokenRefreshError: '', lastRefreshError: '', tokenHost: refreshed.via === 'instagram-refresh' ? 'instagram' : (current.tokenHost || '') };
@@ -634,7 +707,7 @@ function friendlyGraphError(data, fallback) {
     return 'Instagram says this connection is invalid or expired. The app renews your token automatically, so this means Meta has revoked it (password change, or access removed in your Meta settings) — reconnect in Settings to fix it.';
   }
   if (code === 100 || /permission|not authorized|does not exist/i.test(msg)) {
-    return 'Instagram rejected the request — the token may lack permission or the Instagram User ID may be wrong. Check the User ID in Settings and reconnect with a token that has instagram_business_basic and instagram_business_content_publish.';
+    return 'Instagram rejected the request — the connection may lack permission or the Instagram User ID may be wrong. Reconnect Instagram in Settings so Meta grants the app its configured profile and publishing permissions.';
   }
   if (msg) return `Instagram said: ${msg} If this keeps happening, check the connection health in Settings.`;
   return fallback;
@@ -680,7 +753,7 @@ app.get('/api/db-status', ah(async (req, res) => {
     uriConfigured: s.uriConfigured,
     sessionSecretFromEnv: s.sessionSecretFromEnv,
     tokenEncryptionAvailable: s.tokenEncryptionAvailable,
-    metaAppSecretConfigured: !!META_APP_SECRET,
+    metaAppSecretConfigured: !!metaAppSecret(),
     instagramLoginConfigured: instagramLoginConfigured(),
     instagram: ownerInstagram,
     instagramDiag: igDiag,
@@ -763,17 +836,6 @@ app.post('/api/settings', ah(async (req, res) => {
 // a 404. Stored connections and the token keeper are unaffected.
 async function graphGet(url) {
   const r = await fetch(url, { signal: AbortSignal.timeout(15000) });
-  return r.json().catch(() => null);
-}
-// Form-encoded POST (the Instagram Login code exchange at
-// api.instagram.com/oauth/access_token takes form fields, not JSON).
-async function graphFormPost(url, params) {
-  const r = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams(params).toString(),
-    signal: AbortSignal.timeout(15000),
-  });
   return r.json().catch(() => null);
 }
 app.post('/api/instagram/connect', (req, res) => {
@@ -887,6 +949,30 @@ const IG_OAUTH_REASONS = {
   no_instagram: 'No Instagram professional account was found for that login. Instagram must be a Business or Creator account linked to a Facebook Page — link them in the Instagram app under Settings → Accounts Centre, then try again from the KiluaAI app.',
   config: 'Instagram login is not fully set up on the server yet. Let the app owner know to finish the Meta setup.',
 };
+// Resolve the Instagram professional account linked to one of the
+// token's Facebook Pages: list the Pages, then read each Page's
+// instagram_business_account. First match wins. Shared by both connect
+// callbacks — the Facebook flow resolves this way primarily; the
+// Unified Login flow uses it as a fallback for accounts that do have
+// a linked Page. Returns { account, pageId, pageList } with account
+// null when no Page has an Instagram account linked.
+async function findInstagramAccountViaPages(token) {
+  let pages = null;
+  try {
+    pages = await graphGet('https://graph.facebook.com/' + GRAPH_API_VERSION + '/me/accounts?fields=id,name&access_token=' + encodeURIComponent(token));
+  } catch { /* handled below */ }
+  const pageList = pages && Array.isArray(pages.data) ? pages.data : [];
+  for (const page of pageList) {
+    if (!page || !page.id) continue;
+    try {
+      const p = await graphGet('https://graph.facebook.com/' + GRAPH_API_VERSION + '/' + encodeURIComponent(page.id) + '?fields=instagram_business_account{id,username}&access_token=' + encodeURIComponent(token));
+      if (p && p.instagram_business_account && p.instagram_business_account.id) {
+        return { account: p.instagram_business_account, pageId: page.id, pageList };
+      }
+    } catch { /* try the next Page */ }
+  }
+  return { account: null, pageId: '', pageList };
+}
 // Session-authenticated (the /api middleware ran requireAuth): mints
 // the one-time connect link the app opens in the system browser.
 app.post('/api/instagram/connect-link', (req, res) => {
@@ -928,14 +1014,14 @@ app.get('/api/instagram/callback', ah(async (req, res) => {
   const code = String(q.code || '');
   const userId = userIdFromOAuthState(String(q.state || ''));
   if (!code || !userId) return fail('state');
-  if (!META_APP_SECRET) return fail('config');
+  if (!metaAppSecret()) return fail('config');
   const oauthBase = 'https://graph.facebook.com/' + GRAPH_API_VERSION + '/oauth/access_token';
   // 1) code -> short-lived user token.
   let shortTok = null;
   try {
     shortTok = await graphGet(oauthBase
       + '?client_id=' + encodeURIComponent(META_APP_ID)
-      + '&client_secret=' + encodeURIComponent(META_APP_SECRET)
+      + '&client_secret=' + encodeURIComponent(metaAppSecret())
       + '&redirect_uri=' + encodeURIComponent(META_OAUTH_REDIRECT_URI)
       + '&code=' + encodeURIComponent(code));
   } catch { /* handled below as an exchange failure */ }
@@ -946,32 +1032,18 @@ app.get('/api/instagram/callback', ah(async (req, res) => {
     longTok = await graphGet(oauthBase
       + '?grant_type=fb_exchange_token'
       + '&client_id=' + encodeURIComponent(META_APP_ID)
-      + '&client_secret=' + encodeURIComponent(META_APP_SECRET)
+      + '&client_secret=' + encodeURIComponent(metaAppSecret())
       + '&fb_exchange_token=' + encodeURIComponent(shortTok.access_token));
   } catch { /* handled below */ }
   if (!longTok || !longTok.access_token) return fail('exchange');
   const token = longTok.access_token;
   const expiresIn = Number(longTok.expires_in) || 0;
-  // 3) Resolve the Instagram professional account: the user's Pages, then
-  // each Page's linked instagram_business_account. First match wins.
-  let pages = null;
-  try {
-    pages = await graphGet('https://graph.facebook.com/' + GRAPH_API_VERSION + '/me/accounts?fields=id,name&access_token=' + encodeURIComponent(token));
-  } catch { /* handled below */ }
-  const pageList = pages && Array.isArray(pages.data) ? pages.data : [];
-  let igAccount = null;
-  let pageId = '';
-  for (const page of pageList) {
-    if (!page || !page.id) continue;
-    try {
-      const p = await graphGet('https://graph.facebook.com/' + GRAPH_API_VERSION + '/' + encodeURIComponent(page.id) + '?fields=instagram_business_account{id,username}&access_token=' + encodeURIComponent(token));
-      if (p && p.instagram_business_account && p.instagram_business_account.id) {
-        igAccount = p.instagram_business_account;
-        pageId = page.id;
-        break;
-      }
-    } catch { /* try the next Page */ }
-  }
+  // 3) Resolve the Instagram professional account via the user's
+  // Pages (shared helper — see findInstagramAccountViaPages).
+  const viaPages = await findInstagramAccountViaPages(token);
+  const pageList = viaPages.pageList;
+  const igAccount = viaPages.account;
+  const pageId = viaPages.pageId;
   if (!igAccount) {
     // Diagnostic detail for the owner: which Pages (if any) this
     // Facebook login actually returned, so a wrong-account login, an
@@ -1010,28 +1082,44 @@ app.get('/api/instagram/callback', ah(async (req, res) => {
   });
 }));
 
-// ---------- Instagram connect via Instagram Login (direct) ----------
-// Meta's "Instagram API with Instagram Login": GET
-// /api/instagram/ig-connect sends the user to Instagram's own login
-// (www.instagram.com/oauth/authorize) — they log in with Instagram
-// itself, no Facebook account and no Facebook Page involved. The
-// callback exchanges the code at api.instagram.com (code -> short-lived
-// token + user id), upgrades it to a long-lived token on
-// graph.instagram.com (ig_exchange_token), reads the username, and
-// stores the connection with tokenHost 'instagram' — from there the
-// token keeper renews it via ig_refresh_token, and every Graph call
-// for the connection uses graph.instagram.com (see graphApiBase).
+// ---------- Instagram connect via Unified Login (primary) ----------
+// Meta's "Instagram API with Unified Login" — the documented setup
+// for newer apps, and the only Instagram setup this app has: GET
+// /api/instagram/ig-connect sends the user to the Facebook Login for
+// Business dialog (facebook.com/dialog/oauth + the app's Unified
+// Login configuration ID — the exact URL the Meta dashboard generates
+// for this app). In the dialog the user can continue with Instagram
+// OR with Facebook; no Facebook Page is required. Meta returns them
+// to /api/instagram/ig-callback with a code; the callback exchanges
+// it at graph.facebook.com/oauth/access_token (Meta app ID + secret)
+// for a business system-user token, then discovers the Instagram
+// professional account(s) the login shared:
+//   1. GET /me/assigned_instagram_accounts — the documented Unified
+//      Login discovery (/me is the system user, not the person);
+//   2. fallback: the Pages machinery (findInstagramAccountViaPages)
+//      for accounts that also have a linked Facebook Page.
+// The connection is stored exactly like the Facebook flow's
+// (tokenHost 'facebook': every Graph call for it — profile, media,
+// publish — goes to graph.facebook.com addressed by the Instagram
+// user ID), and the token keeper watches it from there; system-user
+// tokens debug as expires_at 0 (never expires) or with the lifetime
+// the dashboard configuration grants. Permissions come from the
+// dashboard configuration (instagram_basic, instagram_content_publish
+// family), so the dialog URL carries config_id and NO scope — the
+// retired instagram.com/oauth/authorize dialog ("Invalid platform
+// app" for this app) and the instagram_business_* scope family
+// belonged to the Instagram Login setup this app cannot have.
 // The signed-state / one-time-link machinery is the same as the
-// Facebook flow above: the browser that returns from Instagram usually
-// has no session cookie, so the user id comes from the verified state,
-// and every outcome is a friendly result page. Codes and tokens are
-// never logged.
+// Facebook flow above: the browser that returns from Meta usually
+// has no session cookie, so the user id comes from the verified
+// state, and every outcome is a friendly result page. Codes and
+// tokens are never logged.
 const IG_LOGIN_REASONS = {
-  denied: 'Instagram login was cancelled or not approved, so nothing was connected. Go back to the KiluaAI app and tap “Connect Instagram” to try again.',
+  denied: 'Meta login was cancelled or not approved, so nothing was connected. Go back to the KiluaAI app and tap “Connect Instagram” to try again.',
   state: 'That login link expired or was already used. Go back to the KiluaAI app and tap “Connect Instagram” — then finish the login in one go.',
-  exchange: 'Instagram did not complete the login. Go back to the KiluaAI app and tap “Connect Instagram” to try again — if it keeps failing, let the app owner know.',
-  config: 'Direct Instagram login is not fully set up on the server yet. Let the app owner know to finish the Instagram app setup.',
-  not_configured: 'Direct Instagram login is still being set up on the server — the final step is finishing now. For the moment, use “connect via Facebook” in Settings, or try again shortly.',
+  exchange: 'Meta did not complete the login. Go back to the KiluaAI app and tap “Connect Instagram” to try again — if it keeps failing, let the app owner know.',
+  config: 'Instagram login is not fully set up on the server yet. Let the app owner know to finish the Meta setup.',
+  not_configured: 'Instagram login is still being set up on the server — the final step is finishing now. Try again shortly.',
 };
 // Session-authenticated: mints the one-time link the app opens in the
 // system browser (same pattern as /api/instagram/connect-link).
@@ -1055,17 +1143,21 @@ app.get('/api/instagram/ig-connect', ah(async (req, res) => {
       message: 'Connect links work for 10 minutes. Go back to the KiluaAI app and tap “Connect Instagram” again — or open KiluaAI in this browser, log in, and connect from Settings here.',
     });
   }
-  if (!instagramLoginConfigured()) {
+  if (!unifiedLoginConfigured()) {
     return igResultPage(res, 200, {
       ok: false,
       title: 'Instagram login is nearly ready',
       message: IG_LOGIN_REASONS.not_configured,
     });
   }
-  const dialog = 'https://www.instagram.com/oauth/authorize'
-    + '?client_id=' + encodeURIComponent(INSTAGRAM_APP_ID)
+  // The Unified Login dialog URL, exactly as the Meta dashboard
+  // generates it for this app: facebook.com host, the configuration
+  // ID selects the requested assets + permissions (no scope param),
+  // and the redirect lands on THIS flow's callback.
+  const dialog = 'https://www.facebook.com/dialog/oauth'
+    + '?client_id=' + encodeURIComponent(META_APP_ID)
+    + '&config_id=' + encodeURIComponent(META_LOGIN_CONFIG_ID)
     + '&redirect_uri=' + encodeURIComponent(IG_LOGIN_REDIRECT_URI)
-    + '&scope=' + encodeURIComponent(IG_LOGIN_SCOPE)
     + '&response_type=code'
     + '&state=' + encodeURIComponent(signOAuthState(userId));
   return res.redirect(302, dialog);
@@ -1075,52 +1167,68 @@ app.get('/api/instagram/ig-callback', ah(async (req, res) => {
   // handoff), so every outcome is a friendly result page, not a redirect
   // into the SPA. The user is identified by the signed OAuth state.
   const fail = (reason) => igResultPage(res, 200, { ok: false, title: 'Instagram was not connected', message: IG_LOGIN_REASONS[reason] || IG_LOGIN_REASONS.exchange });
+  const failMsg = (message) => igResultPage(res, 200, { ok: false, title: 'Instagram was not connected', message });
   const q = req.query || {};
   if (q.error) return fail('denied');
-  // Instagram appends a "#_" fragment artifact to the code in some
+  // Meta appends a "#_" fragment artifact to the code in some
   // browsers; it can survive into the query value — strip it.
   const code = String(q.code || '').replace(/#_$/, '');
   const userId = userIdFromOAuthState(String(q.state || ''));
   if (!code || !userId) return fail('state');
-  if (!instagramLoginConfigured()) return fail('config');
-  // 1) code -> short-lived token + the Instagram user id.
-  let shortTok = null;
+  if (!unifiedLoginConfigured()) return fail('config');
+  // 1) code -> the business system-user token (single documented
+  // exchange; the token's lifetime is set by the dashboard
+  // configuration, and the keeper learns its real expiry from
+  // debug_token immediately below via the force-check).
+  let tok = null;
   try {
-    shortTok = await graphFormPost('https://api.instagram.com/oauth/access_token', {
-      client_id: INSTAGRAM_APP_ID,
-      client_secret: INSTAGRAM_APP_SECRET,
-      grant_type: 'authorization_code',
-      redirect_uri: IG_LOGIN_REDIRECT_URI,
-      code,
-    });
+    tok = await graphGet('https://graph.facebook.com/' + GRAPH_API_VERSION + '/oauth/access_token'
+      + '?client_id=' + encodeURIComponent(META_APP_ID)
+      + '&client_secret=' + encodeURIComponent(metaAppSecret())
+      + '&redirect_uri=' + encodeURIComponent(IG_LOGIN_REDIRECT_URI)
+      + '&code=' + encodeURIComponent(code));
   } catch { /* handled below as an exchange failure */ }
-  if (!shortTok || !shortTok.access_token) return fail('exchange');
-  const tokenUserId = shortTok.user_id != null ? String(shortTok.user_id) : '';
-  // 2) short-lived -> long-lived (~60 days; the keeper renews it from
-  // here via ig_refresh_token on this same host).
-  let longTok = null;
+  if (!tok || !tok.access_token) return fail('exchange');
+  const token = tok.access_token;
+  const expiresIn = Number(tok.expires_in) || 0;
+  // 2) Discover the shared Instagram account(s): the documented
+  // Unified Login edge first — /me is the system user the token
+  // belongs to, and assigned_instagram_accounts lists the Instagram
+  // professional accounts the login shared with the app.
+  let assigned = null;
   try {
-    longTok = await graphGet('https://graph.instagram.com/access_token?grant_type=ig_exchange_token'
-      + '&client_secret=' + encodeURIComponent(INSTAGRAM_APP_SECRET)
-      + '&access_token=' + encodeURIComponent(shortTok.access_token));
-  } catch { /* handled below */ }
-  if (!longTok || !longTok.access_token) return fail('exchange');
-  const token = longTok.access_token;
-  const expiresIn = Number(longTok.expires_in) || 0;
-  // 3) The account itself: username, and the user id that media and
-  // publish calls on graph.instagram.com are addressed to.
-  let me = null;
-  try {
-    me = await graphGet('https://graph.instagram.com/me?fields=user_id,username&access_token=' + encodeURIComponent(token));
-  } catch { /* handled below — the exchange already proved the account */ }
-  const igUserId = (me && me.user_id != null ? String(me.user_id) : '') || tokenUserId;
-  if (!igUserId) return fail('exchange');
-  const username = (me && me.username) || '';
+    assigned = await graphGet('https://graph.facebook.com/' + GRAPH_API_VERSION + '/me/assigned_instagram_accounts?fields=id,username&access_token=' + encodeURIComponent(token));
+  } catch { /* handled below — the Pages fallback still runs */ }
+  const assignedList = assigned && Array.isArray(assigned.data) ? assigned.data.filter((a) => a && a.id) : [];
+  let igAccount = assignedList.length ? assignedList[0] : null;
+  let pageId = null;
+  let pageList = [];
+  // 3) Fallback: an account that also has a linked Facebook Page
+  // resolves through the Pages machinery instead.
+  if (!igAccount) {
+    const viaPages = await findInstagramAccountViaPages(token);
+    pageList = viaPages.pageList;
+    if (viaPages.account) { igAccount = viaPages.account; pageId = viaPages.pageId; }
+  }
+  if (!igAccount) {
+    // Diagnostic detail for the owner: what this login actually
+    // shared, so an unshared account, a wrong login, or an account
+    // missing from the business portfolio is obvious from the page
+    // itself. Counts and the user's own Page names only — no tokens.
+    const pageNames = pageList.map((p) => (p && p.name ? String(p.name) : '(unnamed Page)')).join(', ');
+    return failMsg(
+      `Meta did not share an Instagram account for that login (0 Instagram accounts assigned${pageList.length ? `; ${pageList.length} Page${pageList.length !== 1 ? 's' : ''} found${pageNames ? ` — ${pageNames}` : ''}, none with an Instagram account the app can use` : ''}). `
+      + 'The account must be an Instagram Business or Creator account: in the Meta login dialog choose “Continue with Instagram” (or the Facebook account that owns the Instagram account) and approve access to it. '
+      + 'If the account belongs to a business portfolio, it must be added to that portfolio in Meta Business Settings before it can be shared.'
+    );
+  }
+  const igUserId = String(igAccount.id);
+  const username = igAccount.username || '';
   await db.saveInstagram(userId, {
-    token, igUserId, username, pageId: null,
+    token, igUserId, username, pageId,
     connectedAt: new Date().toISOString(),
     tokenExpiresAt: expiresIn > 0 ? new Date(Date.now() + expiresIn * 1000).toISOString() : '',
-    tokenNeverExpires: false, tokenType: longTok.token_type || '', tokenHost: 'instagram',
+    tokenNeverExpires: false, tokenType: tok.token_type || '', tokenHost: 'facebook',
     lastTokenCheckAt: '', lastRefreshAt: '', tokenRefreshError: '', lastDebugError: '', lastRefreshError: '',
   });
   // Learn the token's real type + exact expiry from Meta right away so
