@@ -73,7 +73,7 @@ export default function App() {
   // Per-tab document title (screen readers + history).
   useEffect(() => {
     const label = (NAV.find((n) => n.id === tab) || {}).label || (tab === 'studio' ? 'Studio' : 'Home')
-    document.title = tab === 'home' ? 'KiluaAI by Goyal Kumar' : `${label} · KiluaAI`
+    document.title = tab === 'home' ? 'KiluaAI' : `${label} · KiluaAI`
   }, [tab])
 
   // Escape closes the delete modal.
@@ -461,7 +461,7 @@ export default function App() {
             <div className="logo-mark" aria-hidden="true"><img src="/icon-192.png" alt="" width="40" height="40" /></div>
             <div>
               <b>KiluaAI</b>
-              <span>by Goyal Kumar · Free forever</span>
+              <span>Free forever</span>
             </div>
           </div>
           <div className="top-actions">
@@ -489,7 +489,7 @@ export default function App() {
                 <div className="logo-mark" aria-hidden="true"><img src="/icon-192.png" alt="" width="40" height="40" /></div>
                 <div>
                   <b>KiluaAI</b>
-                  <span>by Goyal Kumar</span>
+                  <span>Free forever</span>
                 </div>
               </div>
               <button type="button" className="icon-btn" onClick={() => setMenuOpen(false)} aria-label="Close menu" autoFocus>
@@ -575,8 +575,8 @@ export default function App() {
 
         <footer className="footer">
           <b>KiluaAI</b> — free forever, for every creator.<br />
-          Made by <b>Goyal Kumar</b> · Schedule Reels, Feed posts &amp; Stories for Instagram, YouTube, Facebook and TikTok.<br />
-          <span className="muted small">v1.1.0{dbStatus?.db ? ` · storage: ${dbStatus.db}` : ''}</span>
+          Schedule Reels, Feed posts &amp; Stories for Instagram, YouTube, Facebook and TikTok.<br />
+          <span className="muted small">v1.1.0{dbStatus?.db ? ` · storage: ${dbStatus.db}` : ''} · <a href="/contact.html">Contact</a></span>
         </footer>
       </main>
 

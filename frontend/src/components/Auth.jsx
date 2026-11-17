@@ -32,7 +32,7 @@ export default function Auth({ onAuth }) {
       <div style={{ textAlign: 'center', marginBottom: 20 }}>
         <div className="logo-mark" aria-hidden="true" style={{ margin: '0 auto 12px', width: 48, height: 48 }}><img src="/icon-192.png" alt="" width="48" height="48" /></div>
         <h1 style={{ fontSize: 24 }}>KiluaAI</h1>
-        <p className="muted" style={{ marginTop: 6 }}>by Goyal Kumar · Free forever</p>
+        <p className="muted" style={{ marginTop: 6 }}>Free forever</p>
       </div>
       <form className="card" onSubmit={submit}>
         <h2>{mode === 'signup' ? 'Create your account' : 'Log in'}</h2>

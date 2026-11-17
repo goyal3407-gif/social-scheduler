@@ -1,10 +1,10 @@
 {
-  "author": "Goyal Kumar",
+  "author": "KiluaAI",
   "dependencies": {
     "express": "^4.19.2",
     "mongoose": "^8.24.8"
   },
-  "description": "KiluaAI by Goyal Kumar - free Instagram/social scheduler for everyone",
+  "description": "KiluaAI - free Instagram/social scheduler for everyone",
   "engines": {
     "node": ">=18"
   },

@@ -1,4 +1,4 @@
-// Social Scheduler by Goyal Kumar
+// KiluaAI — Social Scheduler
 // Express backend + MongoDB storage (MONGODB_URI in Vercel env vars), with
 // local JSON files in data/ ONLY as a local-dev fallback. On Vercel the
 // filesystem is ephemeral, so nothing durable may live in files there:

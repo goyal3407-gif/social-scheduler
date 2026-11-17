@@ -1,6 +1,6 @@
 # Android app
 
-The Goyal Kumar Android app lives in its **own repository**:
+The KiluaAI Android app lives in its **own repository**:
 **goyal3407-gif/goyal-kumar-scheduler-android** (local checkout:
 `~/workspace/goyal-kumar-scheduler-android`).
 

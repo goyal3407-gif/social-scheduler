@@ -232,7 +232,6 @@ export default function Settings({ settings, dbStatus, onSave, saving, onInstagr
             <li>Publish live via the Instagram Graph API</li>
             <li>Works on phone and desktop</li>
           </ul>
-          <p className="muted small mt">Made by <b style={{ color: 'var(--ink)' }}>Goyal Kumar</b>.</p>
         </section>
       </div>
 

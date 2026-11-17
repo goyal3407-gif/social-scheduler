@@ -1,4 +1,4 @@
-// localMedia.js — on-device video storage for the Goyal Kumar app.
+// localMedia.js — on-device video storage for the KiluaAI app.
 //
 // Flow (implemented, web layer):
 //   pick a video -> savePickedVideo() stores it in app-private storage
