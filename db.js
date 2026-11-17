@@ -111,6 +111,17 @@ const instagramSchema = new mongoose.Schema({
   tokenType: String, tokenHost: String,
   lastTokenCheckAt: String, lastRefreshAt: String, tokenRefreshError: String,
   lastDebugError: String, lastRefreshError: String,
+  // Multi-account support (additive): `accounts` holds EVERY connected
+  // Instagram account for this user, each entry shaped like the legacy
+  // single-connection fields above (its own tokenEnc included). The
+  // top-level fields remain as a live mirror of the DEFAULT account
+  // (defaultIgUserId), so older code — and a rollback to it — keeps
+  // reading exactly the connection it always read. A doc without an
+  // `accounts` array is a legacy single-connection doc; the account
+  // list is derived from the top-level fields on read (lazy migration)
+  // and materialised on the next write.
+  accounts: { type: [mongoose.Schema.Types.Mixed], default: undefined },
+  defaultIgUserId: String,
 });
 const importJobSchema = new mongoose.Schema({
   id: { type: String, unique: true, index: true },
@@ -632,36 +643,137 @@ function instagramHealthFields(doc) {
     lastDebugError: doc.lastDebugError || '', lastRefreshError: doc.lastRefreshError || '',
   };
 }
-async function getInstagram(userId) {
+// ---------- multi-account view of an instagram doc ----------
+// The stored fields of ONE connection (everything except userId). An
+// account entry in doc.accounts carries exactly these fields (plus its
+// own tokenEnc/encrypted), so an entry and a legacy doc are
+// interchangeable everywhere below.
+const IG_CONN_FIELDS = ['igUserId', 'username', 'pageId', 'profile', 'connectedAt', 'importedAt',
+  'tokenExpiresAt', 'tokenNeverExpires', 'tokenType', 'tokenHost', 'lastTokenCheckAt', 'lastRefreshAt',
+  'tokenRefreshError', 'lastDebugError', 'lastRefreshError'];
+function legacyEntryFromDoc(doc) {
+  if (!doc || typeof doc !== 'object') return null;
+  if (!doc.token && !doc.tokenEnc && !doc.igUserId) return null;
+  const e = {};
+  for (const k of IG_CONN_FIELDS) if (doc[k] !== undefined) e[k] = doc[k];
+  if (doc.token !== undefined) e.token = doc.token;
+  if (doc.tokenEnc !== undefined) e.tokenEnc = doc.tokenEnc;
+  if (doc.encrypted !== undefined) e.encrypted = doc.encrypted;
+  return e;
+}
+// Raw stored account entries for a doc: the materialised list when
+// present, else the legacy single connection as a one-entry list (the
+// lazy migration — nothing is rewritten until the next save).
+function rawAccountsOf(doc) {
+  if (!doc || typeof doc !== 'object') return [];
+  if (Array.isArray(doc.accounts) && doc.accounts.length) {
+    const list = doc.accounts.filter((a) => a && typeof a === 'object' && (a.igUserId || a.token || a.tokenEnc));
+    if (list.length) return list;
+  }
+  const legacy = legacyEntryFromDoc(doc);
+  return legacy ? [legacy] : [];
+}
+function defaultRawAccount(doc) {
+  const list = rawAccountsOf(doc);
+  if (!list.length) return null;
+  if (doc && doc.defaultIgUserId) {
+    const m = list.find((a) => String(a.igUserId || '') === String(doc.defaultIgUserId));
+    if (m) return m;
+  }
+  return list[0];
+}
+// The top-level mirror patch for one raw entry: the legacy fields a
+// pre-multi-account reader expects to find on the doc itself.
+function topLevelPatchFromEntry(entry) {
+  const p = {};
+  if (!entry) return p;
+  for (const k of IG_CONN_FIELDS) if (entry[k] !== undefined) p[k] = entry[k];
+  if (entry.tokenEnc !== undefined) { p.tokenEnc = entry.tokenEnc; p.encrypted = !!entry.encrypted; }
+  else if (entry.token !== undefined) { p.token = entry.token; p.encrypted = false; }
+  return p;
+}
+// Load the raw stored doc for one user (Mongo lean doc or the JSON
+// object), or null. The JSON legacy FLAT doc (connection fields at the
+// top level of the whole file) belongs to the owner only — same rule
+// as the original getInstagram().
+async function loadInstagramRaw(userId) {
   await ensureMongo();
   if (isMongo()) {
     const doc = await InstagramDoc.findOne({ userId }).lean();
-    if (!doc) return {};
-    return { token: decryptToken(doc), igUserId: doc.igUserId || '', username: doc.username || '', pageId: doc.pageId || '', profile: doc.profile || null, connectedAt: doc.connectedAt || '', importedAt: doc.importedAt || '', encrypted: !!doc.encrypted, ...instagramHealthFields(doc) };
+    return doc || null;
   }
   const all = load(JSON_FILES.instagram, {});
   const obj = (all && typeof all === 'object' && !Array.isArray(all)) ? all : {};
   let doc = obj[userId];
   if (!doc) {
-    // A legacy FLAT connection doc (token fields at the top level, saved
-    // before per-user storage) belongs to the owner only — falling back
-    // to the whole object for any other user would hand them the
-    // owner's Instagram token.
     const looksFlat = !!(obj.token || obj.tokenEnc || obj.igUserId);
     if (looksFlat) {
       const owner = await ownerId();
       if (userId && owner && userId === owner) doc = obj;
     }
   }
-  if (!doc || typeof doc !== 'object') return {};
-  if (doc.token && !doc.tokenEnc) return { token: doc.token, igUserId: doc.igUserId || '', username: doc.username || '', pageId: doc.pageId || '', profile: doc.profile || null, connectedAt: doc.connectedAt || '', importedAt: doc.importedAt || '', encrypted: false, ...instagramHealthFields(doc) };
-  return { token: decryptToken(doc), igUserId: doc.igUserId || '', username: doc.username || '', pageId: doc.pageId || '', profile: doc.profile || null, connectedAt: doc.connectedAt || '', importedAt: doc.importedAt || '', encrypted: !!doc.encrypted, ...instagramHealthFields(doc) };
+  return (doc && typeof doc === 'object') ? doc : null;
 }
-// Every stored Instagram connection in ONE query, shaped like
-// getInstagram() plus the owning userId. db-status uses this to find
-// the connected account: the old per-user loop cost one sequential
-// round trip per account on every call, which made db-status the
-// slowest route in the app once a few users had signed up.
+// Persist the full account list for one user: stores `accounts`,
+// records the default, and mirrors the default entry onto the legacy
+// top-level fields so older code (and a rollback to it) keeps working.
+// An empty list removes the doc entirely (== fully disconnected).
+async function persistInstagramRaw(userId, entries, defaultIgUserId) {
+  const def = entries.find((a) => String(a.igUserId || '') === String(defaultIgUserId || '')) || entries[0] || null;
+  const defId = def ? (def.igUserId || '') : '';
+  await ensureMongo();
+  if (isMongo()) {
+    if (!entries.length) { await InstagramDoc.deleteOne({ userId }); return; }
+    const patch = { userId, accounts: entries, defaultIgUserId: defId, ...topLevelPatchFromEntry(def) };
+    await InstagramDoc.updateOne({ userId }, { $set: patch }, { upsert: true });
+    return;
+  }
+  const all = load(JSON_FILES.instagram, {});
+  const obj = (all && typeof all === 'object' && !Array.isArray(all)) ? all : {};
+  if (!entries.length) { delete obj[userId]; save(JSON_FILES.instagram, obj); return; }
+  const prev = (obj[userId] && typeof obj[userId] === 'object' && !Array.isArray(obj[userId])) ? obj[userId] : {};
+  const next = { ...prev, accounts: entries, defaultIgUserId: defId, ...topLevelPatchFromEntry(def) };
+  if (def && def.tokenEnc) delete next.token; // encrypted at rest wins over any stale plaintext
+  obj[userId] = next;
+  // A legacy FLAT doc that was just migrated into obj[userId] must not
+  // linger at the file's top level, or listInstagram() would keep
+  // reading the stale flat copy as the owner's connection. Strip it
+  // ONLY when the flat connection is one of the accounts this persist
+  // just wrote for this user — another user's save must never delete
+  // the owner's flat connection out from under them.
+  const flatId = obj.igUserId || '';
+  if ((obj.token || obj.tokenEnc || obj.igUserId)
+    && entries.some((e) => String(e.igUserId || '') === String(flatId) && flatId)) {
+    for (const k of [...IG_CONN_FIELDS, 'token', 'tokenEnc', 'encrypted']) delete obj[k];
+  }
+  save(JSON_FILES.instagram, obj);
+}
+// The user's DEFAULT connection, shaped exactly as this function has
+// always returned it — every existing caller keeps working unchanged.
+async function getInstagram(userId) {
+  const doc = await loadInstagramRaw(userId);
+  if (!doc) return {};
+  const def = defaultRawAccount(doc);
+  if (!def) return {};
+  return shapeInstagramDoc(def) || {};
+}
+// Every connected account for the user (shaped like getInstagram()),
+// plus which one is the default. Tokens are included — server-side
+// use only; API responses must pick safe fields from these records.
+async function getInstagramAccounts(userId) {
+  const doc = await loadInstagramRaw(userId);
+  if (!doc) return { accounts: [], defaultIgUserId: '' };
+  const def = defaultRawAccount(doc);
+  return {
+    accounts: rawAccountsOf(doc).map((e) => shapeInstagramDoc(e)).filter(Boolean),
+    defaultIgUserId: def ? (def.igUserId || '') : '',
+  };
+}
+async function getInstagramAccount(userId, igUserId) {
+  if (!igUserId) return null;
+  const { accounts } = await getInstagramAccounts(userId);
+  return accounts.find((a) => String(a.igUserId || '') === String(igUserId)) || null;
+}
 function shapeInstagramDoc(doc) {
   if (!doc || typeof doc !== 'object') return null;
   if (doc.token && !doc.tokenEnc) {
@@ -677,46 +789,137 @@ function shapeInstagramDoc(doc) {
     encrypted: !!doc.encrypted, ...instagramHealthFields(doc),
   };
 }
+// Every stored Instagram connection in ONE query, shaped like
+// getInstagram() plus the owning userId. db-status uses this to find
+// the connected account: the old per-user loop cost one sequential
+// round trip per account on every call, which made db-status the
+// slowest route in the app once a few users had signed up. Each entry
+// is the user's DEFAULT connection (as getInstagram returns), plus
+// accountsCount — how many accounts that user has connected in total.
 async function listInstagram() {
   await ensureMongo();
   if (isMongo()) {
     const docs = await InstagramDoc.find({}).lean();
-    return docs.map((doc) => ({ userId: doc.userId || '', ...shapeInstagramDoc(doc) })).filter((d) => d.token !== undefined);
+    return docs.map((doc) => {
+      const def = defaultRawAccount(doc);
+      const shaped = shapeInstagramDoc(def || doc);
+      return shaped ? { userId: doc.userId || '', ...shaped, accountsCount: rawAccountsOf(doc).length } : null;
+    }).filter((d) => d && d.token !== undefined);
   }
   const all = load(JSON_FILES.instagram, {});
   const obj = (all && typeof all === 'object' && !Array.isArray(all)) ? all : {};
+  const out = [];
+  const seen = new Set();
+  // In a legacy FLAT file the connection's own field names sit at the
+  // top level next to any user keys — never mistake one for a user id.
+  const SKIP_KEYS = new Set([...IG_CONN_FIELDS, 'token', 'tokenEnc', 'encrypted', 'accounts', 'defaultIgUserId', 'userId']);
+  for (const [userId, doc] of Object.entries(obj)) {
+    if (SKIP_KEYS.has(userId)) continue;
+    if (!doc || typeof doc !== 'object' || Array.isArray(doc)) continue;
+    const def = defaultRawAccount(doc);
+    const shaped = shapeInstagramDoc(def || doc);
+    if (shaped) { out.push({ userId, ...shaped, accountsCount: rawAccountsOf(doc).length }); seen.add(userId); }
+  }
   // A legacy FLAT doc (token fields at the top level) is one connection
-  // belonging to the owner — same rule as getInstagram().
+  // belonging to the owner — same rule as getInstagram(). It counts
+  // only when the owner has no keyed doc of their own (a keyed doc is
+  // the migrated, current copy).
   const looksFlat = !!(obj.token || obj.tokenEnc || obj.igUserId);
   if (looksFlat) {
     const owner = await ownerId();
-    const shaped = shapeInstagramDoc(obj);
-    return owner && shaped ? [{ userId: owner, ...shaped }] : [];
-  }
-  const out = [];
-  for (const [userId, doc] of Object.entries(obj)) {
-    const shaped = shapeInstagramDoc(doc);
-    if (shaped) out.push({ userId, ...shaped });
+    if (owner && !seen.has(owner)) {
+      const shaped = shapeInstagramDoc(obj);
+      if (shaped) out.push({ userId: owner, ...shaped, accountsCount: rawAccountsOf(obj).length });
+    }
   }
   return out;
 }
-async function saveInstagram(userId, fields) {
-  await ensureMongo();
+// Patch ONE connection's fields (keeper health updates, token renewals,
+// import metadata). Target account: the explicit igUserId argument,
+// else the igUserId named in fields, else the default account. The
+// legacy top-level mirror is refreshed whenever the DEFAULT account is
+// the one patched (persistInstagramRaw handles that). An explicitly
+// named account that no longer exists is NOT resurrected — the patch
+// is dropped (e.g. a keeper run that raced a disconnect).
+async function saveInstagram(userId, fields, igUserId) {
+  const doc = await loadInstagramRaw(userId);
+  const entries = rawAccountsOf(doc).map((e) => ({ ...e }));
   const { token, ...rest } = fields || {};
   const enc = token !== undefined ? encryptToken(token) : null;
-  if (isMongo()) {
-    const patch = { userId, ...rest };
-    if (enc) { patch.tokenEnc = enc.tokenEnc; patch.encrypted = enc.encrypted; }
-    await InstagramDoc.updateOne({ userId }, { $set: patch }, { upsert: true });
-    return;
+  const explicitId = igUserId !== undefined && igUserId !== null && igUserId !== '' ? String(igUserId) : '';
+  let idx = -1;
+  if (explicitId) {
+    idx = entries.findIndex((e) => String(e.igUserId || '') === explicitId);
+    if (idx < 0) return; // account gone — never resurrect it from a stale patch
+  } else if (rest.igUserId) {
+    idx = entries.findIndex((e) => String(e.igUserId || '') === String(rest.igUserId));
   }
-  const all = load(JSON_FILES.instagram, {});
-  const obj = (all && typeof all === 'object' && !Array.isArray(all)) ? all : {};
-  const prev = obj[userId] || {};
-  const next = { ...prev, ...rest };
-  if (enc) { next.tokenEnc = enc.tokenEnc; next.encrypted = enc.encrypted; delete next.token; }
-  obj[userId] = next;
-  save(JSON_FILES.instagram, obj);
+  if (idx < 0) {
+    const def = defaultRawAccount(doc);
+    idx = def ? entries.findIndex((e) => e === def || String(e.igUserId || '') === String(def.igUserId || '')) : -1;
+  }
+  if (idx < 0) {
+    // No connection stored at all: this save creates the first one.
+    const entry = { ...rest };
+    if (enc) { entry.tokenEnc = enc.tokenEnc; entry.encrypted = enc.encrypted; }
+    entries.push(entry);
+    idx = entries.length - 1;
+  } else {
+    const entry = { ...entries[idx], ...rest };
+    if (enc) { entry.tokenEnc = enc.tokenEnc; entry.encrypted = enc.encrypted; delete entry.token; }
+    entries[idx] = entry;
+  }
+  let defId = (doc && doc.defaultIgUserId) || '';
+  if (!entries.some((e) => String(e.igUserId || '') === String(defId))) defId = entries.length ? (entries[0].igUserId || '') : '';
+  await persistInstagramRaw(userId, entries, defId);
+}
+// Add a connection, or refresh the existing one for the same Instagram
+// account (a reconnect through the OAuth flow). The FIRST account a
+// user connects becomes their default; later additions never steal
+// the default. Returns the saved account, shaped like getInstagram().
+async function saveInstagramAccount(userId, fields) {
+  const doc = await loadInstagramRaw(userId);
+  const entries = rawAccountsOf(doc).map((e) => ({ ...e }));
+  const { token, ...rest } = fields || {};
+  const enc = token !== undefined ? encryptToken(token) : null;
+  const id = String(rest.igUserId || '');
+  const wasEmpty = entries.length === 0;
+  let idx = entries.findIndex((e) => String(e.igUserId || '') === id);
+  if (idx < 0) { entries.push({ ...rest }); idx = entries.length - 1; }
+  else entries[idx] = { ...entries[idx], ...rest };
+  if (enc) { entries[idx].tokenEnc = enc.tokenEnc; entries[idx].encrypted = enc.encrypted; delete entries[idx].token; }
+  let defId = (doc && doc.defaultIgUserId) || '';
+  if (wasEmpty || !entries.some((e) => String(e.igUserId || '') === String(defId))) defId = id || (entries[0] ? entries[0].igUserId || '' : '');
+  await persistInstagramRaw(userId, entries, defId);
+  return shapeInstagramDoc(entries[idx]);
+}
+// Remove ONE account. Removing the default promotes the first
+// remaining account (and re-mirrors the legacy fields); removing the
+// last account deletes the doc (== fully disconnected). Other
+// accounts are untouched.
+async function removeInstagramAccount(userId, igUserId) {
+  const doc = await loadInstagramRaw(userId);
+  if (!doc) return { removed: false, accounts: [], defaultIgUserId: '' };
+  const entries = rawAccountsOf(doc).map((e) => ({ ...e }));
+  const next = entries.filter((e) => String(e.igUserId || '') !== String(igUserId || ''));
+  if (next.length === entries.length) {
+    const def = defaultRawAccount(doc);
+    return { removed: false, accounts: entries.map((e) => shapeInstagramDoc(e)).filter(Boolean), defaultIgUserId: def ? (def.igUserId || '') : '' };
+  }
+  let defId = (doc && doc.defaultIgUserId) || '';
+  if (!next.some((e) => String(e.igUserId || '') === String(defId))) defId = next.length ? (next[0].igUserId || '') : '';
+  await persistInstagramRaw(userId, next, defId);
+  return { removed: true, accounts: next.map((e) => shapeInstagramDoc(e)).filter(Boolean), defaultIgUserId: defId };
+}
+// Choose which connected account is the default. The legacy top-level
+// mirror follows the new default (via persistInstagramRaw).
+async function setDefaultInstagramAccount(userId, igUserId) {
+  const doc = await loadInstagramRaw(userId);
+  if (!doc) return false;
+  const entries = rawAccountsOf(doc).map((e) => ({ ...e }));
+  if (!entries.some((e) => String(e.igUserId || '') === String(igUserId || ''))) return false;
+  await persistInstagramRaw(userId, entries, String(igUserId));
+  return true;
 }
 async function clearInstagram(userId) {
   await ensureMongo();
@@ -880,6 +1083,7 @@ module.exports = {
   listTemplates, saveTemplate,
   getSettings, saveSettings,
   getInstagram, listInstagram, saveInstagram, clearInstagram,
+  getInstagramAccounts, getInstagramAccount, saveInstagramAccount, removeInstagramAccount, setDefaultInstagramAccount,
   getImportJob, saveImportJob,
   saveNotification, listNotifications, countUnreadNotifications, markNotificationsRead,
   createUploadSession, getUploadSession, saveUploadChunk, getUploadChunks, deleteUploadSession, deleteExpiredUploadSessions,

@@ -219,7 +219,8 @@ export const api = {
   saveSettings: (settings) => req('/api/settings', { method: 'POST', body: JSON.stringify(settings) }),
   instagramConnectLink: () => req('/api/instagram/connect-link', { method: 'POST', body: JSON.stringify({}) }),
   instagramIgConnectLink: () => req('/api/instagram/ig-connect-link', { method: 'POST', body: JSON.stringify({}) }),
-  disconnectInstagram: () => req('/api/instagram/disconnect', { method: 'POST', body: JSON.stringify({}) }),
+  disconnectInstagram: (igUserId) => req('/api/instagram/disconnect', { method: 'POST', body: JSON.stringify(igUserId ? { igUserId } : {}) }),
+  setDefaultInstagramAccount: (igUserId) => req('/api/instagram/default', { method: 'POST', body: JSON.stringify({ igUserId }) }),
   startInstagramImport: () => req('/api/instagram/import', { method: 'POST', body: JSON.stringify({}) }),
   getInstagramImport: (jobId) => req(`/api/instagram/import/${encodeURIComponent(jobId)}`)
 }

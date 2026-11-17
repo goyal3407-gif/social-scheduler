@@ -4,9 +4,9 @@ import { IconWarn, IconCheck } from './icons.jsx'
 
 const PLATFORMS = ['Instagram', 'YouTube', 'Facebook', 'TikTok']
 const FORMATS = ['REELS', 'FEED', 'STORY']
-const EMPTY = { mediaUrl: '', mediaType: 'video', posterUrl: '', caption: '', hashtags: '', cta: '', platform: 'Instagram', scheduleTime: '', status: 'scheduled', format: 'REELS' }
+const EMPTY = { mediaUrl: '', mediaType: 'video', posterUrl: '', caption: '', hashtags: '', cta: '', platform: 'Instagram', scheduleTime: '', status: 'scheduled', format: 'REELS', igAccountId: '', igAccountUsername: '' }
 
-export default function Studio({ editing, seed, media, templates, onSave, onCancel, saving, posts }) {
+export default function Studio({ editing, seed, media, templates, onSave, onCancel, saving, posts, igAccounts, defaultIgUserId }) {
   const [form, setForm] = useState(EMPTY)
   const [step, setStep] = useState(1)
   const [width, setWidth] = useState('')
@@ -236,6 +236,20 @@ export default function Studio({ editing, seed, media, templates, onSave, onCanc
                   </select>
                 </div>
               </div>
+              {Array.isArray(igAccounts) && igAccounts.length > 0 && (
+                <div style={{ marginTop: 14 }}>
+                  <label htmlFor="igAccount">Instagram account</label>
+                  <select id="igAccount" value={form.igAccountId || defaultIgUserId || ''} onChange={(e) => { const a = igAccounts.find((x) => x.igUserId === e.target.value); set({ igAccountId: e.target.value, igAccountUsername: a ? a.username : '' }) }}>
+                    {igAccounts.map((a) => (
+                      <option key={a.igUserId} value={a.igUserId}>@{a.username || a.igUserId}{a.isDefault ? ' (default)' : ''}</option>
+                    ))}
+                    {form.igAccountId && !igAccounts.some((a) => a.igUserId === form.igAccountId) && (
+                      <option value={form.igAccountId}>@{form.igAccountUsername || form.igAccountId} (disconnected — pick another)</option>
+                    )}
+                  </select>
+                  <p className="muted small" style={{ marginTop: 6 }}>This post publishes to the chosen account only.</p>
+                </div>
+              )}
               <label htmlFor="scheduleTime" style={{ marginTop: 14 }}>Schedule time</label>
               <input id="scheduleTime" type="datetime-local" value={form.scheduleTime && form.scheduleTime.length > 16 ? toLocalInputValue(form.scheduleTime) : form.scheduleTime} onChange={(e) => set({ scheduleTime: e.target.value })} />
               {suggestion && (

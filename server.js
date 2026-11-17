@@ -593,11 +593,32 @@ async function getSettings(req) {
 // Accepts either a req-like object ({ userId }) or a bare userId string
 // (used by the cron publisher, which has no request user).
 function uidOf(x) { return typeof x === 'string' ? x : (x && x.userId) || ''; }
-async function getInstagramStored(x) {
+async function getInstagramStored(x, igUserId) {
   const userId = uidOf(x);
   if (!userId) return {};
+  if (igUserId) {
+    const s = await db.getInstagramAccount(userId, igUserId);
+    return s && typeof s === 'object' ? s : {};
+  }
   const s = await db.getInstagram(userId);
   return s && typeof s === 'object' ? s : {};
+}
+// The user's connected Instagram accounts, as safe summary objects for
+// API responses (no tokens): everything the Settings list and the post
+// composer's account selector need.
+async function instagramAccountSummaries(userId) {
+  const { accounts, defaultIgUserId } = await db.getInstagramAccounts(userId);
+  return {
+    defaultIgUserId: defaultIgUserId || '',
+    accounts: accounts.map((a) => ({
+      igUserId: a.igUserId || '',
+      username: a.username || '',
+      isDefault: !!defaultIgUserId && String(a.igUserId || '') === String(defaultIgUserId),
+      connectedAt: a.connectedAt || '',
+      profile: a.profile || null,
+      health: instagramHealth(a),
+    })),
+  };
 }
 // Which Graph host serves a stored connection: Instagram Login tokens
 // live on graph.instagram.com (unversioned paths); Facebook Login
@@ -633,6 +654,35 @@ function maskToken(t) {
   if (!t) return '';
   if (t.length <= 8) return '••••••••';
   return t.slice(0, 4) + '…' + t.slice(-4);
+}
+// Creds for ONE specific connected account of the user (no env
+// fallback — the env token belongs to the default/legacy connection
+// only). Returns null when that account is not connected.
+async function getInstagramCredsForAccount(userId, igUserId) {
+  const stored = await getInstagramStored(userId, igUserId);
+  if (!stored || !stored.token || !stored.igUserId) return null;
+  return { token: stored.token, igUserId: stored.igUserId, username: stored.username || '', tokenHost: stored.tokenHost || '', pageId: stored.pageId || '', source: 'stored' };
+}
+// Which connection publishes this post? A post that names a target
+// account publishes with THAT account's token — and if the account
+// has since been disconnected, the publish must fail loudly (the
+// caller marks it failed with a notification); it must NEVER fall
+// back to a different account and post to the wrong profile. A post
+// with no target (everything scheduled before multi-account support)
+// publishes via the default/legacy connection, exactly as before.
+async function resolvePublishCreds(userId, post) {
+  const target = post && post.igAccountId ? String(post.igAccountId) : '';
+  if (!target) {
+    const ig = await getInstagramCreds(userId);
+    return { ig };
+  }
+  const ig = await getInstagramCredsForAccount(userId, target);
+  if (ig) return { ig };
+  return { missing: true, igAccountId: target, username: (post && post.igAccountUsername) || '' };
+}
+function missingAccountError(missing) {
+  const who = missing.username ? `@${missing.username}` : 'the Instagram account';
+  return `This post was scheduled for ${who}, which is no longer connected. Reconnect it in Settings, or edit the post to choose a connected account — it was NOT posted to a different account.`;
 }
 async function igConfigured(req) { const c = await getInstagramCreds(req); return !!(c.token && c.igUserId); }
 
@@ -865,31 +915,35 @@ function keeperCheckUrgent(stored, now) {
 // still runs in the foreground, exactly as before, so a renewal or a
 // revocation is always reflected in the response that triggered it.
 // Foreground callers (publish paths, connect callbacks) are unchanged.
+// Multi-account: opts.igUserId selects WHICH connection to check (the
+// keeper runs per connection; the in-flight map is keyed per account).
+// Without it, the user's default connection is checked, as before.
 async function ensureInstagramTokenFresh(userId, opts = {}) {
   if (!userId) return null;
-  if (tokenCheckInFlight.has(userId)) {
-    if (opts.background) { const s = await getInstagramStored(userId).catch(() => ({})); return instagramHealth(s); }
-    return tokenCheckInFlight.get(userId);
+  const key = `${userId}:${opts.igUserId || ''}`;
+  if (tokenCheckInFlight.has(key)) {
+    if (opts.background) { const s = await getInstagramStored(userId, opts.igUserId).catch(() => ({})); return instagramHealth(s); }
+    return tokenCheckInFlight.get(key);
   }
   if (opts.background && !opts.force) {
-    const stored = await getInstagramStored(userId).catch(() => ({}));
+    const stored = await getInstagramStored(userId, opts.igUserId).catch(() => ({}));
     if (!stored.token) return null;
     if (!keeperCheckDue(stored, Date.now())) return instagramHealth(stored);
     if (!keeperCheckUrgent(stored, Date.now())) {
-      const run = runKeeperCheck(userId, {});
-      tokenCheckInFlight.set(userId, run);
+      const run = runKeeperCheck(userId, { igUserId: opts.igUserId });
+      tokenCheckInFlight.set(key, run);
       run.catch(() => { /* background check: failures land in the health fields */ })
-        .finally(() => { if (tokenCheckInFlight.get(userId) === run) tokenCheckInFlight.delete(userId); });
+        .finally(() => { if (tokenCheckInFlight.get(key) === run) tokenCheckInFlight.delete(key); });
       return instagramHealth(stored);
     }
     // Urgent: fall through to the foreground run below.
   }
   const run = runKeeperCheck(userId, opts);
-  tokenCheckInFlight.set(userId, run);
-  try { return await run; } finally { if (tokenCheckInFlight.get(userId) === run) tokenCheckInFlight.delete(userId); }
+  tokenCheckInFlight.set(key, run);
+  try { return await run; } finally { if (tokenCheckInFlight.get(key) === run) tokenCheckInFlight.delete(key); }
 }
 async function runKeeperCheck(userId, opts = {}) {
-    const stored = await getInstagramStored(userId);
+    const stored = await getInstagramStored(userId, opts.igUserId);
     if (!stored.token) return null; // env token or not connected — nothing stored to renew
     const now = Date.now();
     if (!opts.force && !keeperCheckDue(stored, now)) {
@@ -920,7 +974,7 @@ async function runKeeperCheck(userId, opts = {}) {
         }
       }
     }
-    await db.saveInstagram(userId, patch);
+    await db.saveInstagram(userId, patch, current.igUserId);
     current = { ...current, ...patch };
     if (dbg && dbg.is_valid === false) return instagramHealth(current);
     const expMs2 = current.tokenExpiresAt ? new Date(current.tokenExpiresAt).getTime() : 0;
@@ -940,7 +994,7 @@ async function runKeeperCheck(userId, opts = {}) {
       // spare, and the secret lookup above now succeeds — clear the
       // stale "refresh blocked" state instead of reporting it forever.
       const patch3 = { tokenRefreshError: '', lastRefreshError: '' };
-      await db.saveInstagram(userId, patch3);
+      await db.saveInstagram(userId, patch3, current.igUserId);
       current = { ...current, ...patch3 };
     }
     if (needsRefresh) {
@@ -953,11 +1007,11 @@ async function runKeeperCheck(userId, opts = {}) {
         const probe = await probeInstagramTokenHost(current.token, current.igUserId).catch((e) => ({ host: '', error: String((e && e.message) || e).slice(0, 200), dead: false }));
         if (probe.host) {
           const patchH = { tokenHost: probe.host };
-          await db.saveInstagram(userId, patchH);
+          await db.saveInstagram(userId, patchH, current.igUserId);
           current = { ...current, ...patchH };
         } else if (probe.dead) {
           const patchH = { tokenRefreshError: 'revoked-or-expired' };
-          await db.saveInstagram(userId, patchH);
+          await db.saveInstagram(userId, patchH, current.igUserId);
           return instagramHealth({ ...current, ...patchH });
         }
       }
@@ -965,7 +1019,7 @@ async function runKeeperCheck(userId, opts = {}) {
       if (refreshed && refreshed.token) {
         const patch2 = { token: refreshed.token, lastRefreshAt: new Date().toISOString(), lastTokenCheckAt: new Date().toISOString(), tokenRefreshError: '', lastRefreshError: '', tokenHost: refreshed.via === 'instagram-refresh' ? 'instagram' : (current.tokenHost || '') };
         if (refreshed.expiresIn > 0) { patch2.tokenNeverExpires = false; patch2.tokenExpiresAt = new Date(now + refreshed.expiresIn * 1000).toISOString(); }
-        await db.saveInstagram(userId, patch2);
+        await db.saveInstagram(userId, patch2, current.igUserId);
         current = { ...current, ...patch2, token: refreshed.token };
         const dbg2Res = await debugInstagramToken(refreshed.token, refreshed.via === 'instagram-refresh' ? 'instagram' : current.tokenHost).catch(() => null);
         const dbg2 = dbg2Res && dbg2Res.data ? dbg2Res.data : null;
@@ -974,12 +1028,12 @@ async function runKeeperCheck(userId, opts = {}) {
           if (typeof dbg2.type === 'string') p3.tokenType = dbg2.type;
           if (dbg2.expires_at === 0) { p3.tokenNeverExpires = true; p3.tokenExpiresAt = ''; }
           else if (dbg2.expires_at) { p3.tokenNeverExpires = false; p3.tokenExpiresAt = new Date(dbg2.expires_at * 1000).toISOString(); }
-          await db.saveInstagram(userId, p3);
+          await db.saveInstagram(userId, p3, current.igUserId);
           current = { ...current, ...p3 };
         }
       } else {
         const patch2 = { tokenRefreshError: 'auto-refresh-unavailable', lastRefreshError: ((refreshed && refreshed.error) || 'refresh failed').slice(0, 300) };
-        await db.saveInstagram(userId, patch2);
+        await db.saveInstagram(userId, patch2, current.igUserId);
         current = { ...current, ...patch2 };
       }
     }
@@ -1021,10 +1075,14 @@ let igScanCache = { at: 0, scan: null };
 async function instagramScan(force = false) {
   if (!force && igScanCache.scan && Date.now() - igScanCache.at < 15000) return igScanCache.scan;
   const [usersScanned, docs] = await Promise.all([db.countUsers(), db.listInstagram()]);
-  const scan = { usersScanned, docsFound: 0, tokensReadable: 0, connectedUserId: null };
+  const scan = { usersScanned, docsFound: 0, tokensReadable: 0, connectedUserId: null, accountsConnected: 0, connectedAccountsCount: 0 };
   for (const st of docs) {
     if (st && (st.igUserId || st.connectedAt)) scan.docsFound += 1;
-    if (st && st.token) { scan.tokensReadable += 1; if (!scan.connectedUserId) scan.connectedUserId = st.userId; }
+    scan.accountsConnected += (st && st.accountsCount) || 0;
+    if (st && st.token) {
+      scan.tokensReadable += 1;
+      if (!scan.connectedUserId) { scan.connectedUserId = st.userId; scan.connectedAccountsCount = st.accountsCount || 0; }
+    }
   }
   igScanCache = { at: Date.now(), scan };
   return scan;
@@ -1038,7 +1096,7 @@ app.get('/api/db-status', ah(async (req, res) => {
   // renewal state; never the token). Running the keeper here means this
   // status check also renews the token when it is inside the window.
   let ownerInstagram = null;
-  const igDiag = { usersScanned: 0, docsFound: 0, tokensReadable: 0, keeperError: null };
+  const igDiag = { usersScanned: 0, docsFound: 0, tokensReadable: 0, accountsConnected: 0, keeperError: null };
   try {
     // The connected account is whichever user actually has a stored token
     // (normally the owner) — scan all connections, counts only, never values.
@@ -1062,6 +1120,13 @@ app.get('/api/db-status', ah(async (req, res) => {
     igDiag.usersScanned = freshUserCount !== null ? freshUserCount : scan.usersScanned;
     igDiag.docsFound = scan.docsFound;
     igDiag.tokensReadable = scan.tokensReadable;
+    // Multi-account: how many Instagram accounts are connected in
+    // total (a user can hold several since multi-account support).
+    igDiag.accountsConnected = scan.accountsConnected;
+    // The `instagram` health below stays the connected user's DEFAULT
+    // account, exactly as existing consumers expect; the count of that
+    // user's accounts rides along for the multi-account UI.
+    if (ownerInstagram) ownerInstagram = { ...ownerInstagram, accountsConnected: scan.connectedAccountsCount };
   } catch (e) { igDiag.keeperError = String((e && e.message) || e).slice(0, 200); }
   res.json({
     ok: true,
@@ -1113,6 +1178,15 @@ app.get('/api/settings', ah(async (req, res) => {
   const health = await ensureInstagramTokenFresh(req.userId, { background: true }).catch(() => null);
   const ig = await getInstagramCreds(req);
   const stored = await getInstagramStored(req);
+  const summaries = await instagramAccountSummaries(req.userId);
+  // The keeper runs per connection: background-check every other
+  // connected account too (throttled + in-flight-guarded, so this is
+  // a no-op unless a check is actually due).
+  for (const a of summaries.accounts) {
+    if (a.igUserId && a.igUserId !== summaries.defaultIgUserId) {
+      ensureInstagramTokenFresh(req.userId, { background: true, igUserId: a.igUserId }).catch(() => null);
+    }
+  }
   const settingsResponse = {
     ok: true,
     instagramHandle: s.instagramHandle || ig.username || '',
@@ -1126,6 +1200,8 @@ app.get('/api/settings', ah(async (req, res) => {
     instagramProfile: stored.profile || null,
     connectedAt: stored.connectedAt || '',
     instagramHealth: health || instagramHealth(stored),
+    instagramAccounts: summaries.accounts,
+    defaultIgUserId: summaries.defaultIgUserId,
     setupDone: s.setupDone === true,
     keepServerCopyAfterPublish: s.keepServerCopyAfterPublish === true,
   };
@@ -1153,7 +1229,8 @@ app.post('/api/settings', ah(async (req, res) => {
   await db.saveSettings(req.userId, s);
   const ig = await getInstagramCreds(req);
   const stored = await getInstagramStored(req);
-  res.json({ ok: true, instagramHandle: s.instagramHandle || ig.username || '', instagramConnected: !!(ig.token && ig.igUserId), tokenConfigured: !!(ig.token && ig.igUserId), instagramUsername: ig.username || '', maskedToken: maskToken(ig.token), tokenSource: ig.source, igUserIdSet: !!ig.igUserId, tokenEncrypted: stored.token ? !!stored.encrypted : null, instagramProfile: stored.profile || null, connectedAt: stored.connectedAt || '', instagramHealth: instagramHealth(stored), setupDone: s.setupDone === true, keepServerCopyAfterPublish: s.keepServerCopyAfterPublish === true });
+  const summaries = await instagramAccountSummaries(req.userId);
+  res.json({ ok: true, instagramHandle: s.instagramHandle || ig.username || '', instagramConnected: !!(ig.token && ig.igUserId), tokenConfigured: !!(ig.token && ig.igUserId), instagramUsername: ig.username || '', maskedToken: maskToken(ig.token), tokenSource: ig.source, igUserIdSet: !!ig.igUserId, tokenEncrypted: stored.token ? !!stored.encrypted : null, instagramProfile: stored.profile || null, connectedAt: stored.connectedAt || '', instagramHealth: instagramHealth(stored), instagramAccounts: summaries.accounts, defaultIgUserId: summaries.defaultIgUserId, setupDone: s.setupDone === true, keepServerCopyAfterPublish: s.keepServerCopyAfterPublish === true });
 }));
 
 // ---------- Instagram connect (Meta login only) ----------
@@ -1169,9 +1246,33 @@ app.post('/api/instagram/connect', (req, res) => {
   res.status(410).json({ ok: false, error: 'Pasting a token is no longer supported. Use the \u201cConnect Instagram\u201d button \u2014 one Meta login, and the connection renews itself automatically.' });
 });
 app.post('/api/instagram/disconnect', ah(async (req, res) => {
-  await db.clearInstagram(req.userId);
+  // Per-account disconnect: { igUserId } removes just that account and
+  // leaves the user's other connections (and their queued posts)
+  // untouched. Removing the default promotes the first remaining
+  // account. With no igUserId (older clients), the DEFAULT account —
+  // the one the single-connection UI always showed — is removed; when
+  // it was the only account, that is a full disconnect, as before.
+  const body = req.body || {};
+  let target = body.igUserId ? String(body.igUserId) : '';
+  if (!target) {
+    const { defaultIgUserId } = await db.getInstagramAccounts(req.userId);
+    target = defaultIgUserId || '';
+  }
+  if (target) await db.removeInstagramAccount(req.userId, target);
+  else await db.clearInstagram(req.userId);
   const ig = await getInstagramCreds(req);
-  res.json({ ok: true, instagramConnected: !!(ig.token && ig.igUserId), tokenSource: ig.source, maskedToken: maskToken(ig.token), instagramUsername: ig.username || '' });
+  const summaries = await instagramAccountSummaries(req.userId);
+  res.json({ ok: true, instagramConnected: !!(ig.token && ig.igUserId), tokenSource: ig.source, maskedToken: maskToken(ig.token), instagramUsername: ig.username || '', instagramAccounts: summaries.accounts, defaultIgUserId: summaries.defaultIgUserId });
+}));
+// Choose which connected account is the default (new posts pre-select
+// it, and untargeted posts publish through it).
+app.post('/api/instagram/default', ah(async (req, res) => {
+  const igUserId = req.body && req.body.igUserId ? String(req.body.igUserId) : '';
+  if (!igUserId) return res.status(400).json({ ok: false, error: 'Choose an account to make the default.' });
+  const ok = await db.setDefaultInstagramAccount(req.userId, igUserId);
+  if (!ok) return res.status(404).json({ ok: false, error: 'That Instagram account is not connected.' });
+  const summaries = await instagramAccountSummaries(req.userId);
+  res.json({ ok: true, instagramAccounts: summaries.accounts, defaultIgUserId: summaries.defaultIgUserId });
 }));
 
 // ---------- Instagram connect via Meta login (OAuth, the only flow) ----------
@@ -1415,8 +1516,11 @@ app.get('/api/instagram/callback', ah(async (req, res) => {
       + guidance
     );
   }
-  await db.saveInstagram(userId, {
-    token, igUserId: igAccount.id, username: igAccount.username || '', pageId,
+  // Multi-account: this ADDS the account to the user's connections (or
+  // refreshes it when the same Instagram account reconnects) — an
+  // existing connection for a different account is never replaced.
+  await db.saveInstagramAccount(userId, {
+    token, igUserId: String(igAccount.id), username: igAccount.username || '', pageId,
     connectedAt: new Date().toISOString(),
     tokenExpiresAt: expiresIn > 0 ? new Date(Date.now() + expiresIn * 1000).toISOString() : '',
     tokenNeverExpires: false, tokenType: '', tokenHost: 'facebook',
@@ -1424,7 +1528,7 @@ app.get('/api/instagram/callback', ah(async (req, res) => {
   });
   // Learn the token's real type + exact expiry from Meta right away so
   // the keeper's records are precise from day one.
-  await ensureInstagramTokenFresh(userId, { force: true }).catch(() => null);
+  await ensureInstagramTokenFresh(userId, { force: true, igUserId: String(igAccount.id) }).catch(() => null);
   return igResultPage(res, 200, {
     ok: true,
     title: 'Instagram connected ✓',
@@ -1576,7 +1680,10 @@ app.get('/api/instagram/ig-callback', ah(async (req, res) => {
   }
   const igUserId = String(igAccount.id);
   const username = igAccount.username || '';
-  await db.saveInstagram(userId, {
+  // Multi-account: this ADDS the account to the user's connections (or
+  // refreshes it when the same Instagram account reconnects) — an
+  // existing connection for a different account is never replaced.
+  await db.saveInstagramAccount(userId, {
     token, igUserId, username, pageId,
     connectedAt: new Date().toISOString(),
     tokenExpiresAt: expiresIn > 0 ? new Date(Date.now() + expiresIn * 1000).toISOString() : '',
@@ -1585,7 +1692,7 @@ app.get('/api/instagram/ig-callback', ah(async (req, res) => {
   });
   // Learn the token's real type + exact expiry from Meta right away so
   // the keeper's records are precise from day one.
-  await ensureInstagramTokenFresh(userId, { force: true }).catch(() => null);
+  await ensureInstagramTokenFresh(userId, { force: true, igUserId }).catch(() => null);
   return igResultPage(res, 200, {
     ok: true,
     title: 'Instagram connected ✓',
@@ -1750,7 +1857,29 @@ function validPostInput(b, { requireMedia = true } = {}) {
   if (b.hashtags && b.hashtags.split(/[\s,]+/).filter((t) => t.replace(/^#/, '').trim()).length > 30) return 'Instagram allows at most 30 hashtags per post — remove some and try again.';
   return null;
 }
-function buildPost(b, userId) {
+// Which Instagram account a new/edited post targets. An explicitly
+// requested account must be one of the user's connected accounts —
+// scheduling to an account that is not connected is rejected here, at
+// save time, instead of failing mysteriously at publish time. No
+// request (the common case) targets the user's DEFAULT account, so
+// every post records where it will publish; posts saved before
+// multi-account support carry no target and publish via the default.
+async function postTargetResolver(userId) {
+  const { accounts, defaultIgUserId } = await db.getInstagramAccounts(userId);
+  const byId = new Map(accounts.filter((a) => a.igUserId).map((a) => [String(a.igUserId), a]));
+  const def = byId.get(String(defaultIgUserId || '')) || accounts.find((a) => a.igUserId) || null;
+  return {
+    resolve(requested) {
+      if (requested) {
+        const a = byId.get(String(requested));
+        if (!a) return { error: 'That Instagram account is not connected — connect it in Settings first, or choose a connected account.' };
+        return { igAccountId: a.igUserId || '', igAccountUsername: a.username || '' };
+      }
+      return def ? { igAccountId: def.igUserId || '', igAccountUsername: def.username || '' } : { igAccountId: '', igAccountUsername: '' };
+    },
+  };
+}
+function buildPost(b, userId, target = {}) {
   // Status and liveUrl are server-owned: a post becomes "published"
   // only through the publish flow, which also sets the real liveUrl
   // from Instagram. A client-supplied status/liveUrl is ignored, so a
@@ -1765,6 +1894,10 @@ function buildPost(b, userId) {
     hashtags: b.hashtags || '',
     cta: b.cta || '',
     platform: b.platform || 'Instagram',
+    // The Instagram account this post will publish to (multi-account):
+    // resolved server-side from the composer's choice or the default.
+    igAccountId: target.igAccountId || '',
+    igAccountUsername: target.igAccountUsername || '',
     // Drafts may have no time yet; scheduled posts default to now.
     scheduleTime: b.scheduleTime || (status === 'draft' ? '' : new Date().toISOString()),
     status,
@@ -1795,7 +1928,10 @@ app.post('/api/posts', ah(async (req, res) => {
   const b = req.body || {};
   const err = validPostInput(b);
   if (err) return res.status(400).json({ ok: false, error: err });
-  const post = buildPost(b, req.userId);
+  const resolver = await postTargetResolver(req.userId);
+  const target = resolver.resolve(b.igAccountId);
+  if (target.error) return res.status(400).json({ ok: false, error: target.error });
+  const post = buildPost(b, req.userId, target);
   await db.savePost(post);
   res.json({ ok: true, post });
 }));
@@ -1807,10 +1943,13 @@ app.post('/api/posts/bulk', ah(async (req, res) => {
   if (rows.length > 500) return res.status(400).json({ ok: false, error: 'Import at most 500 posts at a time.' });
   const valid = [];
   const errors = [];
+  const resolver = await postTargetResolver(req.userId);
   rows.forEach((b, i) => {
     const err = validPostInput(b || {});
     if (err) { errors.push(`Row ${i + 1}: ${err}`); return; }
-    valid.push(buildPost(b, req.userId));
+    const target = resolver.resolve((b || {}).igAccountId);
+    if (target.error) { errors.push(`Row ${i + 1}: ${target.error}`); return; }
+    valid.push(buildPost(b, req.userId, target));
   });
   if (valid.length) await db.savePostsBulk(valid);
   res.json({ ok: true, imported: valid.length, failed: rows.length - valid.length, errors: errors.slice(0, 10) });
@@ -1826,6 +1965,19 @@ app.patch('/api/posts/:id', ah(async (req, res) => {
   const allowed = ['mediaUrl', 'mediaType', 'caption', 'hashtags', 'cta', 'platform', 'scheduleTime', 'format', 'posterUrl'];
   const patch = {};
   for (const k of allowed) if (b[k] !== undefined) patch[k] = b[k];
+  // Retargeting a post to another connected account (multi-account):
+  // the account must be connected; an empty value clears the target
+  // (the post then publishes via the default account).
+  if (b.igAccountId !== undefined) {
+    if (!b.igAccountId) { patch.igAccountId = ''; patch.igAccountUsername = ''; }
+    else {
+      const resolver = await postTargetResolver(req.userId);
+      const target = resolver.resolve(b.igAccountId);
+      if (target.error) return res.status(400).json({ ok: false, error: target.error });
+      patch.igAccountId = target.igAccountId;
+      patch.igAccountUsername = target.igAccountUsername;
+    }
+  }
   if (b.status === 'draft' || b.status === 'scheduled') patch.status = b.status;
   // Same poster rule as buildPost: only app-served or web URLs survive.
   if (patch.posterUrl !== undefined && !/^(\/|https?:\/\/)/i.test(patch.posterUrl || '')) patch.posterUrl = '';
@@ -2174,10 +2326,6 @@ async function attemptPublishLocked(userId, post, ig, publicBaseUrl) {
   }
 }
 app.post('/api/posts/:id/publish', ah(async (req, res) => {
-  const ig = await getInstagramCreds(req);
-  if (!ig.token || !ig.igUserId) {
-    return res.status(400).json({ ok: false, error: 'Instagram is not connected — connect Instagram in Settings to publish from here.' });
-  }
   const post = await db.getPost(req.userId, req.params.id);
   if (!post) return res.status(404).json({ ok: false, error: 'That post no longer exists — it may have been deleted.' });
   // Status guard: an already-published post must never run another
@@ -2187,6 +2335,20 @@ app.post('/api/posts/:id/publish', ah(async (req, res) => {
   // lock inside attemptPublish.)
   if (post.status === 'published') {
     return res.status(409).json({ ok: false, error: 'This post is already published — it cannot be published again. Duplicate it if you want to post it again.' });
+  }
+  // Multi-account: publish with the TARGET account's token. A post
+  // whose target account was disconnected fails here with a clear
+  // message + the usual failure notification — it is never silently
+  // published from a different account.
+  const resolved = await resolvePublishCreds(req.userId, post);
+  if (resolved.missing) {
+    const err = missingAccountError(resolved);
+    await markFailed(req.userId, post, err, { isAutoRetry: !!post._autoRetry });
+    return res.status(400).json({ ok: false, error: err });
+  }
+  const ig = resolved.ig;
+  if (!ig.token || !ig.igUserId) {
+    return res.status(400).json({ ok: false, error: 'Instagram is not connected — connect Instagram in Settings to publish from here.' });
   }
   const result = await attemptPublish(req.userId, post, ig, publicBase(req));
   if (result.ok) return res.json({ ok: true, liveUrl: result.liveUrl, mediaId: result.mediaId });
@@ -2217,8 +2379,9 @@ app.post('/api/publish-due', ah(async (req, res) => {
   // Renew the token first if it is inside the window, so a due publish
   // never fails just because the token aged out.
   await ensureInstagramTokenFresh(req.userId).catch(() => null);
-  const ig = await getInstagramCreds(req);
-  if (!ig.token || !ig.igUserId) {
+  const { accounts } = await db.getInstagramAccounts(req.userId);
+  const defaultIg = await getInstagramCreds(req.userId);
+  if ((!defaultIg.token || !defaultIg.igUserId) && accounts.length === 0) {
     return res.status(400).json({ ok: false, error: 'Instagram is not connected — connect Instagram in Settings to publish from here.' });
   }
   const due = await duePostsFor(req.userId, 5);
@@ -2226,7 +2389,23 @@ app.post('/api/publish-due', ah(async (req, res) => {
   const failed = [];
   const retrying = [];
   for (const post of due) {
-    const result = await attemptPublish(req.userId, post, ig, publicBase(req));
+    // Per-post connection (multi-account): keeper first for the
+    // target account, then publish with THAT account's token. A post
+    // whose target was disconnected fails with a clear notification —
+    // never a silent publish from another account.
+    if (post.igAccountId) await ensureInstagramTokenFresh(req.userId, { igUserId: post.igAccountId }).catch(() => null);
+    const resolved = await resolvePublishCreds(req.userId, post);
+    if (resolved.missing) {
+      const err = missingAccountError(resolved);
+      await markFailed(req.userId, post, err, { isAutoRetry: !!post._autoRetry });
+      failed.push({ id: post.id, error: err });
+      continue;
+    }
+    if (!resolved.ig.token || !resolved.ig.igUserId) {
+      failed.push({ id: post.id, error: 'Instagram is not connected — connect Instagram in Settings to publish from here.' });
+      continue;
+    }
+    const result = await attemptPublish(req.userId, post, resolved.ig, publicBase(req));
     if (result.ok) published.push({ id: post.id, liveUrl: result.liveUrl });
     else if (result.retry) retrying.push({ id: post.id, error: result.error });
     else failed.push({ id: post.id, error: result.error });
@@ -2255,12 +2434,24 @@ const cronPublishDue = ah(async (req, res) => {
   const summary = [];
   for (const user of users) {
     await ensureInstagramTokenFresh(user.id).catch(() => null);
-    const ig = await getInstagramCreds(user.id);
-    if (!ig.token || !ig.igUserId) { summary.push({ userId: user.id, skipped: 'instagram-not-connected' }); continue; }
+    const { accounts } = await db.getInstagramAccounts(user.id);
+    const defaultIg = await getInstagramCreds(user.id);
+    if ((!defaultIg.token || !defaultIg.igUserId) && accounts.length === 0) { summary.push({ userId: user.id, skipped: 'instagram-not-connected' }); continue; }
     const due = await duePostsFor(user.id, 3);
     let published = 0; let failed = 0;
     for (const post of due) {
-      const result = await attemptPublish(user.id, post, ig, publicBase(req));
+      // Per-post connection (multi-account): publish with the target
+      // account's token; a disconnected target fails the post with a
+      // notification instead of borrowing another account.
+      if (post.igAccountId) await ensureInstagramTokenFresh(user.id, { igUserId: post.igAccountId }).catch(() => null);
+      const resolved = await resolvePublishCreds(user.id, post);
+      if (resolved.missing) {
+        await markFailed(user.id, post, missingAccountError(resolved), { isAutoRetry: !!post._autoRetry });
+        failed++;
+        continue;
+      }
+      if (!resolved.ig.token || !resolved.ig.igUserId) { failed++; continue; }
+      const result = await attemptPublish(user.id, post, resolved.ig, publicBase(req));
       if (result.ok) published++;
       else if (!result.retry) failed++;
     }
@@ -2290,8 +2481,17 @@ const cronTokenRefresh = ah(async (req, res) => {
   const users = await db.listUsers();
   const summary = [];
   for (const user of users) {
+    // The keeper runs per connection: check the default account (the
+    // historical summary field) AND every other connected account.
     const health = await ensureInstagramTokenFresh(user.id).catch(() => null);
-    summary.push({ userId: user.id, instagram: health });
+    const { accounts, defaultIgUserId } = await db.getInstagramAccounts(user.id);
+    const accountHealths = [];
+    for (const a of accounts) {
+      if (!a.igUserId || a.igUserId === defaultIgUserId) continue;
+      const h = await ensureInstagramTokenFresh(user.id, { igUserId: a.igUserId }).catch(() => null);
+      accountHealths.push({ igUserId: a.igUserId, username: a.username || '', instagram: h });
+    }
+    summary.push({ userId: user.id, instagram: health, accounts: accountHealths });
   }
   res.json({ ok: true, ranAt: new Date().toISOString(), summary });
 });

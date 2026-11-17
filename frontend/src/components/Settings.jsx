@@ -120,19 +120,32 @@ export default function Settings({ settings, dbStatus, onSave, saving, onInstagr
     } finally { setConnectBusy(false) }
   }
 
-  const disconnect = async () => {
+  const disconnect = async (igUserId, uname) => {
     setErr(''); setMsg('')
     setDisconnecting(true)
     try {
-      const res = await api.disconnectInstagram()
+      const res = await api.disconnectInstagram(igUserId)
       setMsg(res.instagramConnected
-        ? 'Saved connection removed. Instagram is still connected via the server environment.'
+        ? `@${uname || 'That account'} disconnected. Your other Instagram accounts stay connected.`
         : 'Instagram disconnected.')
       if (onInstagramChanged) onInstagramChanged()
     } catch (e2) {
       setErr(e2.message || 'Could not disconnect.')
     } finally { setDisconnecting(false) }
   }
+
+  const makeDefault = async (igUserId) => {
+    setErr(''); setMsg('')
+    try {
+      await api.setDefaultInstagramAccount(igUserId)
+      setMsg('Default Instagram account updated — new posts will use it.')
+      if (onInstagramChanged) onInstagramChanged()
+    } catch (e2) {
+      setErr(e2.message || 'Could not set the default account.')
+    }
+  }
+
+  const igAccounts = Array.isArray(settings?.instagramAccounts) ? settings.instagramAccounts : []
 
   return (
     <div>
@@ -192,20 +205,33 @@ export default function Settings({ settings, dbStatus, onSave, saving, onInstagr
             </p>
             <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
               <button type="button" className="btn primary" disabled={connectBusy} onClick={startConnect}>
-                {connectBusy ? 'Opening Instagram login…' : connected ? 'Reconnect Instagram' : 'Connect Instagram'}
+                {connectBusy ? 'Opening Instagram login…' : connected ? 'Connect another Instagram account' : 'Connect Instagram'}
               </button>
               <button type="button" className="btn ghost" disabled={connectBusy} onClick={startFacebookConnect}>
                 or connect via Facebook
               </button>
-              {connected && (
-                <button type="button" className="btn danger" disabled={disconnecting} onClick={disconnect}>
-                  {disconnecting ? 'Disconnecting…' : 'Disconnect'}
-                </button>
-              )}
             </div>
             <p className="muted small" style={{ marginTop: 10 }}>
               Connecting via Facebook uses Meta&apos;s Facebook login instead, and needs your Instagram linked to a Facebook Page.
             </p>
+            {igAccounts.length > 0 && (
+              <div style={{ marginTop: 16 }}>
+                <h3 style={{ marginBottom: 8 }}>Connected accounts</h3>
+                {igAccounts.map((a) => (
+                  <div key={a.igUserId} style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', padding: '10px 0', borderTop: '1px solid var(--line)' }}>
+                    <b style={{ color: 'var(--ink)' }}>@{a.username || a.igUserId}</b>
+                    {a.isDefault
+                      ? <span className="badge brand">Default</span>
+                      : <button type="button" className="btn ghost small" onClick={() => makeDefault(a.igUserId)}>Set as default</button>}
+                    <span className="muted small">{a.health?.tokenNeverExpires ? 'Never expires' : a.health?.needsReconnect ? 'Needs reconnect' : 'Auto-renews'}</span>
+                    <button type="button" className="btn danger small" disabled={disconnecting} onClick={() => disconnect(a.igUserId, a.username)} style={{ marginLeft: 'auto' }}>
+                      {disconnecting ? 'Disconnecting…' : 'Disconnect'}
+                    </button>
+                  </div>
+                ))}
+                <p className="muted small" style={{ marginTop: 8 }}>Each post publishes to the account you pick in the Studio. Disconnecting one account never touches the others — posts scheduled for a disconnected account fail with a clear message instead of posting to the wrong profile.</p>
+              </div>
+            )}
             {err && <div className="alert error">{err}</div>}
             {msg && <div className="alert success">{msg}</div>}
           </div>

@@ -42,11 +42,12 @@ function normaliseRows(rows) {
   })
 }
 
-export default function Bulk({ onImport, posts, onUploadFile }) {
+export default function Bulk({ onImport, posts, onUploadFile, igAccounts, defaultIgUserId }) {
   const [tab, setTab] = useState('csv')
   // "Upload videos" tab: many files at once, one shared caption, and
   // the queue is spread automatically over the chosen times per day.
   const [videoFiles, setVideoFiles] = useState([])
+  const [fAccount, setFAccount] = useState('')
   const [fCaption, setFCaption] = useState('')
   const [fHashtags, setFHashtags] = useState('')
   const [fCta, setFCta] = useState('')
@@ -150,6 +151,7 @@ export default function Bulk({ onImport, posts, onUploadFile }) {
           mediaType: /\.(png|jpe?g|gif|webp|avif)$/i.test(f.name) ? 'image' : 'video',
           posterUrl: item.posterUrl || '',
           format: 'REELS', status: 'scheduled', scheduleTime: slot.when.toISOString(),
+          igAccountId: fAccount || defaultIgUserId || '',
         })
       } catch (e) {
         failures.push(`${f.name}: ${e.message || 'upload failed'}`)
@@ -206,6 +208,16 @@ export default function Bulk({ onImport, posts, onUploadFile }) {
               <input id="fTimes" value={fTimes} onChange={(e) => setFTimes(e.target.value)} placeholder="19:00, 21:00" />
             </div>
           </div>
+          {Array.isArray(igAccounts) && igAccounts.length > 0 && (
+            <div style={{ marginTop: 4 }}>
+              <label htmlFor="fAccount">Instagram account <span className="muted">(every post in this batch)</span></label>
+              <select id="fAccount" value={fAccount || defaultIgUserId || ''} onChange={(e) => setFAccount(e.target.value)}>
+                {igAccounts.map((a) => (
+                  <option key={a.igUserId} value={a.igUserId}>@{a.username || a.igUserId}{a.isDefault ? ' (default)' : ''}</option>
+                ))}
+              </select>
+            </div>
+          )}
           {error && <div className="alert error" style={{ marginTop: 12 }}>{error}</div>}
           {fileResult && (
             <div className={`alert ${fileResult.failures.length ? 'error' : 'success'}`} style={{ marginTop: 12 }}>

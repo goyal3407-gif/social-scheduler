@@ -602,10 +602,10 @@ export default function App() {
         )}
         {tab === 'studio' && (
           <div className="section">
-            <Studio key={`${studioKey}-${editing?.id || 'new'}`} editing={editing} seed={templateSeed ? { caption: templateSeed.text || templateSeed.caption || '', hashtags: templateSeed.hashtags || '', cta: templateSeed.cta || '', mediaUrl: templateSeed.mediaUrl || '', mediaType: templateSeed.mediaType || 'video', posterUrl: templateSeed.posterUrl || '', scheduleTime: templateSeed.scheduleTime || '' } : null} media={media} templates={templates} onSave={handleSavePost} onCancel={() => setTab('queue')} saving={saving} posts={posts} />
+            <Studio key={`${studioKey}-${editing?.id || 'new'}`} editing={editing} seed={templateSeed ? { caption: templateSeed.text || templateSeed.caption || '', hashtags: templateSeed.hashtags || '', cta: templateSeed.cta || '', mediaUrl: templateSeed.mediaUrl || '', mediaType: templateSeed.mediaType || 'video', posterUrl: templateSeed.posterUrl || '', scheduleTime: templateSeed.scheduleTime || '' } : null} media={media} templates={templates} onSave={handleSavePost} onCancel={() => setTab('queue')} saving={saving} posts={posts} igAccounts={settings?.instagramAccounts || []} defaultIgUserId={settings?.defaultIgUserId || ''} />
           </div>
         )}
-        {tab === 'bulk' && <div className="section"><Bulk onImport={handleBulkImport} posts={posts} onUploadFile={handleUpload} /></div>}
+        {tab === 'bulk' && <div className="section"><Bulk onImport={handleBulkImport} posts={posts} onUploadFile={handleUpload} igAccounts={settings?.instagramAccounts || []} defaultIgUserId={settings?.defaultIgUserId || ''} /></div>}
         {tab === 'media' && (
           <div className="section"><MediaLibrary media={media} loading={loading} error={error} onRetry={loadAll}
             onAddLink={handleAddLink} onUpload={handleUpload}
