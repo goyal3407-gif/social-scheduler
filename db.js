@@ -94,8 +94,9 @@ const instagramSchema = new mongoose.Schema({
   // says the token is dead, 'auto-refresh-unavailable' when no renewal
   // path exists for this token type yet.
   tokenExpiresAt: String, tokenNeverExpires: { type: Boolean, default: false },
-  tokenType: String,
+  tokenType: String, tokenHost: String,
   lastTokenCheckAt: String, lastRefreshAt: String, tokenRefreshError: String,
+  lastDebugError: String, lastRefreshError: String,
 });
 const importJobSchema = new mongoose.Schema({
   id: { type: String, unique: true, index: true },
@@ -510,8 +511,9 @@ async function saveSettings(userId, settings) {
 function instagramHealthFields(doc) {
   return {
     tokenExpiresAt: doc.tokenExpiresAt || '', tokenNeverExpires: !!doc.tokenNeverExpires,
-    tokenType: doc.tokenType || '', lastTokenCheckAt: doc.lastTokenCheckAt || '',
+    tokenType: doc.tokenType || '', tokenHost: doc.tokenHost || '', lastTokenCheckAt: doc.lastTokenCheckAt || '',
     lastRefreshAt: doc.lastRefreshAt || '', tokenRefreshError: doc.tokenRefreshError || '',
+    lastDebugError: doc.lastDebugError || '', lastRefreshError: doc.lastRefreshError || '',
   };
 }
 async function getInstagram(userId) {

@@ -390,28 +390,60 @@ const META_APP_ID = process.env.META_APP_ID || '1671693167666941';
 const META_APP_SECRET = process.env.META_APP_SECRET || '';
 const TOKEN_REFRESH_WINDOW_DAYS = 10;
 
+// Returns { data } on success or { error: "Meta's message" } — the error
+// text is Meta's own wording about the token (never the token itself),
+// stored so connection problems are diagnosable instead of silent.
 async function debugInstagramToken(token) {
-  // App access token when the secret is configured; otherwise the token
-  // inspects itself (debug_token allows the token being inspected as the
-  // access_token for its own metadata).
-  const inspector = META_APP_SECRET ? `${META_APP_ID}|${META_APP_SECRET}` : token;
-  const out = await graphGet('https://graph.facebook.com/v27.0/debug_token?input_token=' + encodeURIComponent(token) + '&access_token=' + encodeURIComponent(inspector));
-  if (!out || out.error || !out.data) return null;
-  return out.data;
+  const inspectors = [];
+  if (META_APP_SECRET) inspectors.push(`${META_APP_ID}|${META_APP_SECRET}`);
+  inspectors.push(token); // self-inspection
+  let lastError = 'debug_token returned nothing';
+  for (const inspector of inspectors) {
+    try {
+      const out = await graphGet('https://graph.facebook.com/v27.0/debug_token?input_token=' + encodeURIComponent(token) + '&access_token=' + encodeURIComponent(inspector));
+      if (out && out.data) return { data: out.data };
+      if (out && out.error) lastError = String(out.error.message || out.error.type || 'debug_token error').slice(0, 200);
+    } catch (e) { lastError = String((e && e.message) || e).slice(0, 200); }
+  }
+  return { error: lastError };
 }
 
+// Which host accepts this token? Instagram Login tokens answer on
+// graph.instagram.com; Facebook-host tokens answer on graph.facebook.com
+// via the IG user id. A 200 here proves the token is alive even when
+// debug_token refuses to describe it.
+async function probeInstagramTokenHost(token, igUserId) {
+  try {
+    const me = await graphGet('https://graph.instagram.com/me?fields=id,username&access_token=' + encodeURIComponent(token));
+    if (me && me.id && !me.error) return 'instagram';
+  } catch { /* fall through */ }
+  if (igUserId) {
+    try {
+      const chk = await graphGet('https://graph.facebook.com/v27.0/' + encodeURIComponent(igUserId) + '?fields=username&access_token=' + encodeURIComponent(token));
+      if (chk && chk.id && !chk.error) return 'facebook';
+    } catch { /* fall through */ }
+  }
+  return '';
+}
+
+// Returns { token, expiresIn, via } or { error } with Meta's messages.
 async function tryRefreshInstagramToken(token) {
+  const errors = [];
   try {
     const out = await graphGet('https://graph.instagram.com/refresh_access_token?grant_type=ig_refresh_token&access_token=' + encodeURIComponent(token));
     if (out && out.access_token) return { token: out.access_token, expiresIn: Number(out.expires_in) || 0, via: 'instagram-refresh' };
-  } catch { /* try the next path */ }
+    if (out && out.error) errors.push('instagram-refresh: ' + String(out.error.message || out.error.type || 'error').slice(0, 150));
+  } catch (e) { errors.push('instagram-refresh: ' + String((e && e.message) || e).slice(0, 150)); }
   if (META_APP_SECRET) {
     try {
       const out = await graphGet('https://graph.facebook.com/v27.0/oauth/access_token?grant_type=fb_exchange_token&client_id=' + encodeURIComponent(META_APP_ID) + '&client_secret=' + encodeURIComponent(META_APP_SECRET) + '&fb_exchange_token=' + encodeURIComponent(token));
       if (out && out.access_token) return { token: out.access_token, expiresIn: Number(out.expires_in) || 0, via: 'facebook-exchange' };
-    } catch { /* no path left */ }
+      if (out && out.error) errors.push('facebook-exchange: ' + String(out.error.message || out.error.type || 'error').slice(0, 150));
+    } catch (e) { errors.push('facebook-exchange: ' + String((e && e.message) || e).slice(0, 150)); }
+  } else {
+    errors.push('facebook-exchange: skipped (META_APP_SECRET not set)');
   }
-  return null;
+  return { error: errors.join(' | ') || 'no refresh path succeeded' };
 }
 
 function instagramHealth(stored) {
@@ -428,6 +460,9 @@ function instagramHealth(stored) {
     daysRemaining: neverExpires ? null : (expMs ? Math.max(0, Math.round((expMs - now) / 86400000)) : null),
     lastCheckedAt: stored.lastTokenCheckAt || null,
     lastRefreshAt: stored.lastRefreshAt || null,
+    tokenHost: stored.tokenHost || '',
+    lastDebugError: stored.lastDebugError || null,
+    lastRefreshError: stored.lastRefreshError || null,
     refreshBlocked: stored.tokenRefreshError === 'auto-refresh-unavailable',
     needsReconnect: stored.tokenRefreshError === 'revoked-or-expired',
   };
@@ -447,47 +482,65 @@ async function ensureInstagramTokenFresh(userId, opts = {}) {
     const expMs = stored.tokenExpiresAt ? new Date(stored.tokenExpiresAt).getTime() : 0;
     const daysLeft = stored.tokenNeverExpires ? Infinity : (expMs ? (expMs - now) / 86400000 : null);
     const lastCheck = stored.lastTokenCheckAt ? new Date(stored.lastTokenCheckAt).getTime() : 0;
-    if (!opts.force && lastCheck && now - lastCheck < 24 * 3600 * 1000 && (stored.tokenNeverExpires || (daysLeft !== null && daysLeft > TOKEN_REFRESH_WINDOW_DAYS))) {
+    if (!opts.force && lastCheck && now - lastCheck < 24 * 3600 * 1000
+      && (stored.tokenNeverExpires || (daysLeft !== null && daysLeft > TOKEN_REFRESH_WINDOW_DAYS) || stored.tokenRefreshError === 'auto-refresh-unavailable')) {
       return instagramHealth(stored);
     }
     let current = { ...stored };
-    const dbg = await debugInstagramToken(current.token).catch(() => null);
+    const patch = { lastTokenCheckAt: new Date().toISOString() };
+    const dbgRes = await debugInstagramToken(current.token).catch((e) => ({ error: String((e && e.message) || e).slice(0, 200) }));
+    const dbg = dbgRes && dbgRes.data ? dbgRes.data : null;
     if (dbg) {
-      const patch = { lastTokenCheckAt: new Date().toISOString() };
+      patch.lastDebugError = '';
       if (typeof dbg.type === 'string') patch.tokenType = dbg.type;
       if (dbg.is_valid === false) patch.tokenRefreshError = 'revoked-or-expired';
       else if (current.tokenRefreshError === 'revoked-or-expired') patch.tokenRefreshError = '';
       if (dbg.expires_at === 0) { patch.tokenNeverExpires = true; patch.tokenExpiresAt = ''; }
       else if (dbg.expires_at) { patch.tokenNeverExpires = false; patch.tokenExpiresAt = new Date(dbg.expires_at * 1000).toISOString(); }
-      await db.saveInstagram(userId, patch);
-      current = { ...current, ...patch };
-      if (dbg.is_valid === false) return instagramHealth(current);
+    } else {
+      // debug_token would not describe this token (common for Instagram
+      // Login tokens without an app token). Record Meta's reason and
+      // probe which host accepts it, so we still know it is alive.
+      patch.lastDebugError = (dbgRes && dbgRes.error) || 'debug_token failed';
+      if (!current.tokenHost) {
+        const host = await probeInstagramTokenHost(current.token, current.igUserId).catch(() => '');
+        if (host) patch.tokenHost = host;
+      }
     }
+    await db.saveInstagram(userId, patch);
+    current = { ...current, ...patch };
+    if (dbg && dbg.is_valid === false) return instagramHealth(current);
     const expMs2 = current.tokenExpiresAt ? new Date(current.tokenExpiresAt).getTime() : 0;
     const daysLeft2 = current.tokenNeverExpires ? Infinity : (expMs2 ? (expMs2 - now) / 86400000 : null);
     const anchor = current.lastRefreshAt || current.connectedAt;
     const anchorAgeDays = anchor ? (now - new Date(anchor).getTime()) / 86400000 : 0;
+    // Refresh when the expiry is inside the window — or when the expiry
+    // is unknown and the token is more than a day old: a successful
+    // refresh both renews it AND teaches us the new expiry (expires_in).
     const needsRefresh = !current.tokenNeverExpires
       && ((daysLeft2 !== null && daysLeft2 < TOKEN_REFRESH_WINDOW_DAYS)
-        || (daysLeft2 === null && dbg && anchorAgeDays > 40));
+        || (daysLeft2 === null && anchorAgeDays > 1));
     if (needsRefresh) {
-      const refreshed = await tryRefreshInstagramToken(current.token).catch(() => null);
-      if (refreshed) {
-        const patch = { token: refreshed.token, lastRefreshAt: new Date().toISOString(), lastTokenCheckAt: new Date().toISOString(), tokenRefreshError: '' };
-        if (refreshed.expiresIn > 0) { patch.tokenNeverExpires = false; patch.tokenExpiresAt = new Date(now + refreshed.expiresIn * 1000).toISOString(); }
-        await db.saveInstagram(userId, patch);
-        current = { ...current, ...patch, token: refreshed.token };
-        const dbg2 = await debugInstagramToken(refreshed.token).catch(() => null);
+      const refreshed = await tryRefreshInstagramToken(current.token).catch((e) => ({ error: String((e && e.message) || e).slice(0, 200) }));
+      if (refreshed && refreshed.token) {
+        const patch2 = { token: refreshed.token, lastRefreshAt: new Date().toISOString(), lastTokenCheckAt: new Date().toISOString(), tokenRefreshError: '', lastRefreshError: '', tokenHost: refreshed.via === 'instagram-refresh' ? 'instagram' : (current.tokenHost || '') };
+        if (refreshed.expiresIn > 0) { patch2.tokenNeverExpires = false; patch2.tokenExpiresAt = new Date(now + refreshed.expiresIn * 1000).toISOString(); }
+        await db.saveInstagram(userId, patch2);
+        current = { ...current, ...patch2, token: refreshed.token };
+        const dbg2Res = await debugInstagramToken(refreshed.token).catch(() => null);
+        const dbg2 = dbg2Res && dbg2Res.data ? dbg2Res.data : null;
         if (dbg2) {
-          const p2 = {};
-          if (typeof dbg2.type === 'string') p2.tokenType = dbg2.type;
-          if (dbg2.expires_at === 0) { p2.tokenNeverExpires = true; p2.tokenExpiresAt = ''; }
-          else if (dbg2.expires_at) { p2.tokenNeverExpires = false; p2.tokenExpiresAt = new Date(dbg2.expires_at * 1000).toISOString(); }
-          if (Object.keys(p2).length) { await db.saveInstagram(userId, p2); current = { ...current, ...p2 }; }
+          const p3 = { lastDebugError: '' };
+          if (typeof dbg2.type === 'string') p3.tokenType = dbg2.type;
+          if (dbg2.expires_at === 0) { p3.tokenNeverExpires = true; p3.tokenExpiresAt = ''; }
+          else if (dbg2.expires_at) { p3.tokenNeverExpires = false; p3.tokenExpiresAt = new Date(dbg2.expires_at * 1000).toISOString(); }
+          await db.saveInstagram(userId, p3);
+          current = { ...current, ...p3 };
         }
-      } else if (current.tokenRefreshError !== 'auto-refresh-unavailable') {
-        await db.saveInstagram(userId, { tokenRefreshError: 'auto-refresh-unavailable' });
-        current = { ...current, tokenRefreshError: 'auto-refresh-unavailable' };
+      } else {
+        const patch2 = { tokenRefreshError: 'auto-refresh-unavailable', lastRefreshError: ((refreshed && refreshed.error) || 'refresh failed').slice(0, 300) };
+        await db.saveInstagram(userId, patch2);
+        current = { ...current, ...patch2 };
       }
     }
     return instagramHealth(current);
@@ -660,7 +713,7 @@ app.post('/api/instagram/connect', ah(async (req, res) => {
     return res.status(400).json({ ok: false, error: friendlyGraphError(data, 'Instagram rejected this token. Generate a fresh token in the Meta app dashboard and try again.') });
   }
   if (!data.id) return res.status(400).json({ ok: false, error: 'Instagram did not recognise this token for that User ID. Check the User ID and generate a fresh token, then try again.' });
-  await db.saveInstagram(req.userId, { token, igUserId, username: data.username || '', connectedAt: new Date().toISOString(), tokenExpiresAt: '', tokenNeverExpires: false, tokenType: '', lastTokenCheckAt: '', lastRefreshAt: '', tokenRefreshError: '' });
+  await db.saveInstagram(req.userId, { token, igUserId, username: data.username || '', connectedAt: new Date().toISOString(), tokenExpiresAt: '', tokenNeverExpires: false, tokenType: '', tokenHost: '', lastTokenCheckAt: '', lastRefreshAt: '', tokenRefreshError: '', lastDebugError: '', lastRefreshError: '' });
   // Learn the token's real type + expiry from Meta right away so the
   // keeper can renew it before it expires (no more manual re-pasting).
   const health = await ensureInstagramTokenFresh(req.userId, { force: true }).catch(() => null);
