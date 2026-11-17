@@ -8,8 +8,10 @@
 // Login: email + password accounts (first user is the owner), scrypt hashes,
 // HMAC-signed httpOnly session cookie (SESSION_SECRET from env — set it in
 // Vercel or logins die on every redeploy/restart).
-// Instagram token: paste it in Settings (verified live, encrypted at rest
-// in MongoDB) or set INSTAGRAM_ACCESS_TOKEN / IG_USER_ID env vars.
+// Instagram connection: "Connect Instagram" Meta login (OAuth) in Settings
+// is the primary flow; pasting a token there is the manual fallback. Either
+// way the token is verified live and stored encrypted at rest in MongoDB.
+// INSTAGRAM_ACCESS_TOKEN / IG_USER_ID env vars are the last-resort fallback.
 // Never commit a token, a password hash, or any credential.
 const express = require('express');
 const fs = require('fs');
@@ -389,6 +391,16 @@ async function igConfigured(req) { const c = await getInstagramCreds(req); retur
 const META_APP_ID = process.env.META_APP_ID || '1671693167666941';
 const META_APP_SECRET = process.env.META_APP_SECRET || '';
 const TOKEN_REFRESH_WINDOW_DAYS = 10;
+// "Connect Instagram" (Facebook Login for Business / Unified Login): the
+// user approves access in Meta's own dialog — no token pasting — and the
+// callback exchanges the returned code for a long-lived token that the
+// keeper above then renews automatically. The config ID and app ID are
+// public identifiers (they appear in the dialog URL); the app secret
+// stays in env only. The redirect URI must match the one configured in
+// the Meta app dashboard EXACTLY.
+const GRAPH_API_VERSION = 'v27.0';
+const META_LOGIN_CONFIG_ID = process.env.META_LOGIN_CONFIG_ID || '2385364258963804';
+const META_OAUTH_REDIRECT_URI = process.env.META_OAUTH_REDIRECT_URI || 'https://social-scheduler-one-sandy.vercel.app/api/instagram/callback';
 
 // Returns { data } on success or { error: "Meta's message" } — the error
 // text is Meta's own wording about the token (never the token itself),
@@ -733,6 +745,117 @@ app.post('/api/instagram/disconnect', ah(async (req, res) => {
   await db.clearInstagram(req.userId);
   const ig = await getInstagramCreds(req);
   res.json({ ok: true, instagramConnected: !!(ig.token && ig.igUserId), tokenSource: ig.source, maskedToken: maskToken(ig.token), instagramUsername: ig.username || '' });
+}));
+
+// ---------- Instagram connect via Meta login (OAuth, primary flow) ----------
+// GET /api/instagram/connect sends the logged-in user to Meta's Facebook
+// Login for Business dialog; Meta returns them to the callback with a
+// short-lived code; the callback exchanges it (code -> short-lived ->
+// long-lived), finds the Instagram professional account linked to one of
+// the user's Facebook Pages, and stores the long-lived token encrypted —
+// exactly like the paste flow, so the token keeper renews it the same
+// way. One login, unlimited use: the user only repeats this if Meta
+// revokes the connection. The OAuth `state` is HMAC-signed with the
+// session secret, bound to the session user, and expires in 10 minutes.
+// Codes and tokens are never logged (the request logger records paths
+// only, never query strings).
+const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
+function signOAuthState(userId) {
+  const exp = Date.now() + OAUTH_STATE_TTL_MS;
+  const payload = `igstate.${userId}.${crypto.randomBytes(16).toString('hex')}.${exp}`;
+  const sig = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('hex');
+  return Buffer.from(payload, 'utf8').toString('base64url') + '.' + sig;
+}
+function verifyOAuthState(state, userId) {
+  try {
+    if (!state || typeof state !== 'string') return false;
+    const dot = state.lastIndexOf('.');
+    if (dot < 0) return false;
+    const payload = Buffer.from(state.slice(0, dot), 'base64url').toString('utf8');
+    const sig = state.slice(dot + 1);
+    const expected = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('hex');
+    const a = Buffer.from(sig, 'utf8'); const b = Buffer.from(expected, 'utf8');
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return false;
+    const parts = payload.split('.');
+    if (parts.length !== 4 || parts[0] !== 'igstate' || parts[1] !== userId) return false;
+    if (!parts[3] || Number(parts[3]) < Date.now()) return false;
+    return true;
+  } catch { return false; }
+}
+app.get('/api/instagram/connect', (req, res) => {
+  // Login is enforced by the /api auth middleware before this runs.
+  const dialog = 'https://www.facebook.com/' + GRAPH_API_VERSION + '/dialog/oauth'
+    + '?client_id=' + encodeURIComponent(META_APP_ID)
+    + '&config_id=' + encodeURIComponent(META_LOGIN_CONFIG_ID)
+    + '&response_type=code'
+    + '&redirect_uri=' + encodeURIComponent(META_OAUTH_REDIRECT_URI)
+    + '&state=' + encodeURIComponent(signOAuthState(req.userId));
+  res.redirect(302, dialog);
+});
+app.get('/api/instagram/callback', ah(async (req, res) => {
+  const back = (params) => res.redirect(302, '/?' + new URLSearchParams(params).toString());
+  const q = req.query || {};
+  if (q.error) return back({ ig_oauth: 'error', ig_reason: 'denied' });
+  const code = String(q.code || '');
+  if (!code || !verifyOAuthState(String(q.state || ''), req.userId)) {
+    return back({ ig_oauth: 'error', ig_reason: 'state' });
+  }
+  if (!META_APP_SECRET) return back({ ig_oauth: 'error', ig_reason: 'config' });
+  const oauthBase = 'https://graph.facebook.com/' + GRAPH_API_VERSION + '/oauth/access_token';
+  // 1) code -> short-lived user token.
+  let shortTok = null;
+  try {
+    shortTok = await graphGet(oauthBase
+      + '?client_id=' + encodeURIComponent(META_APP_ID)
+      + '&client_secret=' + encodeURIComponent(META_APP_SECRET)
+      + '&redirect_uri=' + encodeURIComponent(META_OAUTH_REDIRECT_URI)
+      + '&code=' + encodeURIComponent(code));
+  } catch { /* handled below as an exchange failure */ }
+  if (!shortTok || !shortTok.access_token) return back({ ig_oauth: 'error', ig_reason: 'exchange' });
+  // 2) short-lived -> long-lived (~60 days; the keeper renews it from here).
+  let longTok = null;
+  try {
+    longTok = await graphGet(oauthBase
+      + '?grant_type=fb_exchange_token'
+      + '&client_id=' + encodeURIComponent(META_APP_ID)
+      + '&client_secret=' + encodeURIComponent(META_APP_SECRET)
+      + '&fb_exchange_token=' + encodeURIComponent(shortTok.access_token));
+  } catch { /* handled below */ }
+  if (!longTok || !longTok.access_token) return back({ ig_oauth: 'error', ig_reason: 'exchange' });
+  const token = longTok.access_token;
+  const expiresIn = Number(longTok.expires_in) || 0;
+  // 3) Resolve the Instagram professional account: the user's Pages, then
+  // each Page's linked instagram_business_account. First match wins.
+  let pages = null;
+  try {
+    pages = await graphGet('https://graph.facebook.com/' + GRAPH_API_VERSION + '/me/accounts?fields=id,name&access_token=' + encodeURIComponent(token));
+  } catch { /* handled below */ }
+  const pageList = pages && Array.isArray(pages.data) ? pages.data : [];
+  let igAccount = null;
+  let pageId = '';
+  for (const page of pageList) {
+    if (!page || !page.id) continue;
+    try {
+      const p = await graphGet('https://graph.facebook.com/' + GRAPH_API_VERSION + '/' + encodeURIComponent(page.id) + '?fields=instagram_business_account{id,username}&access_token=' + encodeURIComponent(token));
+      if (p && p.instagram_business_account && p.instagram_business_account.id) {
+        igAccount = p.instagram_business_account;
+        pageId = page.id;
+        break;
+      }
+    } catch { /* try the next Page */ }
+  }
+  if (!igAccount) return back({ ig_oauth: 'error', ig_reason: 'no_instagram' });
+  await db.saveInstagram(req.userId, {
+    token, igUserId: igAccount.id, username: igAccount.username || '', pageId,
+    connectedAt: new Date().toISOString(),
+    tokenExpiresAt: expiresIn > 0 ? new Date(Date.now() + expiresIn * 1000).toISOString() : '',
+    tokenNeverExpires: false, tokenType: '', tokenHost: 'facebook',
+    lastTokenCheckAt: '', lastRefreshAt: '', tokenRefreshError: '', lastDebugError: '', lastRefreshError: '',
+  });
+  // Learn the token's real type + exact expiry from Meta right away so
+  // the keeper's records are precise from day one.
+  await ensureInstagramTokenFresh(req.userId, { force: true }).catch(() => null);
+  return back({ ig_oauth: 'success', ig_user: igAccount.username || '' });
 }));
 
 // ---------- Instagram import (profile + existing media) ----------

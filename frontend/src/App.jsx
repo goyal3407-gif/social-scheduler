@@ -31,7 +31,11 @@ const NAV = [
 ]
 
 export default function App() {
-  const [tab, setTab] = useState('home')
+  // Returning from the Meta "Connect Instagram" login lands on
+  // /?ig_oauth=... — open Settings directly so its result banner shows.
+  const [tab, setTab] = useState(() => {
+    try { return new URLSearchParams(window.location.search).has('ig_oauth') ? 'settings' : 'home' } catch { return 'home' }
+  })
   const [theme, setTheme] = useState(() => {
     try { return localStorage.getItem('ss-theme') || (window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') } catch { return 'light' }
   })
