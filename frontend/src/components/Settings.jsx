@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api, openInstagramConnect } from '../api.js'
+import { api, openInstagramConnect, openInstagramDirectConnect } from '../api.js'
 
 export default function Settings({ settings, dbStatus, onSave, saving, onInstagramChanged, user, onAccountDeleted }) {
   const [handle, setHandle] = useState('')
@@ -102,12 +102,21 @@ export default function Settings({ settings, dbStatus, onSave, saving, onInstagr
     setErr(''); setMsg('')
     setConnectBusy(true)
     try {
+      await openInstagramDirectConnect()
+      // In the app, the Instagram login is now open in the system
+      // browser and this screen stays put; in a web browser this tab
+      // has navigated away. The focus/visibility refresh above updates
+      // the status when the user returns.
+      setMsg('Instagram login opened — approve access there, then come back here. This screen updates itself when you return.')
+    } finally { setConnectBusy(false) }
+  }
+
+  const startFacebookConnect = async () => {
+    setErr(''); setMsg('')
+    setConnectBusy(true)
+    try {
       await openInstagramConnect()
-      // In the app, the Meta login is now open in the system browser and
-      // this screen stays put; in a web browser this tab has navigated
-      // away. The focus/visibility refresh above updates the status
-      // when the user returns.
-      setMsg('Meta login opened — approve access there, then come back here. This screen updates itself when you return.')
+      setMsg('Facebook login opened — approve access there, then come back here. This screen updates itself when you return.')
     } finally { setConnectBusy(false) }
   }
 
@@ -128,7 +137,7 @@ export default function Settings({ settings, dbStatus, onSave, saving, onInstagr
   return (
     <div>
       <h2 className="section-title">Settings</h2>
-      <p className="section-sub">Connect Instagram so “Publish now” can go live. One login with Meta — the connection is kept on the server and renews itself automatically.</p>
+      <p className="section-sub">Connect Instagram so “Publish now” can go live. One login with Instagram — the connection is kept on the server and renews itself automatically.</p>
       {dbStatus && (dbStatus.db !== 'mongodb' || !dbStatus.sessionSecretFromEnv) && (
         <div className="alert error" role="alert" style={{ marginBottom: 16 }}>
           <b>Server setup needs attention.</b>{' '}
@@ -179,11 +188,14 @@ export default function Settings({ settings, dbStatus, onSave, saving, onInstagr
               <div className="warn amber" style={{ marginTop: 12 }}><div><b>Automatic renewal could not run for this connection.</b> The app will keep checking, but if it reaches its expiry date you will need to reconnect once with the button below.{(health.lastDebugError || health.lastRefreshError) ? <> Meta&apos;s reason: <i>{health.lastRefreshError || health.lastDebugError}</i></> : ''}</div></div>
             )}
             <p className="muted small" style={{ marginTop: 14 }}>
-              One login with Meta. Meta opens its own login page, you approve access once, and from then on the connection <b style={{ color: 'var(--ink)' }}>renews itself automatically</b>. Your Instagram must be a Business or Creator account linked to a Facebook Page.
+              One login with Instagram. Instagram opens its own login page, you approve access once, and from then on the connection <b style={{ color: 'var(--ink)' }}>renews itself automatically</b>. Your Instagram must be a Business or Creator account — no Facebook account needed.
             </p>
             <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
               <button type="button" className="btn primary" disabled={connectBusy} onClick={startConnect}>
-                {connectBusy ? 'Opening Meta login…' : connected ? 'Reconnect Instagram' : 'Connect Instagram'}
+                {connectBusy ? 'Opening Instagram login…' : connected ? 'Reconnect Instagram' : 'Connect Instagram'}
+              </button>
+              <button type="button" className="btn ghost" disabled={connectBusy} onClick={startFacebookConnect}>
+                or connect via Facebook
               </button>
               {connected && (
                 <button type="button" className="btn danger" disabled={disconnecting} onClick={disconnect}>
@@ -191,6 +203,9 @@ export default function Settings({ settings, dbStatus, onSave, saving, onInstagr
                 </button>
               )}
             </div>
+            <p className="muted small" style={{ marginTop: 10 }}>
+              Connecting via Facebook uses Meta&apos;s Facebook login instead, and needs your Instagram linked to a Facebook Page.
+            </p>
             {err && <div className="alert error">{err}</div>}
             {msg && <div className="alert success">{msg}</div>}
           </div>

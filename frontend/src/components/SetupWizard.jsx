@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import { api, openInstagramConnect } from '../api.js'
+import { api, openInstagramConnect, openInstagramDirectConnect } from '../api.js'
 
 // Two-step setup wizard shown after first login:
-// 1. Connect Instagram (Meta login, verified live).
+// 1. Connect Instagram (direct Instagram Login; Facebook login as the
+//    secondary route for Page-linked accounts).
 // 2. Import the connected account's profile + existing posts.
 // Followers and DMs cannot be imported — Meta does not allow it.
 // Either step can be skipped.
@@ -29,11 +30,21 @@ export default function SetupWizard({ settings, onDone, onInstagramChanged }) {
     setErr(''); setConnectMsg('')
     setConnectBusy(true)
     try {
+      await openInstagramDirectConnect()
+      // In the app, the Instagram login is now open in the system
+      // browser and this screen stays put; the focus/visibility
+      // refresh below flips Step 1 to "Already connected" when the
+      // user returns.
+      setConnectMsg('Instagram login opened — approve access there, then come back here. This screen updates itself when you return.')
+    } finally { setConnectBusy(false) }
+  }
+
+  const startFacebookConnect = async () => {
+    setErr(''); setConnectMsg('')
+    setConnectBusy(true)
+    try {
       await openInstagramConnect()
-      // In the app, the Meta login is now open in the system browser and
-      // this screen stays put; the focus/visibility refresh below flips
-      // Step 1 to "Already connected" when the user returns.
-      setConnectMsg('Meta login opened — approve access there, then come back here. This screen updates itself when you return.')
+      setConnectMsg('Facebook login opened — approve access there, then come back here. This screen updates itself when you return.')
     } finally { setConnectBusy(false) }
   }
 
@@ -91,7 +102,7 @@ export default function SetupWizard({ settings, onDone, onInstagramChanged }) {
         {['Connect Instagram', 'Import your posts'].map((label, i) => (
           <button key={label} type="button" className={`step ${step === i + 1 ? 'active' : ''}`} onClick={() => setStep(i + 1)}>
             <b><span className="step-num">{i + 1}</span>{label}</b>
-            <span className="muted small">{['Log in with Meta, approve once', 'Profile + existing media into your library'][i]}</span>
+            <span className="muted small">{['Log in with Instagram, approve once', 'Profile + existing media into your library'][i]}</span>
           </button>
         ))}
       </div>
@@ -100,18 +111,19 @@ export default function SetupWizard({ settings, onDone, onInstagramChanged }) {
         <div className="card">
           <h2>Step 1 — Connect Instagram</h2>
           {settings?.instagramConnected ? (
-            <p className="muted small" style={{ marginTop: 8 }}>Already connected{settings.instagramUsername ? ` as @${settings.instagramUsername}` : ''}. You can reconnect with a fresh Meta login, or continue.</p>
+            <p className="muted small" style={{ marginTop: 8 }}>Already connected{settings.instagramUsername ? ` as @${settings.instagramUsername}` : ''}. You can reconnect with a fresh Instagram login, or continue.</p>
           ) : (
             <p className="muted small" style={{ marginTop: 8 }}>
-              Tap the button and log in with Meta — Meta opens its own login page, you approve access once, and from then on the connection renews itself automatically. Your Instagram must be a Business or Creator account linked to a Facebook Page.
+              Tap the button and log in with Instagram — Instagram opens its own login page, you approve access once, and from then on the connection renews itself automatically. Your Instagram must be a Business or Creator account — no Facebook account needed.
             </p>
           )}
           {err && <div className="alert error">{err}</div>}
           {connectMsg && <div className="alert success">{connectMsg}</div>}
           <div style={{ display: 'flex', gap: 8, marginTop: 16, flexWrap: 'wrap' }}>
             <button type="button" className="btn primary" disabled={connectBusy} onClick={startConnect}>
-              {connectBusy ? 'Opening Meta login…' : settings?.instagramConnected ? 'Reconnect Instagram' : 'Connect Instagram'}
+              {connectBusy ? 'Opening Instagram login…' : settings?.instagramConnected ? 'Reconnect Instagram' : 'Connect Instagram'}
             </button>
+            <button type="button" className="btn ghost" disabled={connectBusy} onClick={startFacebookConnect}>or connect via Facebook</button>
             {settings?.instagramConnected && <button type="button" className="btn ghost" onClick={() => setStep(2)}>Continue →</button>}
             <button type="button" className="btn ghost" disabled={finishing} onClick={markDone}>Skip setup</button>
           </div>

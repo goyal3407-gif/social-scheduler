@@ -241,7 +241,7 @@ app.use('/api', ah(async (req, res, next) => {
   // login — e.g. the system browser the Android app hands off to — has
   // no session cookie, so these two GETs must not require one; without
   // valid self-authentication they answer with a friendly HTML page.
-  if (req.method === 'GET' && (req.path === '/instagram/connect' || req.path === '/instagram/callback')) return next();
+  if (req.method === 'GET' && (req.path === '/instagram/connect' || req.path === '/instagram/callback' || req.path === '/instagram/ig-connect' || req.path === '/instagram/ig-callback')) return next();
   return requireAuth(req, res, next);
 }));
 
@@ -369,12 +369,21 @@ async function getInstagramStored(x) {
   const s = await db.getInstagram(userId);
   return s && typeof s === 'object' ? s : {};
 }
+// Which Graph host serves a stored connection: Instagram Login tokens
+// live on graph.instagram.com (unversioned paths); Facebook Login
+// tokens live on graph.facebook.com (versioned paths). Records with no
+// host recorded (legacy rows, env-var tokens) are Facebook-host, as
+// they always were. Every Graph call that operates on a stored
+// connection must build its URL from this helper.
+function graphApiBase(tokenHost) {
+  return tokenHost === 'instagram' ? 'https://graph.instagram.com' : 'https://graph.facebook.com/' + GRAPH_API_VERSION;
+}
 async function getInstagramCreds(x) {
   const userId = uidOf(x);
   const stored = await getInstagramStored(userId);
   const token = stored.token || process.env.INSTAGRAM_ACCESS_TOKEN || '';
   const igUserId = stored.igUserId || process.env.IG_USER_ID || '';
-  return { token, igUserId, username: stored.username || '', source: stored.token ? 'stored' : (process.env.INSTAGRAM_ACCESS_TOKEN ? 'env' : 'none') };
+  return { token, igUserId, username: stored.username || '', tokenHost: stored.tokenHost || '', pageId: stored.pageId || '', source: stored.token ? 'stored' : (process.env.INSTAGRAM_ACCESS_TOKEN ? 'env' : 'none') };
 }
 function maskToken(t) {
   if (!t) return '';
@@ -409,18 +418,45 @@ const TOKEN_REFRESH_WINDOW_DAYS = 10;
 const GRAPH_API_VERSION = 'v27.0';
 const META_LOGIN_CONFIG_ID = process.env.META_LOGIN_CONFIG_ID || '2385364258963804';
 const META_OAUTH_REDIRECT_URI = process.env.META_OAUTH_REDIRECT_URI || 'https://social-scheduler-one-sandy.vercel.app/api/instagram/callback';
+// "Instagram API with Instagram Login" (direct Instagram login): the
+// user logs in with Instagram itself — no Facebook account and no
+// Facebook Page needed. These are the INSTAGRAM app's own credentials
+// (Meta dashboard > Instagram API > API setup with Instagram login),
+// NOT the Facebook app's above. Until both are set in env, the direct
+// flow answers with a friendly "not configured yet" page and the
+// Facebook flow above remains the working route. The redirect URI must
+// match the Instagram app's Valid OAuth Redirect URIs EXACTLY.
+const INSTAGRAM_APP_ID = process.env.INSTAGRAM_APP_ID || '';
+const INSTAGRAM_APP_SECRET = process.env.INSTAGRAM_APP_SECRET || '';
+const IG_LOGIN_REDIRECT_URI = process.env.IG_LOGIN_REDIRECT_URI || 'https://social-scheduler-one-sandy.vercel.app/api/instagram/ig-callback';
+const IG_LOGIN_SCOPE = 'instagram_business_basic,instagram_business_content_publish';
+function instagramLoginConfigured() { return !!(INSTAGRAM_APP_ID && INSTAGRAM_APP_SECRET); }
 
 // Returns { data } on success or { error: "Meta's message" } — the error
 // text is Meta's own wording about the token (never the token itself),
 // stored so connection problems are diagnosable instead of silent.
-async function debugInstagramToken(token) {
+// Host-aware: Instagram Login tokens are debugged on
+// graph.instagram.com (inspected by the Instagram app's token when
+// configured, else self-inspection); Facebook Login tokens keep the
+// original graph.facebook.com attempts, unchanged and in the same
+// order. For an Instagram-host token the Facebook attempts remain as a
+// harmless fallback.
+async function debugInstagramToken(token, tokenHost) {
+  const attempts = [];
+  if (tokenHost === 'instagram') {
+    const igInspectors = [];
+    if (INSTAGRAM_APP_ID && INSTAGRAM_APP_SECRET) igInspectors.push(`${INSTAGRAM_APP_ID}|${INSTAGRAM_APP_SECRET}`);
+    igInspectors.push(token); // self-inspection
+    for (const inspector of igInspectors) attempts.push(['https://graph.instagram.com/debug_token', inspector]);
+  }
   const inspectors = [];
   if (META_APP_SECRET) inspectors.push(`${META_APP_ID}|${META_APP_SECRET}`);
   inspectors.push(token); // self-inspection
+  for (const inspector of inspectors) attempts.push(['https://graph.facebook.com/v27.0/debug_token', inspector]);
   let lastError = 'debug_token returned nothing';
-  for (const inspector of inspectors) {
+  for (const [endpoint, inspector] of attempts) {
     try {
-      const out = await graphGet('https://graph.facebook.com/v27.0/debug_token?input_token=' + encodeURIComponent(token) + '&access_token=' + encodeURIComponent(inspector));
+      const out = await graphGet(endpoint + '?input_token=' + encodeURIComponent(token) + '&access_token=' + encodeURIComponent(inspector));
       if (out && out.data) return { data: out.data };
       if (out && out.error) lastError = String(out.error.message || out.error.type || 'debug_token error').slice(0, 200);
     } catch (e) { lastError = String((e && e.message) || e).slice(0, 200); }
@@ -453,21 +489,31 @@ async function probeInstagramTokenHost(token, igUserId) {
 }
 
 // Returns { token, expiresIn, via } or { error } with Meta's messages.
-async function tryRefreshInstagramToken(token) {
+// Host-aware: a token is renewed only on its own host — Instagram
+// Login tokens via ig_refresh_token on graph.instagram.com, Facebook
+// Login tokens via fb_exchange_token on graph.facebook.com (an
+// exchange on the wrong host/app can never succeed). When the host is
+// not recorded yet, both paths are tried in the original order, which
+// is how legacy records behaved.
+async function tryRefreshInstagramToken(token, tokenHost) {
   const errors = [];
-  try {
-    const out = await graphGet('https://graph.instagram.com/refresh_access_token?grant_type=ig_refresh_token&access_token=' + encodeURIComponent(token));
-    if (out && out.access_token) return { token: out.access_token, expiresIn: Number(out.expires_in) || 0, via: 'instagram-refresh' };
-    if (out && out.error) errors.push('instagram-refresh: ' + String(out.error.message || out.error.type || 'error').slice(0, 150));
-  } catch (e) { errors.push('instagram-refresh: ' + String((e && e.message) || e).slice(0, 150)); }
-  if (META_APP_SECRET) {
+  if (tokenHost !== 'facebook') {
     try {
-      const out = await graphGet('https://graph.facebook.com/v27.0/oauth/access_token?grant_type=fb_exchange_token&client_id=' + encodeURIComponent(META_APP_ID) + '&client_secret=' + encodeURIComponent(META_APP_SECRET) + '&fb_exchange_token=' + encodeURIComponent(token));
-      if (out && out.access_token) return { token: out.access_token, expiresIn: Number(out.expires_in) || 0, via: 'facebook-exchange' };
-      if (out && out.error) errors.push('facebook-exchange: ' + String(out.error.message || out.error.type || 'error').slice(0, 150));
-    } catch (e) { errors.push('facebook-exchange: ' + String((e && e.message) || e).slice(0, 150)); }
-  } else {
-    errors.push('facebook-exchange: skipped (META_APP_SECRET not set)');
+      const out = await graphGet('https://graph.instagram.com/refresh_access_token?grant_type=ig_refresh_token&access_token=' + encodeURIComponent(token));
+      if (out && out.access_token) return { token: out.access_token, expiresIn: Number(out.expires_in) || 0, via: 'instagram-refresh' };
+      if (out && out.error) errors.push('instagram-refresh: ' + String(out.error.message || out.error.type || 'error').slice(0, 150));
+    } catch (e) { errors.push('instagram-refresh: ' + String((e && e.message) || e).slice(0, 150)); }
+  }
+  if (tokenHost !== 'instagram') {
+    if (META_APP_SECRET) {
+      try {
+        const out = await graphGet('https://graph.facebook.com/v27.0/oauth/access_token?grant_type=fb_exchange_token&client_id=' + encodeURIComponent(META_APP_ID) + '&client_secret=' + encodeURIComponent(META_APP_SECRET) + '&fb_exchange_token=' + encodeURIComponent(token));
+        if (out && out.access_token) return { token: out.access_token, expiresIn: Number(out.expires_in) || 0, via: 'facebook-exchange' };
+        if (out && out.error) errors.push('facebook-exchange: ' + String(out.error.message || out.error.type || 'error').slice(0, 150));
+      } catch (e) { errors.push('facebook-exchange: ' + String((e && e.message) || e).slice(0, 150)); }
+    } else {
+      errors.push('facebook-exchange: skipped (META_APP_SECRET not set)');
+    }
   }
   return { error: errors.join(' | ') || 'no refresh path succeeded' };
 }
@@ -514,7 +560,7 @@ async function ensureInstagramTokenFresh(userId, opts = {}) {
     }
     let current = { ...stored };
     const patch = { lastTokenCheckAt: new Date().toISOString() };
-    const dbgRes = await debugInstagramToken(current.token).catch((e) => ({ error: String((e && e.message) || e).slice(0, 200) }));
+    const dbgRes = await debugInstagramToken(current.token, current.tokenHost).catch((e) => ({ error: String((e && e.message) || e).slice(0, 200) }));
     const dbg = dbgRes && dbgRes.data ? dbgRes.data : null;
     if (dbg) {
       patch.lastDebugError = '';
@@ -551,13 +597,13 @@ async function ensureInstagramTokenFresh(userId, opts = {}) {
       && ((daysLeft2 !== null && daysLeft2 < TOKEN_REFRESH_WINDOW_DAYS)
         || (daysLeft2 === null && anchorAgeDays > 1));
     if (needsRefresh) {
-      const refreshed = await tryRefreshInstagramToken(current.token).catch((e) => ({ error: String((e && e.message) || e).slice(0, 200) }));
+      const refreshed = await tryRefreshInstagramToken(current.token, current.tokenHost).catch((e) => ({ error: String((e && e.message) || e).slice(0, 200) }));
       if (refreshed && refreshed.token) {
         const patch2 = { token: refreshed.token, lastRefreshAt: new Date().toISOString(), lastTokenCheckAt: new Date().toISOString(), tokenRefreshError: '', lastRefreshError: '', tokenHost: refreshed.via === 'instagram-refresh' ? 'instagram' : (current.tokenHost || '') };
         if (refreshed.expiresIn > 0) { patch2.tokenNeverExpires = false; patch2.tokenExpiresAt = new Date(now + refreshed.expiresIn * 1000).toISOString(); }
         await db.saveInstagram(userId, patch2);
         current = { ...current, ...patch2, token: refreshed.token };
-        const dbg2Res = await debugInstagramToken(refreshed.token).catch(() => null);
+        const dbg2Res = await debugInstagramToken(refreshed.token, refreshed.via === 'instagram-refresh' ? 'instagram' : current.tokenHost).catch(() => null);
         const dbg2 = dbg2Res && dbg2Res.data ? dbg2Res.data : null;
         if (dbg2) {
           const p3 = { lastDebugError: '' };
@@ -635,6 +681,7 @@ app.get('/api/db-status', ah(async (req, res) => {
     sessionSecretFromEnv: s.sessionSecretFromEnv,
     tokenEncryptionAvailable: s.tokenEncryptionAvailable,
     metaAppSecretConfigured: !!META_APP_SECRET,
+    instagramLoginConfigured: instagramLoginConfigured(),
     instagram: ownerInstagram,
     instagramDiag: igDiag,
     lastError: s.lastError,
@@ -716,6 +763,17 @@ app.post('/api/settings', ah(async (req, res) => {
 // a 404. Stored connections and the token keeper are unaffected.
 async function graphGet(url) {
   const r = await fetch(url, { signal: AbortSignal.timeout(15000) });
+  return r.json().catch(() => null);
+}
+// Form-encoded POST (the Instagram Login code exchange at
+// api.instagram.com/oauth/access_token takes form fields, not JSON).
+async function graphFormPost(url, params) {
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams(params).toString(),
+    signal: AbortSignal.timeout(15000),
+  });
   return r.json().catch(() => null);
 }
 app.post('/api/instagram/connect', (req, res) => {
@@ -952,6 +1010,131 @@ app.get('/api/instagram/callback', ah(async (req, res) => {
   });
 }));
 
+// ---------- Instagram connect via Instagram Login (direct) ----------
+// Meta's "Instagram API with Instagram Login": GET
+// /api/instagram/ig-connect sends the user to Instagram's own login
+// (www.instagram.com/oauth/authorize) — they log in with Instagram
+// itself, no Facebook account and no Facebook Page involved. The
+// callback exchanges the code at api.instagram.com (code -> short-lived
+// token + user id), upgrades it to a long-lived token on
+// graph.instagram.com (ig_exchange_token), reads the username, and
+// stores the connection with tokenHost 'instagram' — from there the
+// token keeper renews it via ig_refresh_token, and every Graph call
+// for the connection uses graph.instagram.com (see graphApiBase).
+// The signed-state / one-time-link machinery is the same as the
+// Facebook flow above: the browser that returns from Instagram usually
+// has no session cookie, so the user id comes from the verified state,
+// and every outcome is a friendly result page. Codes and tokens are
+// never logged.
+const IG_LOGIN_REASONS = {
+  denied: 'Instagram login was cancelled or not approved, so nothing was connected. Go back to the KiluaAI app and tap “Connect Instagram” to try again.',
+  state: 'That login link expired or was already used. Go back to the KiluaAI app and tap “Connect Instagram” — then finish the login in one go.',
+  exchange: 'Instagram did not complete the login. Go back to the KiluaAI app and tap “Connect Instagram” to try again — if it keeps failing, let the app owner know.',
+  config: 'Direct Instagram login is not fully set up on the server yet. Let the app owner know to finish the Instagram app setup.',
+  not_configured: 'Direct Instagram login is still being set up on the server — the final step is finishing now. For the moment, use “connect via Facebook” in Settings, or try again shortly.',
+};
+// Session-authenticated: mints the one-time link the app opens in the
+// system browser (same pattern as /api/instagram/connect-link).
+app.post('/api/instagram/ig-connect-link', (req, res) => {
+  const proto = isSecureRequest(req) ? 'https' : 'http';
+  const host = req.get('host') || 'social-scheduler-one-sandy.vercel.app';
+  const url = `${proto}://${host}/api/instagram/ig-connect?t=${encodeURIComponent(signConnectToken(req.userId))}`;
+  res.json({ ok: true, url });
+});
+app.get('/api/instagram/ig-connect', ah(async (req, res) => {
+  // Self-authenticating (see the /api middleware note): the session
+  // cookie (normal browser use) OR a valid one-time connect link.
+  let userId = '';
+  const sessionUser = await getAuthUser(req).catch(() => null);
+  if (sessionUser) userId = sessionUser.id;
+  if (!userId && req.query && req.query.t) userId = verifyConnectToken(String(req.query.t));
+  if (!userId) {
+    return igResultPage(res, 401, {
+      ok: false,
+      title: 'This connect link has expired',
+      message: 'Connect links work for 10 minutes. Go back to the KiluaAI app and tap “Connect Instagram” again — or open KiluaAI in this browser, log in, and connect from Settings here.',
+    });
+  }
+  if (!instagramLoginConfigured()) {
+    return igResultPage(res, 200, {
+      ok: false,
+      title: 'Instagram login is nearly ready',
+      message: IG_LOGIN_REASONS.not_configured,
+    });
+  }
+  const dialog = 'https://www.instagram.com/oauth/authorize'
+    + '?client_id=' + encodeURIComponent(INSTAGRAM_APP_ID)
+    + '&redirect_uri=' + encodeURIComponent(IG_LOGIN_REDIRECT_URI)
+    + '&scope=' + encodeURIComponent(IG_LOGIN_SCOPE)
+    + '&response_type=code'
+    + '&state=' + encodeURIComponent(signOAuthState(userId));
+  return res.redirect(302, dialog);
+}));
+app.get('/api/instagram/ig-callback', ah(async (req, res) => {
+  // The browser landing here usually has no session (system-browser
+  // handoff), so every outcome is a friendly result page, not a redirect
+  // into the SPA. The user is identified by the signed OAuth state.
+  const fail = (reason) => igResultPage(res, 200, { ok: false, title: 'Instagram was not connected', message: IG_LOGIN_REASONS[reason] || IG_LOGIN_REASONS.exchange });
+  const q = req.query || {};
+  if (q.error) return fail('denied');
+  // Instagram appends a "#_" fragment artifact to the code in some
+  // browsers; it can survive into the query value — strip it.
+  const code = String(q.code || '').replace(/#_$/, '');
+  const userId = userIdFromOAuthState(String(q.state || ''));
+  if (!code || !userId) return fail('state');
+  if (!instagramLoginConfigured()) return fail('config');
+  // 1) code -> short-lived token + the Instagram user id.
+  let shortTok = null;
+  try {
+    shortTok = await graphFormPost('https://api.instagram.com/oauth/access_token', {
+      client_id: INSTAGRAM_APP_ID,
+      client_secret: INSTAGRAM_APP_SECRET,
+      grant_type: 'authorization_code',
+      redirect_uri: IG_LOGIN_REDIRECT_URI,
+      code,
+    });
+  } catch { /* handled below as an exchange failure */ }
+  if (!shortTok || !shortTok.access_token) return fail('exchange');
+  const tokenUserId = shortTok.user_id != null ? String(shortTok.user_id) : '';
+  // 2) short-lived -> long-lived (~60 days; the keeper renews it from
+  // here via ig_refresh_token on this same host).
+  let longTok = null;
+  try {
+    longTok = await graphGet('https://graph.instagram.com/access_token?grant_type=ig_exchange_token'
+      + '&client_secret=' + encodeURIComponent(INSTAGRAM_APP_SECRET)
+      + '&access_token=' + encodeURIComponent(shortTok.access_token));
+  } catch { /* handled below */ }
+  if (!longTok || !longTok.access_token) return fail('exchange');
+  const token = longTok.access_token;
+  const expiresIn = Number(longTok.expires_in) || 0;
+  // 3) The account itself: username, and the user id that media and
+  // publish calls on graph.instagram.com are addressed to.
+  let me = null;
+  try {
+    me = await graphGet('https://graph.instagram.com/me?fields=user_id,username&access_token=' + encodeURIComponent(token));
+  } catch { /* handled below — the exchange already proved the account */ }
+  const igUserId = (me && me.user_id != null ? String(me.user_id) : '') || tokenUserId;
+  if (!igUserId) return fail('exchange');
+  const username = (me && me.username) || '';
+  await db.saveInstagram(userId, {
+    token, igUserId, username, pageId: null,
+    connectedAt: new Date().toISOString(),
+    tokenExpiresAt: expiresIn > 0 ? new Date(Date.now() + expiresIn * 1000).toISOString() : '',
+    tokenNeverExpires: false, tokenType: longTok.token_type || '', tokenHost: 'instagram',
+    lastTokenCheckAt: '', lastRefreshAt: '', tokenRefreshError: '', lastDebugError: '', lastRefreshError: '',
+  });
+  // Learn the token's real type + exact expiry from Meta right away so
+  // the keeper's records are precise from day one.
+  await ensureInstagramTokenFresh(userId, { force: true }).catch(() => null);
+  return igResultPage(res, 200, {
+    ok: true,
+    title: 'Instagram connected ✓',
+    message: username
+      ? `@${username} is connected — switch back to the KiluaAI app, it will show Connected. The connection renews itself automatically from here.`
+      : 'Your Instagram is connected — switch back to the KiluaAI app, it will show Connected. The connection renews itself automatically from here.',
+  });
+}));
+
 // ---------- Instagram import (profile + existing media) ----------
 // Runs as a background job so the UI can poll progress. Fetches the profile
 // (username, picture, bio, media count) and pages through the account's
@@ -968,7 +1151,7 @@ async function runInstagramImport(job) {
   try {
     const ig = await getInstagramCreds({ userId: job.userId });
     if (!ig.token || !ig.igUserId) throw new Error('Instagram is not connected — connect it first.');
-    const base = 'https://graph.facebook.com/v27.0';
+    const base = graphApiBase(ig.tokenHost);
     const profile = await graphGet(base + '/' + encodeURIComponent(ig.igUserId) + '?fields=username,profile_picture_url,biography,media_count&access_token=' + encodeURIComponent(ig.token));
     if (!profile || profile.error) throw new Error(friendlyGraphError(profile, 'Instagram rejected the request. The connection may lack permission — reconnect Instagram in Settings and try again.'));
     job.profile = {
@@ -1235,8 +1418,8 @@ app.get('/api/next-best-time', ah(async (req, res) => {
 // pressing Publish again resumes the same container instead of making a
 // duplicate. FEED videos use media_type VIDEO and Stories use STORIES —
 // sending a video as an image container was a publish failure.
-async function graph(path, method, body) {
-  const url = `https://graph.facebook.com/v27.0${path}`;
+async function graph(path, method, body, base) {
+  const url = `${base || 'https://graph.facebook.com/v27.0'}${path}`;
   const res = await fetch(url, {
     method,
     headers: { 'Content-Type': 'application/json' },
@@ -1275,12 +1458,13 @@ async function markFailed(userId, postId, error) {
 async function attemptPublish(userId, post, ig) {
   const token = ig.token;
   const igId = ig.igUserId;
+  const base = graphApiBase(ig.tokenHost);
   let containerId = post.containerId || null;
   try {
     await db.updatePost(userId, post.id, { publishAttempts: (post.publishAttempts || 0) + 1 });
     if (containerId) {
       // Resume a container from an earlier attempt instead of duplicating it.
-      const s = await graph('/' + containerId + '?fields=status_code&access_token=' + encodeURIComponent(token), 'GET');
+      const s = await graph('/' + containerId + '?fields=status_code&access_token=' + encodeURIComponent(token), 'GET', undefined, base);
       if (s && s.error) containerId = null; // container gone — make a fresh one
       else if (s && s.status_code === 'ERROR') containerId = null;
       else if (s && s.status_code === 'FINISHED') { /* fall through to publish */ }
@@ -1289,7 +1473,7 @@ async function attemptPublish(userId, post, ig) {
       }
     }
     if (!containerId) {
-      const created = await graph(`/${igId}/media`, 'POST', publishContainerBody(post, token));
+      const created = await graph(`/${igId}/media`, 'POST', publishContainerBody(post, token), base);
       if (!created || created.error) {
         const err = friendlyGraphError(created, 'Instagram could not create this post. Check the media link is a public video/image and try again.');
         await markFailed(userId, post.id, err);
@@ -1303,7 +1487,7 @@ async function attemptPublish(userId, post, ig) {
     let status = '';
     const pollStarted = Date.now();
     for (let i = 0; i < 9 && Date.now() - pollStarted < 45000; i++) {
-      const s = await graph('/' + containerId + '?fields=status_code&access_token=' + encodeURIComponent(token), 'GET');
+      const s = await graph('/' + containerId + '?fields=status_code&access_token=' + encodeURIComponent(token), 'GET', undefined, base);
       status = (s && s.status_code) || '';
       if (status === 'FINISHED') break;
       if (status === 'ERROR' || (s && s.error)) {
@@ -1316,13 +1500,13 @@ async function attemptPublish(userId, post, ig) {
     if (status !== 'FINISHED') {
       return { ok: false, retry: true, containerId, error: 'Instagram is still processing this video — wait a minute, then press Publish again. Nothing was published yet and nothing was duplicated.' };
     }
-    const published = await graph(`/${igId}/media_publish`, 'POST', { creation_id: containerId, access_token: token });
+    const published = await graph(`/${igId}/media_publish`, 'POST', { creation_id: containerId, access_token: token }, base);
     if (!published || published.error) {
       const err = friendlyGraphError(published, 'Instagram could not publish this post.');
       await markFailed(userId, post.id, err);
       return { ok: false, error: err };
     }
-    const media = await graph('/' + published.id + '?fields=permalink,media_type&access_token=' + encodeURIComponent(token), 'GET');
+    const media = await graph('/' + published.id + '?fields=permalink,media_type&access_token=' + encodeURIComponent(token), 'GET', undefined, base);
     await db.updatePost(userId, post.id, { status: 'published', liveUrl: (media && media.permalink) || '', containerId: null, lastPublishError: '' });
     // The library item this came from has now been used once.
     try {

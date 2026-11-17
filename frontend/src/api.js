@@ -98,24 +98,25 @@ export const api = {
   getSettings: () => req('/api/settings'),
   saveSettings: (settings) => req('/api/settings', { method: 'POST', body: JSON.stringify(settings) }),
   instagramConnectLink: () => req('/api/instagram/connect-link', { method: 'POST', body: JSON.stringify({}) }),
+  instagramIgConnectLink: () => req('/api/instagram/ig-connect-link', { method: 'POST', body: JSON.stringify({}) }),
   disconnectInstagram: () => req('/api/instagram/disconnect', { method: 'POST', body: JSON.stringify({}) }),
   startInstagramImport: () => req('/api/instagram/import', { method: 'POST', body: JSON.stringify({}) }),
   getInstagramImport: (jobId) => req(`/api/instagram/import/${encodeURIComponent(jobId)}`)
 }
 
 /**
- * Start the "Connect Instagram" Meta login. Asks the server (with the
+ * Start a "Connect Instagram" login. Asks the server (with the
  * session) for a signed one-time connect link, then opens it: in the
  * Android app in the system browser (window.open '_system'), which is
- * where the Meta dialog belongs — the browser has no session cookie,
+ * where the login dialog belongs — the browser has no session cookie,
  * and the signed link is what authorises it — and in a normal browser
  * by navigating this tab. If the link request itself fails, falls back
- * to the plain session-based /api/instagram/connect URL.
+ * to the plain session-based connect URL.
  */
-export async function openInstagramConnect() {
-  let url = '/api/instagram/connect'
+async function openConnect(linkRequest, fallbackUrl) {
+  let url = fallbackUrl
   try {
-    const res = await api.instagramConnectLink()
+    const res = await linkRequest()
     if (res && res.url) url = res.url
   } catch { /* keep the fallback URL */ }
   let native = false
@@ -125,6 +126,19 @@ export async function openInstagramConnect() {
   } catch { native = false }
   if (native) window.open(url, '_system')
   else window.location.href = url
+}
+
+/** Direct Instagram Login (Meta's "Instagram API with Instagram
+ *  Login") — the primary connect flow: Instagram's own login page, no
+ *  Facebook account or Page needed. */
+export async function openInstagramDirectConnect() {
+  return openConnect(() => api.instagramIgConnectLink(), '/api/instagram/ig-connect')
+}
+
+/** Facebook Login for Business — the secondary connect flow, for
+ *  accounts whose Instagram is linked to a Facebook Page. */
+export async function openInstagramConnect() {
+  return openConnect(() => api.instagramConnectLink(), '/api/instagram/connect')
 }
 
 /**
