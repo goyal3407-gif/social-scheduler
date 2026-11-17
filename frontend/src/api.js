@@ -11,7 +11,7 @@
 // All list helpers normalise either shape so the UI never breaks on a
 // wrapped response.
 
-async function req(path, options = {}) {
+async function reqOnce(path, options = {}) {
   // 30 s timeout: a hung request used to hang the UI forever.
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), 30000)
@@ -38,6 +38,24 @@ async function req(path, options = {}) {
     throw err
   }
   return data
+}
+
+async function req(path, options = {}) {
+  try {
+    return await reqOnce(path, options)
+  } catch (e) {
+    // One automatic retry for safe (GET) requests that failed on a
+    // timeout or a network error: on a slow mobile connection a single
+    // stalled request used to surface as the "server took too long"
+    // banner even though an immediate retry succeeds — so the banner
+    // now only appears when the retry also fails. Non-GET requests are
+    // never retried: they may already have taken effect server-side.
+    const method = String(options.method || 'GET').toUpperCase()
+    const transient = e && (e.status === 0 || e.name === 'TypeError')
+    if (method !== 'GET' || !transient) throw e
+    await new Promise((r) => setTimeout(r, 900))
+    return reqOnce(path, options)
+  }
 }
 
 function asArray(data, key) {

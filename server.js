@@ -817,6 +817,25 @@ app.get('/health', (req, res) => res.json({ ok: true, service: 'social-scheduler
 // "json", data does NOT survive redeploys — set MONGODB_URI in Vercel.
 // If sessionSecretFromEnv is false, logins die on every restart — set
 // SESSION_SECRET in Vercel.
+// The connected-account scan behind db-status (user count + every
+// stored Instagram doc) is ONE query via db.listInstagram(), and its
+// result is cached for 15 s: db-status is a status page, and the old
+// per-user loop cost one sequential database round trip per account on
+// every call, which made it the slowest route in the app. Only the
+// scan is cached — the keeper below still runs on every call, so a
+// token renewal or revocation is reflected exactly as before.
+let igScanCache = { at: 0, scan: null };
+async function instagramScan(force = false) {
+  if (!force && igScanCache.scan && Date.now() - igScanCache.at < 15000) return igScanCache.scan;
+  const [usersScanned, docs] = await Promise.all([db.countUsers(), db.listInstagram()]);
+  const scan = { usersScanned, docsFound: 0, tokensReadable: 0, connectedUserId: null };
+  for (const st of docs) {
+    if (st && (st.igUserId || st.connectedAt)) scan.docsFound += 1;
+    if (st && st.token) { scan.tokensReadable += 1; if (!scan.connectedUserId) scan.connectedUserId = st.userId; }
+  }
+  igScanCache = { at: Date.now(), scan };
+  return scan;
+}
 app.get('/api/db-status', ah(async (req, res) => {
   // Connect eagerly first: without this, a cold container reports "json"
   // until some other data request happens, and the UI shows a false warning.
@@ -829,16 +848,23 @@ app.get('/api/db-status', ah(async (req, res) => {
   const igDiag = { usersScanned: 0, docsFound: 0, tokensReadable: 0, keeperError: null };
   try {
     // The connected account is whichever user actually has a stored token
-    // (normally the owner) — scan all users, counts only, never values.
-    const users = await db.listUsers();
-    igDiag.usersScanned = users.length;
-    let connectedUserId = null;
-    for (const u of users) {
-      const st = await getInstagramStored(u.id);
-      if (st && (st.igUserId || st.connectedAt)) igDiag.docsFound += 1;
-      if (st && st.token) { igDiag.tokensReadable += 1; if (!connectedUserId) connectedUserId = u.id; }
+    // (normally the owner) — scan all connections, counts only, never values.
+    let scan = await instagramScan();
+    if (scan.connectedUserId) ownerInstagram = await ensureInstagramTokenFresh(scan.connectedUserId, { background: true });
+    if (!ownerInstagram) {
+      // The cached scan may predate a connection change (a connect or
+      // disconnect seconds ago): verify once with a fresh scan before
+      // reporting "not connected", so this page never shows a stale
+      // connection state for longer than one call.
+      const fresh = await instagramScan(true);
+      if (fresh.connectedUserId && fresh.connectedUserId !== scan.connectedUserId) {
+        scan = fresh;
+        ownerInstagram = await ensureInstagramTokenFresh(fresh.connectedUserId, { background: true });
+      }
     }
-    if (connectedUserId) ownerInstagram = await ensureInstagramTokenFresh(connectedUserId, { background: true });
+    igDiag.usersScanned = scan.usersScanned;
+    igDiag.docsFound = scan.docsFound;
+    igDiag.tokensReadable = scan.tokensReadable;
   } catch (e) { igDiag.keeperError = String((e && e.message) || e).slice(0, 200); }
   res.json({
     ok: true,
@@ -1513,7 +1539,21 @@ function buildPost(b, userId) {
     createdAt: new Date().toISOString(),
   };
 }
-app.get('/api/posts', ah(async (req, res) => res.json({ ok: true, posts: await db.listPosts(req.userId, { limit: req.query.limit, offset: req.query.offset }) })));
+app.get('/api/posts', ah(async (req, res) => {
+  const posts = await db.listPosts(req.userId, { limit: req.query.limit, offset: req.query.offset });
+  // Legacy posts whose media is still an inline data: URL are migrated
+  // to the media-file store on first read (same one-time migration the
+  // publish path performs), so the Queue stops re-downloading whole
+  // files as base64 on every load.
+  const base = publicBase(req);
+  const out = [];
+  for (const p of posts) {
+    if (typeof p.mediaUrl === 'string' && p.mediaUrl.startsWith('data:') && p.mediaUrl.length >= LEGACY_DATA_URL_MIN) {
+      out.push(await ensurePublishableMedia(req.userId, p, base));
+    } else out.push(p);
+  }
+  res.json({ ok: true, posts: out });
+}));
 app.post('/api/posts', ah(async (req, res) => {
   const b = req.body || {};
   const err = validPostInput(b);
@@ -1743,6 +1783,31 @@ async function ensurePublishableMedia(userId, post, base) {
     try { await db.updateMedia(userId, libraryItem.id, { url: publicUrl, fileId }); } catch { /* nicety — the post itself is already migrated */ }
   }
   return post;
+}
+// The same migration, run lazily by the Media Library list: a legacy
+// item whose url is still an inline data: URL ships its whole file as
+// base64 inside every list response — a single pre-fix video upload
+// made the Queue/Library payload megabytes and timed the app out on
+// slow connections. Moving the bytes to the media-file store (once)
+// and rewriting the item to its public /media/<id> URL makes every
+// later list light. Small inline images are harmless and left alone;
+// any failure leaves the item exactly as it was.
+const LEGACY_DATA_URL_MIN = 32 * 1024;
+async function migrateLegacyMediaItem(userId, item, base) {
+  const url = item && item.url;
+  if (typeof url !== 'string' || !url.startsWith('data:') || url.length < LEGACY_DATA_URL_MIN) return item;
+  const parsed = parseDataUrl(url);
+  if (!parsed) return item;
+  try {
+    let fileId = item.fileId || '';
+    if (!fileId) {
+      fileId = newMediaFileId();
+      await db.saveMediaFile({ id: fileId, userId, contentType: parsed.contentType, buffer: parsed.buffer });
+    }
+    const publicUrl = `${base}/media/${fileId}`;
+    await db.updateMedia(userId, item.id, { url: publicUrl, fileId });
+    return { ...item, url: publicUrl, fileId };
+  } catch { return item; }
 }
 // Publish one post via the Graph API. Reusable by the manual Publish
 // button, by /api/publish-due and by the cron endpoint — the logic lives
@@ -1998,7 +2063,13 @@ app.get('/media/:id', ah(async (req, res) => {
 }));
 
 // ---------- media library ----------
-app.get('/api/media', ah(async (req, res) => res.json({ ok: true, media: await db.listMedia(req.userId, { limit: req.query.limit, offset: req.query.offset }) })));
+app.get('/api/media', ah(async (req, res) => {
+  const media = await db.listMedia(req.userId, { limit: req.query.limit, offset: req.query.offset });
+  const base = publicBase(req);
+  const out = [];
+  for (const m of media) out.push(await migrateLegacyMediaItem(req.userId, m, base));
+  res.json({ ok: true, media: out });
+}));
 app.post('/api/media', ah(async (req, res) => {
   const b = req.body || {};
   if (!b.url) return res.status(400).json({ ok: false, error: 'Paste a media link first.' });

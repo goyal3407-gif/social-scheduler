@@ -373,7 +373,11 @@ async function deleteUserData(userId) {
   for (const s of jsonList('uploadSessions').filter((x) => x.userId === userId)) deleteUploadChunkFiles(s.id);
   jsonSave('uploadSessions', jsonList('uploadSessions').filter((x) => x.userId !== userId));
 }
-async function countUsers() { return (await listUsers()).length; }
+async function countUsers() {
+  await ensureMongo();
+  if (isMongo()) return User.countDocuments({});
+  return jsonList('users').length;
+}
 
 // ---------- sessions (ledger: login writes one, logout marks it revoked) ----------
 // A missing session doc does NOT invalidate a session — logins made while
@@ -650,6 +654,49 @@ async function getInstagram(userId) {
   if (doc.token && !doc.tokenEnc) return { token: doc.token, igUserId: doc.igUserId || '', username: doc.username || '', pageId: doc.pageId || '', profile: doc.profile || null, connectedAt: doc.connectedAt || '', importedAt: doc.importedAt || '', encrypted: false, ...instagramHealthFields(doc) };
   return { token: decryptToken(doc), igUserId: doc.igUserId || '', username: doc.username || '', pageId: doc.pageId || '', profile: doc.profile || null, connectedAt: doc.connectedAt || '', importedAt: doc.importedAt || '', encrypted: !!doc.encrypted, ...instagramHealthFields(doc) };
 }
+// Every stored Instagram connection in ONE query, shaped like
+// getInstagram() plus the owning userId. db-status uses this to find
+// the connected account: the old per-user loop cost one sequential
+// round trip per account on every call, which made db-status the
+// slowest route in the app once a few users had signed up.
+function shapeInstagramDoc(doc) {
+  if (!doc || typeof doc !== 'object') return null;
+  if (doc.token && !doc.tokenEnc) {
+    return {
+      token: doc.token, igUserId: doc.igUserId || '', username: doc.username || '', pageId: doc.pageId || '',
+      profile: doc.profile || null, connectedAt: doc.connectedAt || '', importedAt: doc.importedAt || '',
+      encrypted: false, ...instagramHealthFields(doc),
+    };
+  }
+  return {
+    token: decryptToken(doc), igUserId: doc.igUserId || '', username: doc.username || '', pageId: doc.pageId || '',
+    profile: doc.profile || null, connectedAt: doc.connectedAt || '', importedAt: doc.importedAt || '',
+    encrypted: !!doc.encrypted, ...instagramHealthFields(doc),
+  };
+}
+async function listInstagram() {
+  await ensureMongo();
+  if (isMongo()) {
+    const docs = await InstagramDoc.find({}).lean();
+    return docs.map((doc) => ({ userId: doc.userId || '', ...shapeInstagramDoc(doc) })).filter((d) => d.token !== undefined);
+  }
+  const all = load(JSON_FILES.instagram, {});
+  const obj = (all && typeof all === 'object' && !Array.isArray(all)) ? all : {};
+  // A legacy FLAT doc (token fields at the top level) is one connection
+  // belonging to the owner — same rule as getInstagram().
+  const looksFlat = !!(obj.token || obj.tokenEnc || obj.igUserId);
+  if (looksFlat) {
+    const owner = await ownerId();
+    const shaped = shapeInstagramDoc(obj);
+    return owner && shaped ? [{ userId: owner, ...shaped }] : [];
+  }
+  const out = [];
+  for (const [userId, doc] of Object.entries(obj)) {
+    const shaped = shapeInstagramDoc(doc);
+    if (shaped) out.push({ userId, ...shaped });
+  }
+  return out;
+}
 async function saveInstagram(userId, fields) {
   await ensureMongo();
   const { token, ...rest } = fields || {};
@@ -829,7 +876,7 @@ module.exports = {
   saveMediaFile, getMediaFile, deleteMediaFile,
   listTemplates, saveTemplate,
   getSettings, saveSettings,
-  getInstagram, saveInstagram, clearInstagram,
+  getInstagram, listInstagram, saveInstagram, clearInstagram,
   getImportJob, saveImportJob,
   saveNotification, listNotifications, countUnreadNotifications, markNotificationsRead,
   createUploadSession, getUploadSession, saveUploadChunk, getUploadChunks, deleteUploadSession, deleteExpiredUploadSessions,
