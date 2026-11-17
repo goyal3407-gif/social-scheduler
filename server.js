@@ -529,10 +529,17 @@ app.get('/api/db-status', ah(async (req, res) => {
   // renewal state; never the token). Running the keeper here means this
   // status check also renews the token when it is inside the window.
   let ownerInstagram = null;
+  const igDiag = { ownerFound: false, docFound: false, tokenReadable: false, keeperError: null };
   try {
     const owner = await db.ownerId();
-    if (owner) ownerInstagram = await ensureInstagramTokenFresh(owner);
-  } catch { /* health is best-effort; db-status must not fail because of it */ }
+    igDiag.ownerFound = !!owner;
+    if (owner) {
+      const st = await getInstagramStored(owner);
+      igDiag.docFound = !!(st && (st.igUserId || st.connectedAt));
+      igDiag.tokenReadable = !!(st && st.token);
+      ownerInstagram = await ensureInstagramTokenFresh(owner);
+    }
+  } catch (e) { igDiag.keeperError = String((e && e.message) || e).slice(0, 200); }
   res.json({
     ok: true,
     db: s.db,
@@ -543,6 +550,7 @@ app.get('/api/db-status', ah(async (req, res) => {
     tokenEncryptionAvailable: s.tokenEncryptionAvailable,
     metaAppSecretConfigured: !!META_APP_SECRET,
     instagram: ownerInstagram,
+    instagramDiag: igDiag,
     lastError: s.lastError,
     warning: s.db !== 'mongodb'
       ? 'Database is local JSON files — accounts and posts will disappear on redeploy. Set MONGODB_URI in Vercel env vars.'
