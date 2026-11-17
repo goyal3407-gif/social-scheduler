@@ -221,7 +221,11 @@ async function ociPutObject(objectName, buffer, contentType) {
 //   * The PEM is normalised (literal \n escapes, CRLF, missing final
 //     newline, even a collapsed single-line body is re-wrapped) and
 //     PARSED once at startup — an unparseable key is a configuration
-//     error, reported loudly, never a silent fallback.
+//     error, reported loudly, never a silent fallback. The key may
+//     alternatively be supplied base64-encoded as a single line
+//     (auto-detected): dashboard pastes of the multi-line PEM have
+//     arrived invisibly corrupted, so the single-line form is the
+//     paste-proof way to enter it.
 //   * If ANY signing variable is set, signed mode is intended: a
 //     missing variable or bad key means deletes fail loudly (log +
 //     caller-visible warning), never the PAR no-op.
@@ -231,6 +235,24 @@ async function ociPutObject(objectName, buffer, contentType) {
 //     already was); callers use it to report honestly.
 function normalizeOciKeyPem(raw) {
   if (typeof raw !== 'string') return '';
+  // Paste-proof transport form: the key may also be supplied
+  // base64-encoded as ONE single line. Multi-line PEM values pasted
+  // through dashboards have arrived invisibly corrupted in production
+  // (armour intact, body characters altered, OpenSSL refuses to parse)
+  // — a single-line base64 string has no newlines or special
+  // characters to mangle. If the value with ALL whitespace stripped
+  // is pure base64 that decodes to text containing PEM armour, decode
+  // it and normalise the decoded PEM as usual. A raw PEM can never
+  // match this test (its armour contains '-'), and a bare base64 key
+  // body decodes to binary DER, not text with armour — both fall
+  // through to the existing handling completely unchanged.
+  const compact = raw.replace(/\s+/g, '');
+  if (compact.length > 100 && /^[A-Za-z0-9+/=]+$/.test(compact)) {
+    try {
+      const decoded = Buffer.from(compact, 'base64').toString('utf8');
+      if (decoded.includes('-----BEGIN')) return normalizeOciKeyPem(decoded);
+    } catch { /* not the transport form — fall through */ }
+  }
   let s = raw.trim();
   if (!s) return '';
   if (s.includes('\\n')) s = s.replace(/\\n/g, '\n');
