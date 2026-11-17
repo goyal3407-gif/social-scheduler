@@ -108,7 +108,13 @@ app.use('/api', (req, res, next) => {
         if (originHost !== host && !(process.env.NODE_ENV !== 'production' && isLocalOrigin)) {
           return res.status(403).json({ ok: false, error: 'That request did not come from this site — please use the app itself.' });
         }
-      } catch { /* malformed Origin: fall through to auth */ }
+      } catch {
+        // An Origin header that cannot be parsed at all (e.g. the
+        // literal "null" browsers send for opaque origins) is not
+        // evidence of a same-origin request — reject it exactly like
+        // a foreign origin instead of falling through to auth.
+        return res.status(403).json({ ok: false, error: 'That request did not come from this site — please use the app itself.' });
+      }
     }
   }
   next();
@@ -171,7 +177,7 @@ const SAFE_MEDIA_TYPES = new Set([
 // a decodable image/video data URL of an allowed type.
 function parseDataUrl(s) {
   if (typeof s !== 'string') return null;
-  const m = /^data:([^;,]+)?(;base64)?,([\s\S]*)$/.exec(s);
+  const m = /^data:([^;,]+)?(;base64)?,([\s\S]*)$/i.exec(s);
   if (!m) return null;
   const contentType = (m[1] || '').toLowerCase();
   if (!SAFE_MEDIA_TYPES.has(contentType)) return null;
@@ -357,6 +363,10 @@ async function ociDeleteObject(objectName) {
 function hashPassword(password, salt) {
   return crypto.scryptSync(password, salt, 64).toString('hex');
 }
+// Fixed salt used ONLY to spend the same scrypt time on a login whose
+// email has no account, so the response timing cannot reveal whether
+// an account exists for that email (a timing oracle).
+const DUMMY_SALT = 'kiluaai-timing-equaliser';
 function verifyPassword(password, user) {
   if (!user || !user.passwordHash || !user.salt) return false;
   const expected = Buffer.from(user.passwordHash, 'hex');
@@ -474,11 +484,14 @@ function recordFailedLogin(email) {
 app.post('/api/auth/signup', ah(async (req, res) => {
   const email = String(req.body?.email || '').trim().toLowerCase();
   const password = String(req.body?.password || '');
+  if (email.length > 254) return res.status(400).json({ ok: false, error: 'That email address is too long — enter a valid email address.' });
   if (!validEmail(email)) return res.status(400).json({ ok: false, error: 'Enter a valid email address, like you@example.com.' });
   if (password.length < 8) return res.status(400).json({ ok: false, error: 'Password must be at least 8 characters long.' });
   if (password.length > 128) return res.status(400).json({ ok: false, error: 'Password must be at most 128 characters long.' });
   const users = await db.listUsers();
-  if (users.some((u) => u.email === email)) return res.status(409).json({ ok: false, error: 'An account with this email already exists — log in instead.' });
+  // Generic wording on purpose: the response must not confirm whether
+  // this exact email is the one that is already registered.
+  if (users.some((u) => u.email === email)) return res.status(409).json({ ok: false, error: 'We could not create an account with those details. If you already have an account, log in instead.' });
   const salt = crypto.randomBytes(16).toString('hex');
   const user = {
     id: uid('user'), email, salt,
@@ -496,7 +509,15 @@ app.post('/api/auth/login', ah(async (req, res) => {
   if (!validEmail(email) || !password) return res.status(400).json({ ok: false, error: 'Enter your email and password.' });
   if (loginBlocked(email)) return res.status(429).json({ ok: false, error: 'Too many wrong attempts — wait 10 minutes and try again.' });
   const user = await db.getUserByEmail(email);
-  if (!user || !verifyPassword(password, user)) {
+  if (!user) {
+    // No account for this email: still spend the same scrypt time a
+    // real password check costs, so the response time does not reveal
+    // that the account does not exist. The error body is identical.
+    try { hashPassword(password, DUMMY_SALT); } catch { /* timing equalisation only */ }
+    recordFailedLogin(email);
+    return res.status(401).json({ ok: false, error: 'Wrong email or password. Check both and try again — or sign up if you have no account yet.' });
+  }
+  if (!verifyPassword(password, user)) {
     recordFailedLogin(email);
     return res.status(401).json({ ok: false, error: 'Wrong email or password. Check both and try again — or sign up if you have no account yet.' });
   }
@@ -1034,7 +1055,11 @@ app.get('/api/db-status', ah(async (req, res) => {
         ownerInstagram = await ensureInstagramTokenFresh(fresh.connectedUserId, { background: true });
       }
     }
-    igDiag.usersScanned = scan.usersScanned;
+    // usersScanned always comes from a FRESH recount: the cached
+    // scan's count lagged one call behind reality (a user created
+    // between calls only appeared on the call after).
+    const freshUserCount = await db.countUsers().catch(() => null);
+    igDiag.usersScanned = freshUserCount !== null ? freshUserCount : scan.usersScanned;
     igDiag.docsFound = scan.docsFound;
     igDiag.tokensReadable = scan.tokensReadable;
   } catch (e) { igDiag.keeperError = String((e && e.message) || e).slice(0, 200); }
@@ -1107,6 +1132,12 @@ app.get('/api/settings', ah(async (req, res) => {
   res.json(settingsResponse);
 }));
 app.post('/api/settings', ah(async (req, res) => {
+  // Settings are a set of named values: an array (or scalar) body is
+  // rejected outright — array indices used to be stored as settings
+  // keys "0", "1", ….
+  if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
+    return res.status(400).json({ ok: false, error: 'Settings must be sent as a set of named values — please try again.' });
+  }
   const s = { ...(await getSettings(req)), ...(req.body || {}) };
   // Settings hold simple values only — objects/arrays are rejected so a
   // crafted value cannot corrupt the stored settings.
@@ -1220,6 +1251,31 @@ function verifyConnectToken(token) {
   } catch { return ''; }
 }
 
+// Single-use enforcement for connect links: a link is called "one-time"
+// in the UI, so its first successful use must consume it — a replayed
+// link (same URL opened twice inside its 10-minute window) used to
+// start the connect flow again. The minted link's random nonce is
+// remembered until the link expires and the first verification burns
+// it; a second use verifies as ''. In-memory per instance (like the
+// rate limiter): a replay has to reach the same warm instance inside
+// the window, which is exactly the realistic replay case.
+const usedConnectNonces = new Map(); // link nonce -> link expiry (ms)
+function consumeConnectToken(token) {
+  const userId = verifyConnectToken(token);
+  if (!userId) return '';
+  let nonce = '';
+  try {
+    const payload = Buffer.from(String(token).slice(0, String(token).lastIndexOf('.')), 'base64url').toString('utf8');
+    nonce = payload.split('.')[2] || '';
+  } catch { return ''; }
+  if (!nonce) return '';
+  const now = Date.now();
+  for (const [k, exp] of usedConnectNonces) if (exp <= now) usedConnectNonces.delete(k);
+  if (usedConnectNonces.has(nonce)) return '';
+  usedConnectNonces.set(nonce, now + CONNECT_TOKEN_TTL_MS);
+  return userId;
+}
+
 // Friendly self-contained result pages for the browser that finishes a
 // Meta login (often the phone's system browser, not the app): no SPA and
 // no login needed — just the outcome and what to do next. Inline styles
@@ -1283,7 +1339,7 @@ app.get('/api/instagram/connect', ah(async (req, res) => {
   let userId = '';
   const sessionUser = await getAuthUser(req).catch(() => null);
   if (sessionUser) userId = sessionUser.id;
-  if (!userId && req.query && req.query.t) userId = verifyConnectToken(String(req.query.t));
+  if (!userId && req.query && req.query.t) userId = consumeConnectToken(String(req.query.t));
   if (!userId) {
     return igResultPage(res, 401, {
       ok: false,
@@ -1431,7 +1487,7 @@ app.get('/api/instagram/ig-connect', ah(async (req, res) => {
   let userId = '';
   const sessionUser = await getAuthUser(req).catch(() => null);
   if (sessionUser) userId = sessionUser.id;
-  if (!userId && req.query && req.query.t) userId = verifyConnectToken(String(req.query.t));
+  if (!userId && req.query && req.query.t) userId = consumeConnectToken(String(req.query.t));
   if (!userId) {
     return igResultPage(res, 401, {
       ok: false,
@@ -1695,6 +1751,12 @@ function validPostInput(b, { requireMedia = true } = {}) {
   return null;
 }
 function buildPost(b, userId) {
+  // Status and liveUrl are server-owned: a post becomes "published"
+  // only through the publish flow, which also sets the real liveUrl
+  // from Instagram. A client-supplied status/liveUrl is ignored, so a
+  // post can never be created straight into a fake "published" state
+  // (the only client choice kept is draft vs scheduled, as in Studio).
+  const status = b.status === 'draft' ? 'draft' : 'scheduled';
   return {
     id: uid('post'), userId,
     mediaUrl: b.mediaUrl,
@@ -1704,10 +1766,10 @@ function buildPost(b, userId) {
     cta: b.cta || '',
     platform: b.platform || 'Instagram',
     // Drafts may have no time yet; scheduled posts default to now.
-    scheduleTime: b.scheduleTime || ((b.status || 'scheduled') === 'draft' ? '' : new Date().toISOString()),
-    status: b.status || 'scheduled',
+    scheduleTime: b.scheduleTime || (status === 'draft' ? '' : new Date().toISOString()),
+    status,
     format: b.format || 'REELS',
-    liveUrl: b.liveUrl || '',
+    liveUrl: '',
     // Poster frame for video posts (captured client-side at upload).
     // Only app-served or web URLs are kept — anything else is dropped.
     posterUrl: typeof b.posterUrl === 'string' && b.posterUrl.length <= 2000 && /^(\/|https?:\/\/)/i.test(b.posterUrl) ? b.posterUrl : '',
@@ -1757,9 +1819,14 @@ app.patch('/api/posts/:id', ah(async (req, res) => {
   const b = req.body || {};
   const err = validPostInput(b, { requireMedia: false });
   if (err) return res.status(400).json({ ok: false, error: err });
-  const allowed = ['mediaUrl', 'mediaType', 'caption', 'hashtags', 'cta', 'platform', 'scheduleTime', 'status', 'format', 'liveUrl', 'posterUrl'];
+  // liveUrl is deliberately NOT editable here (see buildPost): it is
+  // set only by a real publish. Status may move between draft and
+  // scheduled (the Studio edit), never into published/failed — those
+  // belong to the publish flow alone.
+  const allowed = ['mediaUrl', 'mediaType', 'caption', 'hashtags', 'cta', 'platform', 'scheduleTime', 'format', 'posterUrl'];
   const patch = {};
   for (const k of allowed) if (b[k] !== undefined) patch[k] = b[k];
+  if (b.status === 'draft' || b.status === 'scheduled') patch.status = b.status;
   // Same poster rule as buildPost: only app-served or web URLs survive.
   if (patch.posterUrl !== undefined && !/^(\/|https?:\/\/)/i.test(patch.posterUrl || '')) patch.posterUrl = '';
   const updated = await db.updatePost(req.userId, req.params.id, patch);
@@ -2113,6 +2180,14 @@ app.post('/api/posts/:id/publish', ah(async (req, res) => {
   }
   const post = await db.getPost(req.userId, req.params.id);
   if (!post) return res.status(404).json({ ok: false, error: 'That post no longer exists — it may have been deleted.' });
+  // Status guard: an already-published post must never run another
+  // publish attempt — with a real token that would create a duplicate
+  // Instagram post, and a failed attempt would flip the good post to
+  // "failed". (A post publishing right now is covered by the in-flight
+  // lock inside attemptPublish.)
+  if (post.status === 'published') {
+    return res.status(409).json({ ok: false, error: 'This post is already published — it cannot be published again. Duplicate it if you want to post it again.' });
+  }
   const result = await attemptPublish(req.userId, post, ig, publicBase(req));
   if (result.ok) return res.json({ ok: true, liveUrl: result.liveUrl, mediaId: result.mediaId });
   if (result.retry) return res.json({ ok: false, retry: true, containerId: result.containerId, error: result.error });
@@ -2292,6 +2367,7 @@ app.post('/api/media', ah(async (req, res) => {
   if (!b.url) return res.status(400).json({ ok: false, error: 'Paste a media link first.' });
   if (typeof b.url !== 'string' || (b.title !== undefined && typeof b.title !== 'string') || (b.folder !== undefined && typeof b.folder !== 'string')) return res.status(400).json({ ok: false, error: 'That media entry is not valid — please try again.' });
   if (b.tags !== undefined && (!Array.isArray(b.tags) || b.tags.some((t) => typeof t !== 'string'))) return res.status(400).json({ ok: false, error: 'Tags must be plain text — please try again.' });
+  if (b.size !== undefined && (typeof b.size !== 'number' || !Number.isFinite(b.size) || b.size < 0)) return res.status(400).json({ ok: false, error: 'That media entry is not valid — please try again.' });
   if (!/^https?:\/\//i.test(b.url)) return res.status(400).json({ ok: false, error: 'That media link is not valid — paste a full https:// link to a video or image.' });
   const item = {
     id: uid('media'), userId: req.userId, url: b.url, title: b.title || 'Untitled',
@@ -2440,6 +2516,12 @@ app.post('/api/media/upload/complete', ah(async (req, res) => {
   const b = req.body || {};
   const session = await db.getUploadSession(req.userId, b.uploadId);
   if (!session) return res.status(404).json({ ok: false, error: 'That upload session is gone — start the upload again.' });
+  // Complete enforces the SAME session expiry as chunk: an expired
+  // session is deleted and answered 410, never assembled into media.
+  if (session.expiresAt && session.expiresAt <= new Date().toISOString()) {
+    await db.deleteUploadSession(session.id).catch(() => {});
+    return res.status(410).json({ ok: false, error: 'That upload took too long and expired — start the upload again.' });
+  }
   const chunks = await db.getUploadChunks(session.id, session.chunkCount);
   if (!chunks) return res.status(400).json({ ok: false, error: 'Some pieces of that upload are missing — try uploading the file again.' });
   const buffer = Buffer.concat(chunks);
@@ -2538,6 +2620,12 @@ app.post('/api/templates', ah(async (req, res) => {
   await db.saveTemplate(t);
   res.json({ ok: true, template: t });
 }));
+
+// Unknown /api routes — and method mismatches on known ones — answer
+// in the API's JSON error shape, not Express's default HTML 404 page.
+app.use('/api', (req, res) => {
+  res.status(404).json({ ok: false, error: 'That API route does not exist.' });
+});
 
 // SPA fallback
 app.get('*', (req, res, next) => {
