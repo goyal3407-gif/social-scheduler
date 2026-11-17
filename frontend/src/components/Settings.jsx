@@ -170,7 +170,7 @@ export default function Settings({ settings, dbStatus, onSave, saving, onInstagr
               <div className="alert error" style={{ marginTop: 12 }}><b>Instagram ended this connection.</b> Meta revoked it (for example a password change, or access removed in your Meta settings), so automatic renewal can&apos;t save it. Reconnect below — that&apos;s the only time you ever need this form.</div>
             )}
             {connected && health?.refreshBlocked && !health.needsReconnect && (
-              <div className="warn amber" style={{ marginTop: 12 }}><div><b>Automatic renewal could not run for this token.</b> The app will keep checking, but if it reaches its expiry date you will need to reconnect once below.</div></div>
+              <div className="warn amber" style={{ marginTop: 12 }}><div><b>Automatic renewal could not run for this token.</b> The app will keep checking, but if it reaches its expiry date you will need to reconnect once below.{(health.lastDebugError || health.lastRefreshError) ? <> Meta&apos;s reason: <i>{health.lastRefreshError || health.lastDebugError}</i></> : ''}</div></div>
             )}
             <p className="muted small" style={{ marginTop: 14 }}>
               <b style={{ color: 'var(--ink)' }}>Reconnect (only if the connection was revoked):</b>
