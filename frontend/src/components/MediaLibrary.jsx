@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { fmtDate } from '../api.js'
 import { Skeleton, Empty, ErrorBox } from './shared.jsx'
 import { IconHeart, IconTrash, IconSearch } from './icons.jsx'
+import { isNativeApp, savePickedVideo, listPendingUploads, uploadPendingUpload, deletePendingUpload } from '../localMedia.js'
 
 const PAGE_SIZE = 24
 
@@ -27,6 +28,96 @@ function probeUrl(url, isVideo) {
       }
     } catch { finish({}) }
   })
+}
+
+function fmtSize(bytes) {
+  if (!bytes) return '—'
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+// Videos kept on the device itself (app storage), uploaded to the library
+// when the user is ready — the local copy is removed after a successful
+// upload so posted videos do not fill the phone. See src/localMedia.js.
+function DeviceVideos({ onUploaded }) {
+  const [items, setItems] = useState([])
+  const [busyName, setBusyName] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [msg, setMsg] = useState('')
+  const [err, setErr] = useState('')
+  const devFileRef = useRef(null)
+
+  const refresh = useCallback(async () => {
+    try { setItems(await listPendingUploads()) } catch { setItems([]) }
+  }, [])
+  useEffect(() => { refresh() }, [refresh])
+
+  const pick = async (files) => {
+    const list = [...(files || [])]
+    if (!list.length) return
+    setErr(''); setMsg(''); setSaving(true)
+    let ok = 0
+    for (const f of list) {
+      try { await savePickedVideo(f); ok++ } catch (e) { setErr(e.message || 'Could not save that video on this device.') }
+    }
+    setSaving(false)
+    if (ok) setMsg(`Saved ${ok} video${ok === 1 ? '' : 's'} on this device.`)
+    refresh()
+  }
+
+  const upload = async (item) => {
+    setErr(''); setMsg('')
+    if (item.size > 4.5 * 1024 * 1024) { setErr(`"${item.name.replace(/^\d+-/, '')}" is over the live site's ~4 MB upload limit — it can stay on the device, but the live server cannot accept it yet.`); return }
+    setBusyName(item.name)
+    try {
+      await uploadPendingUpload(item.name, { folder: 'Uploads' })
+      await deletePendingUpload(item.name)
+      setMsg('Uploaded to your library — local copy removed from the device.')
+      await refresh()
+      if (onUploaded) onUploaded()
+    } catch (e) { setErr(e.message || 'Upload failed — the video is still saved on this device.') }
+    setBusyName('')
+  }
+
+  const remove = async (item) => {
+    setErr(''); setMsg('')
+    try { await deletePendingUpload(item.name); await refresh() } catch (e) { setErr(e.message || 'Could not remove that video.') }
+  }
+
+  return (
+    <div className="card mt2">
+      <div className="card-head">
+        <div>
+          <h2>On this device</h2>
+          <p>{isNativeApp() ? 'Videos stored inside the app on your phone — no cloud storage used until you upload them.' : 'Videos stored in this browser on this device — in the Android app this is your phone storage.'} Uploading a video to the library removes the local copy.</p>
+        </div>
+        <span className="pill">{items.length} waiting</span>
+      </div>
+      {err && <div className="alert error">{err}</div>}
+      {msg && <div className="alert success">{msg}</div>}
+      <div className="drop" onClick={() => devFileRef.current?.click()} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter') devFileRef.current?.click() }}>
+        <b>{saving ? 'Saving…' : 'Save a video on this device'}</b>
+        <p className="small">Pick videos now, upload them to the library later — handy on slow connections.</p>
+        <input ref={devFileRef} type="file" multiple accept="video/*" style={{ display: 'none' }} onChange={(e) => { pick(e.target.files); e.target.value = '' }} />
+      </div>
+      {items.length > 0 && (
+        <div className="mt">
+          {items.map((item) => (
+            <div key={item.name} className="device-row">
+              <div style={{ minWidth: 0 }}>
+                <b title={item.name}>{item.name.replace(/^\d+-/, '')}</b>
+                <span className="muted small">{fmtSize(item.size)} · on device</span>
+              </div>
+              <div style={{ display: 'flex', gap: 6, flex: 'none' }}>
+                <button type="button" className="btn primary small" disabled={busyName === item.name} onClick={() => upload(item)}>{busyName === item.name ? 'Uploading…' : 'Upload to library'}</button>
+                <button type="button" className="btn danger small" disabled={busyName === item.name} onClick={() => remove(item)}>Remove</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
 }
 
 export default function MediaLibrary({ media, loading, error, onRetry, onAddLink, onUpload, onToggleFav, onDelete, onUse }) {
@@ -139,6 +230,8 @@ export default function MediaLibrary({ media, loading, error, onRetry, onAddLink
           <button type="submit" className="btn primary mt" disabled={busy}>{busy ? 'Adding…' : 'Add to library'}</button>
         </form>
       </div>
+
+      <DeviceVideos onUploaded={onRetry} />
 
       <div className="toolbar mt2">
         <div style={{ position: 'relative', flex: 2, minWidth: 180 }}>

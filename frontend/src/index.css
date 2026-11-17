@@ -232,3 +232,73 @@ td{max-width:220px;overflow:hidden;text-overflow:ellipsis}
   .top-actions .pill .dot{margin:0}
   .icon-btn{width:34px;height:34px}
 }
+
+/* ============================================================
+   APP SHELL — mobile-app feel inside the Capacitor APK (and on
+   phone browsers): full-width bottom tab bar with labels and an
+   active indicator, 44px+ touch targets, bottom-sheet modals,
+   no tap highlight / double-tap zoom, no iOS input zoom.
+   Desktop layout is unchanged.
+   ============================================================ */
+*{-webkit-tap-highlight-color:transparent}
+button,.dock-btn,.tab{touch-action:manipulation}
+.dock{user-select:none;-webkit-user-select:none}
+.device-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-top:1px solid var(--line-2)}
+.device-row:first-child{border-top:none;padding-top:2px}
+.device-row b{display:block;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:46vw}
+.device-row .muted{display:block}
+
+@media(max-width:640px){
+  /* Tab bar: edge-to-edge, labels back on, active tab gets a pill +
+     a small bar above it — like a native app tab bar. */
+  .dock{left:0;right:0;transform:none;bottom:0;width:100%;max-width:none;
+    border-radius:0;border-left:none;border-right:none;border-bottom:none;
+    justify-content:space-between;gap:0;padding:6px 4px calc(6px + env(safe-area-inset-bottom, 0px));
+    box-shadow:0 -8px 30px rgba(0,0,0,.14);overflow-x:visible}
+  .dock .dock-btn{font-size:9.5px;gap:3px;padding:7px 2px;min-width:0;flex:1;position:relative;border-radius:12px;min-height:50px;justify-content:center}
+  .dock .dock-btn.active{background:transparent;color:var(--brand)}
+  .dock .dock-btn.active::before{content:"";position:absolute;top:-6px;left:50%;transform:translateX(-50%);width:22px;height:3px;border-radius:99px;background:linear-gradient(90deg,var(--brand),var(--brand-2))}
+  .dock .dock-btn.active svg{background:var(--brand-soft);border-radius:10px;padding:3px;box-sizing:content-box}
+  .dock .dock-create{width:46px;height:46px;margin:0 2px;align-self:center}
+  .app{padding-bottom:calc(96px + env(safe-area-inset-bottom, 0px))}
+  .sticky-bar{bottom:84px}
+
+  /* Touch targets + no iOS zoom on focus (inputs need >=16px). */
+  input,select,textarea{font-size:16px}
+  .btn{min-height:46px;padding:11px 18px}
+  .btn.small{min-height:38px;padding:8px 12px}
+  .tab{min-height:40px;padding:9px 14px}
+  .icon-btn{width:40px;height:40px}
+  .copy-btn{min-height:36px;padding:7px 11px}
+
+  /* Cards breathe like app cards; sections get app-style spacing. */
+  .wrap{padding:0 14px}
+  .card{border-radius:20px;padding:18px}
+  .section{margin-top:18px}
+  .section-title{font-size:21px}
+  .hero{border-radius:24px;margin-top:14px}
+  .stat{border-radius:18px;padding:14px}
+  .stat b{font-size:24px}
+
+  /* Post rows stack actions under the text so buttons stay tappable. */
+  .post-row{flex-wrap:wrap}
+  .post-actions{width:100%;margin-top:4px}
+  .post-actions .btn{flex:1}
+
+  /* Media grid: two comfortable columns on phones. */
+  .media-grid{grid-template-columns:repeat(2,1fr);gap:10px}
+  .device-row b{max-width:38vw}
+
+  /* Modals become bottom sheets. */
+  .modal-bg{place-items:end center;padding:0}
+  .modal{border-radius:22px 22px 0 0;max-width:none;width:100%;max-height:92dvh;padding:22px 20px calc(22px + env(safe-area-inset-bottom, 0px))}
+
+  /* Top bar sits tighter, like an app header. */
+  .topbar-in{padding:10px 14px}
+  .footer{padding-bottom:6px}
+}
+
+@media(max-width:380px){
+  .dock .dock-btn{font-size:8.5px}
+  .media-grid{grid-template-columns:repeat(2,1fr);gap:8px}
+}
