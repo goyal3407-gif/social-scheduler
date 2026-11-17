@@ -4,7 +4,7 @@
     "express": "^4.19.2",
     "mongoose": "^8.24.8"
   },
-  "description": "Social Scheduler by Goyal Kumar - free Instagram/social scheduler for everyone",
+  "description": "KiluaAI by Goyal Kumar - free Instagram/social scheduler for everyone",
   "engines": {
     "node": ">=18"
   },

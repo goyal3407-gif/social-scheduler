@@ -245,7 +245,7 @@ export default function Settings({ settings, dbStatus, onSave, saving, onInstagr
         </div>
         <section className="card">
           <h2>About this app</h2>
-          <p className="muted small" style={{ marginTop: 8 }}>Social Scheduler is free forever. Schedule Reels, Feed posts and Stories for Instagram, YouTube, Facebook and TikTok from one calm place.</p>
+          <p className="muted small" style={{ marginTop: 8 }}>KiluaAI is free forever. Schedule Reels, Feed posts and Stories for Instagram, YouTube, Facebook and TikTok from one calm place.</p>
           <ul className="muted small" style={{ marginTop: 12, paddingLeft: 18, lineHeight: 1.9 }}>
             <li>Free forever — no trial, no card</li>
             <li>Your media, queue and templates are yours</li>

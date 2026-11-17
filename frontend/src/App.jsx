@@ -61,7 +61,7 @@ export default function App() {
   // Per-tab document title (screen readers + history).
   useEffect(() => {
     const label = (NAV.find((n) => n.id === tab) || {}).label || (tab === 'studio' ? 'Studio' : 'Home')
-    document.title = tab === 'home' ? 'Social Scheduler by Goyal Kumar' : `${label} · Social Scheduler`
+    document.title = tab === 'home' ? 'KiluaAI by Goyal Kumar' : `${label} · KiluaAI`
   }, [tab])
 
   // Escape closes the delete modal.
@@ -378,7 +378,7 @@ export default function App() {
           <div className="logo">
             <div className="logo-mark" aria-hidden="true"><IconQueue size={22} /></div>
             <div>
-              <b>Social Scheduler</b>
+              <b>KiluaAI</b>
               <span>by Goyal Kumar · Free forever</span>
             </div>
           </div>
@@ -445,7 +445,7 @@ export default function App() {
         </Suspense>
 
         <footer className="footer">
-          <b>Social Scheduler</b> — free forever, for every creator.<br />
+          <b>KiluaAI</b> — free forever, for every creator.<br />
           Made by <b>Goyal Kumar</b> · Schedule Reels, Feed posts &amp; Stories for Instagram, YouTube, Facebook and TikTok.<br />
           <span className="muted small">v1.1.0{dbStatus?.db ? ` · storage: ${dbStatus.db}` : ''}</span>
         </footer>

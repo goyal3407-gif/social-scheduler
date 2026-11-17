@@ -229,7 +229,7 @@ async function main() {
   check('frontend dist built', fs.existsSync(distHtml));
   const htmlRes = await fetch(`${BASE}/`);
   const html = await htmlRes.text();
-  check('SPA serves index.html', htmlRes.status === 200 && html.includes('Social Scheduler'));
+  check('SPA serves index.html', htmlRes.status === 200 && html.includes('KiluaAI'));
   check('SPA serves robots.txt', (await (await fetch(`${BASE}/robots.txt`)).text()).includes('Disallow: /api/'));
 
   // 17. Build size budget: initial JS chunk under 220 KB.

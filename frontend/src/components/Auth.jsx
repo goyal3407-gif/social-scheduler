@@ -31,7 +31,7 @@ export default function Auth({ onAuth }) {
     <div className="wrap" style={{ maxWidth: 440, paddingTop: 48 }}>
       <div style={{ textAlign: 'center', marginBottom: 20 }}>
         <div className="logo-mark" aria-hidden="true" style={{ margin: '0 auto 12px', width: 48, height: 48, fontSize: 22 }}>▦</div>
-        <h1 style={{ fontSize: 24 }}>Social Scheduler</h1>
+        <h1 style={{ fontSize: 24 }}>KiluaAI</h1>
         <p className="muted" style={{ marginTop: 6 }}>by Goyal Kumar · Free forever</p>
       </div>
       <form className="card" onSubmit={submit}>

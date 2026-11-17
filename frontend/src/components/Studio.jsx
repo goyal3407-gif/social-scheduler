@@ -269,7 +269,7 @@ export default function Studio({ editing, seed, media, templates, onSave, onCanc
           <div className="card preview-card">
             <div className="card-head"><div><h2>Live preview</h2><p>How it will look on a phone.</p></div><span className="badge brand">{form.platform}</span></div>
             <div className="phone" aria-label="Phone preview">
-              <div className="phone-head"><span>Social Scheduler</span><span>{form.format}</span></div>
+              <div className="phone-head"><span>KiluaAI</span><span>{form.format}</span></div>
               <div className="phone-media">
                 {form.mediaUrl ? (form.mediaType === 'image' ? <img src={form.mediaUrl} alt="Preview" /> : <video src={form.mediaUrl} muted playsInline controls preload="metadata" />) : <span style={{ color: '#888', fontSize: 13, padding: 20, textAlign: 'center' }}>Add media in Step 1 to see it here</span>}
                 <div className="phone-overlay">

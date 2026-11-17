@@ -1,4 +1,4 @@
-# Social Scheduler by Goyal Kumar
+# KiluaAI by Goyal Kumar
 
 A free-forever social media scheduler for anyone — schedule Instagram Reels and posts, manage a media library, bulk-schedule from links or CSV, and publish directly to Instagram via the Instagram Graph API.
 
