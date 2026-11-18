@@ -348,6 +348,32 @@ button,.tab{touch-action:manipulation}
 .auth-switch{border:none;background:transparent;color:var(--gold);font-weight:700;padding:0;font-size:12.5px;cursor:pointer}
 .auth-switch:hover{text-decoration:underline}
 
+/* --- Public landing (logged-out root page, Phase F): the same plain
+   off-white, narrow-column language as Auth, widened a little for the
+   feature grid. Only ever rendered for signed-out visitors. --- */
+.landing{max-width:880px;margin:0 auto;padding:0 18px 8px}
+.landing-hero{text-align:center;padding:7vh 0 2px}
+.landing-name{font-size:30px;letter-spacing:-.02em}
+.landing-line{font-size:19px;font-weight:600;line-height:1.35;margin:12px auto 0;max-width:620px}
+.landing-sub{margin:10px auto 0;max-width:560px;font-size:14.5px}
+.landing .auth-wrap{padding-top:30px;padding-bottom:8px}
+.landing-sec{max-width:720px;margin:42px auto 0}
+.landing-sec h2{font-size:20px;margin-bottom:10px}
+.landing-sec p{color:var(--ink-2);font-size:14.5px}
+.feat-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px}
+@media(max-width:640px){.feat-grid{grid-template-columns:1fr}}
+.feat-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-sm);padding:14px 16px}
+.feat-card b{display:block;font-size:14.5px;margin-bottom:4px}
+.feat-card span{font-size:13.5px;color:var(--ink-2);line-height:1.5}
+.steps{margin:6px 0 0;padding:0;list-style:none}
+.steps li{display:flex;gap:12px;padding:11px 0;border-top:1px solid var(--line-2);font-size:14.5px;color:var(--ink-2)}
+.steps li:first-child{border-top:none}
+.steps b{color:var(--ink)}
+.step-n{flex:none;width:26px;height:26px;border-radius:50%;background:var(--gold-soft);color:var(--gold);font-weight:700;font-size:13.5px;display:grid;place-items:center;margin-top:1px}
+.landing-foot{max-width:720px;margin:50px auto 0;padding-top:18px;border-top:1px solid var(--line);text-align:center}
+.landing-foot nav{display:flex;gap:20px;justify-content:center;flex-wrap:wrap;margin-bottom:10px}
+.landing-foot nav a{font-size:13.5px;font-weight:600}
+
 /* --- Desktop top navigation --- */
 /* The brand block is flex:none (above) and the nav gets min-width:0 +
    its own horizontal scroll, so at narrower desktop widths the menu

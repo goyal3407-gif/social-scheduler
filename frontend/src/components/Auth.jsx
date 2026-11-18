@@ -5,7 +5,11 @@ import { api } from '../api.js'
 // no stats — until the server confirms a session.
 // Minimal layout: no card, just a narrow column on the plain
 // background — small gold logo, wordmark, fields, one dark button.
-export default function Auth({ onAuth }) {
+// With `bare` (used inside the public Landing page, Phase F) the
+// branding head and the closing tagline are skipped: the landing hero
+// above the form already carries the name, logo and the explanation,
+// and the landing page only describes features that are live today.
+export default function Auth({ onAuth, bare = false }) {
   const [mode, setMode] = useState('login') // 'login' | 'signup' | 'forgot'
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
@@ -53,11 +57,13 @@ export default function Auth({ onAuth }) {
   if (mode === 'forgot') {
     return (
       <div className="auth-wrap">
-        <div className="auth-head">
-          <div className="logo-mark auth-logo" aria-hidden="true"><img src="/icon-192.png" alt="" width="52" height="52" /></div>
-          <h1 className="auth-wordmark">KiluaAI</h1>
-          <p className="muted">Reset your password</p>
-        </div>
+        {!bare && (
+          <div className="auth-head">
+            <div className="logo-mark auth-logo" aria-hidden="true"><img src="/icon-192.png" alt="" width="52" height="52" /></div>
+            <h1 className="auth-wordmark">KiluaAI</h1>
+            <p className="muted">Reset your password</p>
+          </div>
+        )}
         <form onSubmit={submitForgot}>
           <label htmlFor="forgotEmail">Email</label>
           <input id="forgotEmail" type="email" autoComplete="email" placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} />
@@ -75,11 +81,13 @@ export default function Auth({ onAuth }) {
 
   return (
     <div className="auth-wrap">
-      <div className="auth-head">
-        <div className="logo-mark auth-logo" aria-hidden="true"><img src="/icon-192.png" alt="" width="52" height="52" /></div>
-        <h1 className="auth-wordmark">KiluaAI</h1>
-        <p className="muted">{mode === 'signup' ? 'Create your account' : 'Log in to your account'}</p>
-      </div>
+      {!bare && (
+        <div className="auth-head">
+          <div className="logo-mark auth-logo" aria-hidden="true"><img src="/icon-192.png" alt="" width="52" height="52" /></div>
+          <h1 className="auth-wordmark">KiluaAI</h1>
+          <p className="muted">{mode === 'signup' ? 'Create your account' : 'Log in to your account'}</p>
+        </div>
+      )}
       <form onSubmit={submit}>
         {mode === 'signup' && (
           <>
@@ -110,9 +118,11 @@ export default function Auth({ onAuth }) {
           </button>
         </p>
       </form>
-      <p className="muted small" style={{ marginTop: 28, textAlign: 'center' }}>
-        Schedule Reels, Feed posts &amp; Stories for Instagram, YouTube, Facebook and TikTok. Free forever.
-      </p>
+      {!bare && (
+        <p className="muted small" style={{ marginTop: 28, textAlign: 'center' }}>
+          Schedule Reels, Feed posts &amp; Stories for Instagram, YouTube, Facebook and TikTok. Free forever.
+        </p>
+      )}
     </div>
   )
 }

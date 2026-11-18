@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense } from 'react'
 import { api, nextBestTime } from './api.js'
 import { trFor } from './i18n.js'
-import Auth, { ResetPassword } from './components/Auth.jsx'
+import { ResetPassword } from './components/Auth.jsx'
 import Dashboard from './components/Dashboard.jsx'
 import { IconHome, IconCal, IconQueue, IconPlus, IconMedia, IconBulk, IconTools, IconSpark, IconSettings, IconSun, IconMoon, IconMenu, IconX, IconBell, IconLink, IconSearch } from './components/icons.jsx'
 import { Skeleton, isOwnMediaUrl } from './components/shared.jsx'
@@ -45,6 +45,10 @@ const Tools = lazyRetry(() => import('./components/Tools.jsx'))
 const AIStudio = lazyRetry(() => import('./components/AIStudio.jsx'))
 const Settings = lazyRetry(() => import('./components/Settings.jsx'))
 const Connections = lazyRetry(() => import('./components/Connections.jsx'))
+// The public landing page is only ever shown to logged-out visitors,
+// so it lazy-loads like the heavy tabs — the signed-in shell (and the
+// main-chunk budget) never pays for it.
+const Landing = lazyRetry(() => import('./components/Landing.jsx'))
 
 function TabFallback() {
   return <div className="section"><div className="card"><Skeleton rows={4} /></div></div>
@@ -749,9 +753,14 @@ export default function App() {
     return <div className="app"><div className="wrap" style={{ paddingTop: 60, textAlign: 'center' }}><p className="muted">Loading…</p></div></div>
   }
   if (!user) {
+    // Logged-out root: the public landing page (Phase F) with the
+    // login/sign-up form inside it — a visitor can read what KiluaAI
+    // does before creating an account. Signed-in users never see it.
     return (
       <div className="app">
-        <Auth onAuth={(u) => { setUser(u); setTab('home') }} />
+        <Suspense fallback={<div className="wrap" style={{ paddingTop: 60, textAlign: 'center' }}><p className="muted">Loading…</p></div>}>
+          <Landing onAuth={(u) => { setUser(u); setTab('home') }} />
+        </Suspense>
       </div>
     )
   }

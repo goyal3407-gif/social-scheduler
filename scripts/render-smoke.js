@@ -15,7 +15,10 @@
 // test exits 2 with instructions (`npm i --no-save jsdom` at the repo root).
 //
 // Scenarios (each in a fresh child process, fresh module registry):
-//   A logged-out: /api/auth/me -> 401; the login form must render.
+//   A logged-out: /api/auth/me -> 401; the public landing page (Phase F)
+//                 must render AROUND the login form — hero line, feature
+//                 grid and the Privacy/Terms footer links — and the login
+//                 form itself must still render and be reachable.
 //   B logged-in:  stubbed API with seeded posts; the dashboard must render,
 //                 then the Queue tab must render with scheduled posts first
 //                 (soonest at top), other statuses below, newest first, and
@@ -193,7 +196,20 @@ async function runScenario(scenario, bundleDir) {
       () => root.innerHTML.length > 0 && window.document.querySelector('input[type="password"]'),
       'login form to render'
     )
-    console.log('render-smoke scenario A: PASS (login form renders, #root ' + root.innerHTML.length + ' bytes)')
+    // Phase F: the logged-out root is a public landing page, not a bare
+    // form — Google's OAuth reviewer must be able to read what the app
+    // does without an account. Assert the hero line, a feature-grid
+    // entry, the How-it-works steps and the footer legal links all
+    // rendered alongside the (still present) login form.
+    const txt = root.textContent
+    if (!txt.includes('Instagram scheduler for Reels, Posts and Stories')) fail('landing hero line missing on the logged-out page')
+    if (!txt.includes('YouTube cross-posting')) fail('landing hero YouTube mention missing')
+    if (!txt.includes('Bulk scheduling')) fail('landing feature grid missing (no "Bulk scheduling" card)')
+    if (!txt.includes('How it works') || !txt.includes('Connect Instagram')) fail('landing How-it-works steps missing')
+    if (!window.document.querySelector('a[href="/privacy.html"]')) fail('landing footer Privacy Policy link missing')
+    if (!window.document.querySelector('a[href="/terms.html"]')) fail('landing footer Terms of Service link missing')
+    if (!window.document.querySelector('a[href="/contact.html"]')) fail('landing footer Contact link missing')
+    console.log('render-smoke scenario A: PASS (landing page + login form render, #root ' + root.innerHTML.length + ' bytes)')
   } else if (scenario === 'B') {
     await waitFor(() => root.innerHTML.length > 0, 'app shell to render')
     // A fresh account lands on the setup wizard first; skip through to the
