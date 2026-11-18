@@ -4,7 +4,7 @@ import { PostRow, Skeleton, Empty, MediaVisual } from './shared.jsx'
 
 const DOW = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
-export default function CalendarView({ posts, loading, onEdit, onDelete, onPublish, publishingId, onGoQueue }) {
+export default function CalendarView({ posts, loading, onEdit, onDelete, onPublish, publishingId, onGoQueue, onCreate }) {
   const today = new Date()
   const [cursor, setCursor] = useState(new Date(today.getFullYear(), today.getMonth(), 1))
   const [selected, setSelected] = useState(today.toDateString())
@@ -48,7 +48,7 @@ export default function CalendarView({ posts, loading, onEdit, onDelete, onPubli
             <button type="button" className="btn ghost small" onClick={() => shift(1)}>Next →</button>
           </div>
         </div>
-        {loading ? <Skeleton rows={4} /> : (
+        {loading ? <Skeleton variant="calendar" /> : (
           <>
             <div className="cal-head">{DOW.map((d) => <span key={d}>{d}</span>)}</div>
             <div className="cal-grid">
@@ -91,7 +91,7 @@ export default function CalendarView({ posts, loading, onEdit, onDelete, onPubli
           {onGoQueue && <button type="button" className="btn ghost small" onClick={onGoQueue}>Open in Queue →</button>}
         </div>
         {selectedPosts.length === 0 ? (
-          <Empty title="Nothing on this day" body="Pick another day, or schedule a post for this one from Studio." />
+          <Empty title="Nothing scheduled yet" body="No posts on this day. Schedule one and it will show up here and in your queue." action={onCreate ? <button type="button" className="btn primary small" onClick={onCreate}>Schedule a post</button> : undefined} />
         ) : selectedPosts.map((p) => (
           <PostRow key={p.id} post={p} onEdit={onEdit} onDelete={onDelete} onPublish={onPublish} publishing={publishingId === p.id} />
         ))}

@@ -58,7 +58,8 @@ export default function App() {
   const [stats, setStats] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
-  const [toast, setToast] = useState('')
+  const [toast, setToast] = useState(null) // { id, message, kind, actionLabel, onAction }
+  const [pendingDeleteIds, setPendingDeleteIds] = useState(new Set())
   const [editing, setEditing] = useState(null)
   const [studioKey, setStudioKey] = useState(0)
   const [saving, setSaving] = useState(false)
@@ -70,6 +71,8 @@ export default function App() {
   const [hashtagGroups, setHashtagGroups] = useState([])
   const [avatarMenuOpen, setAvatarMenuOpen] = useState(false)
   const toastTimer = useRef(null)
+  const toastSeq = useRef(0)
+  const pendingDeleteTimers = useRef(new Map())
   const refreshSettingsRef = useRef(null)
 
   // Per-tab document title (screen readers + history).
@@ -238,11 +241,13 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user])
 
-  const showToast = (msg) => {
-    setToast(msg)
+  const pushToast = useCallback(({ message, kind, actionLabel, onAction, duration = 6000 }) => {
+    const id = ++toastSeq.current
+    setToast({ id, message, kind, actionLabel, onAction })
     if (toastTimer.current) clearTimeout(toastTimer.current)
-    toastTimer.current = setTimeout(() => setToast(''), 4000)
-  }
+    toastTimer.current = setTimeout(() => setToast((cur) => (cur && cur.id === id ? null : cur)), duration)
+  }, [])
+  const showToast = useCallback((msg, kind) => pushToast({ message: msg, kind }), [pushToast])
   useEffect(() => () => { if (toastTimer.current) clearTimeout(toastTimer.current) }, [])
 
   const refreshStats = useCallback(async () => {
@@ -315,10 +320,10 @@ export default function App() {
   }, [refreshStats])
 
   const handleRescheduleNextBest = useCallback(async (post) => {
-    const slot = nextBestTime(posts.filter((p) => p.id !== post.id))
+    const slot = nextBestTime(visiblePosts.filter((p) => p.id !== post.id))
     if (!slot) { showToast('No free 7:00 PM slot in the next 14 days.'); return }
     await handleReschedule(post, { scheduleTime: slot })
-  }, [posts, handleReschedule])
+  }, [visiblePosts, handleReschedule])
 
   const handlePublish = useCallback(async (post) => {
     setPublishingId(post.id)
@@ -327,7 +332,8 @@ export default function App() {
       if (res && res.ok === false) throw new Error(res.error || 'Publish failed.')
       const liveUrl = res?.liveUrl || res?.live_url
       setPosts((prev) => prev.map((p) => (p.id === post.id ? { ...p, status: 'published', ...(liveUrl ? { liveUrl } : {}) } : p)))
-      showToast(liveUrl ? `Published live — ${liveUrl}` : 'Published.')
+      if (liveUrl) pushToast({ message: 'Published live', actionLabel: 'View on Instagram', onAction: () => window.open(liveUrl, '_blank', 'noopener') })
+      else showToast('Published.')
       refreshStats()
     } catch (e) {
       showToast(e.message || 'Publish failed.')
@@ -336,7 +342,7 @@ export default function App() {
       setError(e)
       if (/not connected/i.test(e.message || '')) setTab('settings')
     } finally { setPublishingId(null) }
-  }, [refreshStats])
+  }, [refreshStats, pushToast])
 
   const doDelete = useCallback(async () => {
     if (!confirmDelete) return
@@ -355,11 +361,55 @@ export default function App() {
     } catch (e) { setError(e) }
   }, [confirmDelete, refreshStats])
 
+  // Single-post delete is optimistic: the row hides at once and the
+  // real DELETE is only sent when the Undo toast expires (~6s). The
+  // post stays in `posts` until then, so Undo (or a failed DELETE)
+  // restores it by simply un-hiding. Pending deletes are tracked per
+  // post id, so a second delete never disturbs the first one's timer.
+  const flushDeletePost = useCallback(async (id) => {
+    pendingDeleteTimers.current.delete(id)
+    setPendingDeleteIds((prev) => { const n = new Set(prev); n.delete(id); return n })
+    try {
+      await api.deletePost(id)
+      setPosts((prev) => prev.filter((p) => p.id !== id))
+      refreshStats()
+    } catch (e) { setError(e) }
+  }, [refreshStats])
+
+  const requestDeletePost = useCallback((post) => {
+    if (!post || !post.id || pendingDeleteTimers.current.has(post.id)) return
+    setPendingDeleteIds((prev) => new Set(prev).add(post.id))
+    pendingDeleteTimers.current.set(post.id, setTimeout(() => flushDeletePost(post.id), 6000))
+    pushToast({
+      message: 'Post deleted',
+      actionLabel: 'Undo',
+      duration: 6000,
+      onAction: () => {
+        const t = pendingDeleteTimers.current.get(post.id)
+        if (t) clearTimeout(t)
+        pendingDeleteTimers.current.delete(post.id)
+        setPendingDeleteIds((prev) => { const n = new Set(prev); n.delete(post.id); return n })
+      }
+    })
+  }, [flushDeletePost, pushToast])
+
+  // Unmount with deletes still pending: send them immediately rather
+  // than losing them (the rows are already hidden, so the user's
+  // intent is clear).
+  useEffect(() => () => {
+    for (const [id, t] of pendingDeleteTimers.current) { clearTimeout(t); api.deletePost(id).catch(() => {}) }
+  }, [])
+
+  const visiblePosts = useMemo(
+    () => (pendingDeleteIds.size ? posts.filter((p) => !pendingDeleteIds.has(p.id)) : posts),
+    [posts, pendingDeleteIds]
+  )
+
   // Posts whose scheduled time has passed without publishing.
   const overdue = useMemo(() => {
     const now = Date.now()
-    return (posts || []).filter((p) => p.status === 'scheduled' && p.scheduleTime && new Date(p.scheduleTime).getTime() <= now)
-  }, [posts])
+    return (visiblePosts || []).filter((p) => p.status === 'scheduled' && p.scheduleTime && new Date(p.scheduleTime).getTime() <= now)
+  }, [visiblePosts])
 
   // Publish everything that is due, right now.
   const handlePublishDue = useCallback(async () => {
@@ -534,12 +584,12 @@ export default function App() {
   }, [])
 
   const statsFallback = useMemo(() => stats || {
-    scheduled: posts.filter((p) => p.status === 'scheduled').length,
-    published: posts.filter((p) => p.status === 'published').length,
-    failed: posts.filter((p) => p.status === 'failed').length,
-    drafts: posts.filter((p) => p.status === 'draft').length,
+    scheduled: visiblePosts.filter((p) => p.status === 'scheduled').length,
+    published: visiblePosts.filter((p) => p.status === 'published').length,
+    failed: visiblePosts.filter((p) => p.status === 'failed').length,
+    drafts: visiblePosts.filter((p) => p.status === 'draft').length,
     mediaCount: media.length
-  }, [stats, posts, media])
+  }, [stats, visiblePosts, media])
 
   // --- Login gate: nothing but the Auth screen until the server says who this is.
   if (!authChecked) {
@@ -666,7 +716,6 @@ export default function App() {
       )}
 
       <main className="wrap" id="main">
-        {toast && <div className="alert success" role="status" style={{ marginTop: 16 }}><span style={{ flex: 1 }}>{toast}</span><button type="button" className="btn ghost small" aria-label="Dismiss" onClick={() => setToast('')}>✕</button></div>}
         {error && tab !== 'home' && (
           <div className="alert error" role="alert" style={{ marginTop: 16 }}>
             <div style={{ flex: 1 }}>{String(error.message || error)}</div>
@@ -676,9 +725,9 @@ export default function App() {
         )}
 
         {tab === 'home' && (
-          <Dashboard posts={posts} media={media} user={user} stats={statsFallback} loading={loading} error={error} onRetry={loadAll}
+          <Dashboard posts={visiblePosts} media={media} user={user} stats={statsFallback} loading={loading} error={error} onRetry={loadAll}
             onCreate={() => goStudio(null)} onGoQueue={() => setTab('queue')} onNavigate={setTab}
-            onEdit={goStudio} onDelete={(p) => setConfirmDelete({ type: 'post', item: p })}
+            onEdit={goStudio} onDelete={requestDeletePost}
             onPublish={handlePublish} publishingId={publishingId} settings={settings}
             onDuplicate={handleDuplicate} onPostAgain={handlePostAgain} onReschedule={handleReschedule} onRescheduleNextBest={handleRescheduleNextBest}
             onDismissChecklist={handleDismissChecklist}
@@ -686,17 +735,17 @@ export default function App() {
         )}
         <Suspense fallback={<TabFallback />}>
         {tab === 'calendar' && (
-          <div className="section"><CalendarView posts={posts} loading={loading} onEdit={goStudio} onDelete={(p) => setConfirmDelete({ type: 'post', item: p })} onPublish={handlePublish} publishingId={publishingId} onGoQueue={() => setTab('queue')} /></div>
+          <div className="section"><CalendarView posts={visiblePosts} loading={loading} onEdit={goStudio} onDelete={requestDeletePost} onPublish={handlePublish} publishingId={publishingId} onGoQueue={() => setTab('queue')} onCreate={() => goStudio(null)} /></div>
         )}
         {tab === 'queue' && (
-          <div className="section"><Queue posts={posts} loading={loading} onEdit={goStudio} onDelete={(p) => setConfirmDelete({ type: 'post', item: p })} onPublish={handlePublish} publishingId={publishingId} onCreate={() => goStudio(null)} onDuplicate={handleDuplicate} onPostAgain={handlePostAgain} onReschedule={handleReschedule} onRescheduleNextBest={handleRescheduleNextBest} overdue={overdue} onPublishDue={handlePublishDue} onDeleteMany={(items) => setConfirmDelete({ type: 'posts', items })} /></div>
+          <div className="section"><Queue posts={visiblePosts} loading={loading} onEdit={goStudio} onDelete={requestDeletePost} onPublish={handlePublish} publishingId={publishingId} onCreate={() => goStudio(null)} onDuplicate={handleDuplicate} onPostAgain={handlePostAgain} onReschedule={handleReschedule} onRescheduleNextBest={handleRescheduleNextBest} overdue={overdue} onPublishDue={handlePublishDue} onDeleteMany={(items) => setConfirmDelete({ type: 'posts', items })} /></div>
         )}
         {tab === 'studio' && (
           <div className="section">
-            <Studio key={`${studioKey}-${editing?.id || 'new'}`} editing={editing} seed={templateSeed ? { caption: templateSeed.text || templateSeed.caption || '', hashtags: templateSeed.hashtags || '', cta: templateSeed.cta || '', mediaUrl: templateSeed.mediaUrl || '', mediaType: templateSeed.mediaType || 'video', posterUrl: templateSeed.posterUrl || '', scheduleTime: templateSeed.scheduleTime || '', platform: templateSeed.platform || 'Instagram', format: templateSeed.format || 'REELS', igAccountId: templateSeed.igAccountId || '', igAccountUsername: templateSeed.igAccountUsername || '' } : null} media={media} templates={templates} hashtagGroups={hashtagGroups} onCreateTemplate={handleCreateTemplate} onDeleteTemplate={handleDeleteTemplate} onCreateHashtagGroup={handleCreateHashtagGroup} onDeleteHashtagGroup={handleDeleteHashtagGroup} onSave={handleSavePost} onCancel={() => setTab('queue')} saving={saving} posts={posts} igAccounts={settings?.instagramAccounts || []} defaultIgUserId={settings?.defaultIgUserId || ''} settings={settings} />
+            <Studio key={`${studioKey}-${editing?.id || 'new'}`} editing={editing} seed={templateSeed ? { caption: templateSeed.text || templateSeed.caption || '', hashtags: templateSeed.hashtags || '', cta: templateSeed.cta || '', mediaUrl: templateSeed.mediaUrl || '', mediaType: templateSeed.mediaType || 'video', posterUrl: templateSeed.posterUrl || '', scheduleTime: templateSeed.scheduleTime || '', platform: templateSeed.platform || 'Instagram', format: templateSeed.format || 'REELS', igAccountId: templateSeed.igAccountId || '', igAccountUsername: templateSeed.igAccountUsername || '' } : null} media={media} templates={templates} hashtagGroups={hashtagGroups} onCreateTemplate={handleCreateTemplate} onDeleteTemplate={handleDeleteTemplate} onCreateHashtagGroup={handleCreateHashtagGroup} onDeleteHashtagGroup={handleDeleteHashtagGroup} onSave={handleSavePost} onCancel={() => setTab('queue')} saving={saving} posts={visiblePosts} igAccounts={settings?.instagramAccounts || []} defaultIgUserId={settings?.defaultIgUserId || ''} settings={settings} />
           </div>
         )}
-        {tab === 'bulk' && <div className="section"><Bulk onImport={handleBulkImport} posts={posts} onUploadFile={handleUpload} igAccounts={settings?.instagramAccounts || []} defaultIgUserId={settings?.defaultIgUserId || ''} hashtagGroups={hashtagGroups} /></div>}
+        {tab === 'bulk' && <div className="section"><Bulk onImport={handleBulkImport} posts={visiblePosts} onUploadFile={handleUpload} igAccounts={settings?.instagramAccounts || []} defaultIgUserId={settings?.defaultIgUserId || ''} hashtagGroups={hashtagGroups} /></div>}
         {tab === 'media' && (
           <div className="section"><MediaLibrary media={media} loading={loading} error={error} onRetry={loadAll}
             onAddLink={handleAddLink} onUpload={handleUpload}
@@ -705,10 +754,10 @@ export default function App() {
             onUse={(m) => { setEditing(null); setTemplateSeed({ mediaUrl: m.url, mediaType: m.kind === 'image' ? 'image' : 'video', posterUrl: m.posterUrl || '', caption: '', scheduleTime: '' }); setStudioKey((k) => k + 1); setTab('studio'); window.scrollTo({ top: 0 }) }} /></div>
         )}
         {tab === 'tools' && (
-          <div className="section"><Tools posts={posts} stats={statsFallback} templates={templates} onCreateTemplate={handleCreateTemplate} onUseTemplate={useInStudio} /></div>
+          <div className="section"><Tools posts={visiblePosts} stats={statsFallback} templates={templates} onCreateTemplate={handleCreateTemplate} onUseTemplate={useInStudio} /></div>
         )}
         {tab === 'ai' && (
-          <div className="section"><AIStudio posts={posts} settings={settings} onSendToStudio={useInStudio} onSaveDraft={handleSaveDraft} onSaveDrafts={handleSaveDrafts} /></div>
+          <div className="section"><AIStudio posts={visiblePosts} settings={settings} onSendToStudio={useInStudio} onSaveDraft={handleSaveDraft} onSaveDrafts={handleSaveDrafts} /></div>
         )}
         {tab === 'settings' && (
           <div className="section"><Settings settings={settings} dbStatus={dbStatus} saving={saving} onSave={async (s) => { setSaving(true); try { const u = await api.saveSettings(s); setSettings(u || s) } finally { setSaving(false) } }} onInstagramChanged={refreshSettings} user={user} onAccountDeleted={handleLogout} /></div>
@@ -721,6 +770,16 @@ export default function App() {
           <span className="muted small">v1.1.0{dbStatus?.db ? ` · storage: ${dbStatus.db}` : ''} · <a href="/contact.html">Contact</a></span>
         </footer>
       </main>
+
+      {toast && (
+        <div className={`toast-pill ${toast.kind === 'error' ? 'error' : ''}`} role="status">
+          <span>{toast.message}</span>
+          {toast.actionLabel && (
+            <button type="button" className="toast-action" onClick={() => { const fn = toast.onAction; if (toastTimer.current) clearTimeout(toastTimer.current); setToast(null); if (fn) fn() }}>{toast.actionLabel}</button>
+          )}
+          <button type="button" className="toast-close" aria-label="Dismiss" onClick={() => setToast(null)}>✕</button>
+        </div>
+      )}
 
       {confirmDelete && (
         <div className="modal-bg" role="dialog" aria-modal="true" aria-label="Confirm delete" onClick={() => setConfirmDelete(null)}>

@@ -342,8 +342,8 @@ export default function MediaLibrary({ media, loading, error, onRetry, onAddLink
         <span className="pill">{filtered.length} file{filtered.length === 1 ? '' : 's'}</span>
       </div>
 
-      {loading ? <Skeleton rows={3} /> : filtered.length === 0 ? (
-        <div className="card"><Empty title="Library is empty" body={q || folder !== 'all' || onlyFav ? 'Nothing matches those filters — try clearing them.' : 'Upload your first video or image, or add one by link, and it will live here ready for Studio.'} /></div>
+      {loading ? <Skeleton variant="media" rows={3} /> : filtered.length === 0 ? (
+        <div className="card"><Empty title="Library is empty" body={q || folder !== 'all' || onlyFav ? 'Nothing matches those filters — try clearing them.' : 'Upload your first video or image, or add one by link, and it will live here ready for Studio.'} action={q || folder !== 'all' || onlyFav ? undefined : <button type="button" className="btn primary small" onClick={() => fileRef.current?.click()}>Upload media</button>} /></div>
       ) : (
         <div>
           <div className="media-grid">

@@ -393,3 +393,62 @@ button,.tab{touch-action:manipulation}
 .ig-caption p{word-break:break-word}
 .ig-tags{color:var(--blue);margin-top:4px}
 .ig-cta{font-weight:700;margin-top:4px}
+
+/* ============================================================
+   UX PACK 2 (2026-11-18): skeleton variants, logo empty states,
+   global toast pill with actions, post status tracker,
+   tomorrow nudge, connected-account row, 3-across mobile stats.
+   ============================================================ */
+
+/* --- Skeleton variants (shimmer comes from .skel) --- */
+.skel-post{display:flex;gap:11px;padding:10px 0;border-top:1px solid var(--line-2)}
+.skel-post:first-child{border-top:none;padding-top:0}
+.skel-lines{flex:1;min-width:0;display:flex;flex-direction:column;gap:9px;padding-top:4px}
+.skel-cal{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}
+.skel-cal .skel{height:86px}
+@media(max-width:640px){.skel-cal .skel{height:56px}}
+.skel-media{aspect-ratio:4/5}
+
+/* --- Empty states: the app logo as the illustration --- */
+.empty-art{width:66px;height:66px;border-radius:50%;background:var(--gold-soft);display:grid;place-items:center;margin:0 auto 12px}
+.empty-art img{border-radius:15px;display:block}
+
+/* --- Global toast: bottom-centre dark pill --- */
+.toast-pill{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(18px + env(safe-area-inset-bottom, 0px));z-index:120;max-width:min(520px,calc(100vw - 24px));display:flex;align-items:center;gap:12px;background:var(--ink);color:var(--bg);border-radius:999px;padding:11px 12px 11px 18px;font-size:13.5px;font-weight:600;box-shadow:var(--shadow);animation:toast-in .22s ease-out}
+.toast-pill.error{background:var(--red);color:#fff}
+.toast-pill span{flex:1;min-width:0}
+.toast-action{flex:none;border:none;background:var(--gold);color:#14141f;font-weight:800;font-size:13px;border-radius:999px;padding:7px 13px;cursor:pointer;font-family:inherit}
+.toast-close{flex:none;border:none;background:transparent;color:inherit;opacity:.75;font-size:14px;line-height:1;padding:6px;cursor:pointer;font-family:inherit}
+@keyframes toast-in{from{opacity:0;transform:translate(-50%,8px)}to{opacity:1;transform:translate(-50%,0)}}
+
+/* --- Post status tracker (one slim line on post rows) --- */
+.post-tracker{display:flex;align-items:center;gap:6px;margin-top:6px;font-size:11.5px;color:var(--muted);flex-wrap:wrap}
+.trk{display:inline-flex;align-items:center;gap:5px;font-weight:600}
+.trk-dot{width:8px;height:8px;border-radius:50%;border:2px solid var(--line);background:var(--surface);flex:none}
+.trk.done{color:var(--ink-2)}
+.trk.done .trk-dot{background:var(--gold);border-color:var(--gold)}
+.trk.now{color:var(--ink)}
+.trk.now .trk-dot{background:var(--brand);border-color:var(--brand);box-shadow:0 0 0 3px var(--brand-soft)}
+.trk-line{width:14px;height:2px;border-radius:2px;background:var(--line);flex:none}
+.trk-line.done{background:var(--gold)}
+.trk-note{color:var(--amber);font-weight:600}
+.trk-live{color:var(--brand);font-weight:700}
+.post-tracker.failed{color:var(--red);font-weight:600}
+.trk-fail-dot{width:8px;height:8px;border-radius:50%;background:var(--red);flex:none}
+
+/* --- Home: connected-account row + tomorrow nudge --- */
+.ig-row{display:flex;align-items:center;gap:10px;margin-top:14px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:12px 16px;box-shadow:var(--shadow-sm);font-size:13.5px;flex-wrap:wrap}
+.ig-row .grow{flex:1;min-width:180px}
+.nudge{margin-top:16px;align-items:center}
+.nudge .btn{margin-left:auto;flex:none}
+.nudge-close{flex:none;border:none;background:transparent;color:inherit;opacity:.7;font-size:14px;line-height:1;padding:6px;cursor:pointer;font-family:inherit}
+
+/* --- Mobile: the 3 stat cards stay in one row under the greeting --- */
+@media(max-width:520px){
+  .stats-3{grid-template-columns:repeat(3,1fr);gap:8px}
+  .stats-3 .stat:last-child{grid-column:auto}
+  .stats-3 .stat{padding:12px 10px;border-radius:14px}
+  .stats-3 .stat b{font-size:20px}
+  .stats-3 .stat span{font-size:11px}
+  .stats-3 .stat small{font-size:10.5px}
+}

@@ -69,6 +69,20 @@ export default function Dashboard({ posts, media, user, stats, loading, error, o
   const failedPosts = useMemo(() => [...(posts || [])]
     .filter((p) => p.status === 'failed')
     .sort((a, b) => new Date(b.failedAt || b.scheduleTime || 0) - new Date(a.failedAt || a.scheduleTime || 0)), [posts])
+  // Tomorrow nudge: shown when nothing is scheduled for tomorrow.
+  // Dismissing hides it for the rest of today (localStorage by date).
+  const [nudgeDismissed, setNudgeDismissed] = useState(() => {
+    try { return localStorage.getItem('ss-nudge-day') === new Date().toDateString() } catch { return false }
+  })
+  const dismissNudge = () => {
+    setNudgeDismissed(true)
+    try { localStorage.setItem('ss-nudge-day', new Date().toDateString()) } catch { /* stays hidden this session */ }
+  }
+  const hasTomorrow = useMemo(() => {
+    const t = new Date(); t.setDate(t.getDate() + 1)
+    const key = t.toDateString()
+    return (posts || []).some((p) => p.status === 'scheduled' && p.scheduleTime && new Date(p.scheduleTime).toDateString() === key)
+  }, [posts])
 
   return (
     <div>
@@ -96,6 +110,28 @@ export default function Dashboard({ posts, media, user, stats, loading, error, o
           </>
         )}
       </section>
+
+      <div className="stats stats-3" aria-label="Overview">
+        {loading ? Array.from({ length: 3 }).map((_, i) => <div key={i} className="skel" style={{ height: 92 }} />) : (
+          <>
+            <div className="stat"><b>{s.scheduled ?? upcoming.length}</b><span>Scheduled</span><small>{weekCount} in the next 7 days</small></div>
+            <div className="stat"><b>{s.published ?? (posts || []).filter((p) => p.status === 'published').length}</b><span>Published</span><small>{postedThisWeek} this week{streak > 0 ? ` · ${streak}-day streak` : ''}</small></div>
+            <div className="stat"><b>{s.total ?? (posts || []).length}</b><span>Total posts</span><small>{s.mediaCount ?? (media || []).length} media in library</small></div>
+          </>
+        )}
+      </div>
+
+      {!loading && (
+        <div className="ig-row" role="status">
+          <span className={`dot ${settings ? (settings.instagramConnected ? '' : 'off') : 'amber'}`} aria-hidden="true" />
+          <div className="grow">
+            <b>Instagram: </b>
+            {!settings ? 'Checking connection…' : settings.instagramConnected ? <>Connected{settings.instagramHandle ? ` as @${settings.instagramHandle}` : ''} — publishing is ready.</> : 'Not connected yet — connect Instagram to publish live.'}
+            {settings?.instagramConnected && <span className="muted small" style={{ display: 'block' }}>Token is stored on the server only — it is never shown in this app.</span>}
+          </div>
+          {settings && !settings.instagramConnected && <button type="button" className="btn ghost small" onClick={() => onNavigate && onNavigate('settings')}>Open Settings</button>}
+        </div>
+      )}
 
       {error && <ErrorBox error={error} onRetry={onRetry} />}
 
@@ -165,15 +201,14 @@ export default function Dashboard({ posts, media, user, stats, loading, error, o
         </section>
       )}
 
-      <div className="stats stats-3" aria-label="Overview">
-        {loading ? Array.from({ length: 3 }).map((_, i) => <div key={i} className="skel" style={{ height: 92 }} />) : (
-          <>
-            <div className="stat"><b>{s.scheduled ?? upcoming.length}</b><span>Scheduled</span><small>{weekCount} in the next 7 days</small></div>
-            <div className="stat"><b>{postedThisWeek}</b><span>Posted this week</span><small>{streak > 0 ? `${streak}-day publishing streak` : 'Last 7 days'}</small></div>
-            <div className="stat"><b>{s.total ?? (posts || []).length}</b><span>Posts total</span><small>{s.published ?? 0} published all time</small></div>
-          </>
-        )}
-      </div>
+      {!loading && !hasTomorrow && !nudgeDismissed && (
+        <div className="warn amber nudge" role="status">
+          <IconClock size={17} />
+          <div style={{ flex: 1 }}><b>Nothing scheduled for tomorrow</b><br />Schedule a post now and it will publish itself right on time.</div>
+          <button type="button" className="btn small" onClick={onCreate}>Schedule a post</button>
+          <button type="button" className="nudge-close" aria-label="Dismiss for today" onClick={dismissNudge}>✕</button>
+        </div>
+      )}
 
       <section className="card section" aria-label="Daily plan">
         <div className="card-head">
@@ -209,8 +244,8 @@ export default function Dashboard({ posts, media, user, stats, loading, error, o
             <div><h2>Up next</h2><p>Your next scheduled posts, in order.</p></div>
             <button type="button" className="btn ghost small" onClick={onGoQueue}>Queue →</button>
           </div>
-          {loading ? <Skeleton rows={3} /> : upcoming.length === 0 ? (
-            <Empty title="Queue is clear" body="No posts are scheduled. Schedule one from Studio or Bulk and it will show up here with a countdown." action={<button type="button" className="btn primary small" onClick={onCreate}>Create a post</button>} />
+          {loading ? <Skeleton variant="posts" rows={3} /> : upcoming.length === 0 ? (
+            <Empty title="Nothing scheduled yet" body="No posts are scheduled. Schedule one from Studio or Bulk and it will show up here, soonest first." action={<button type="button" className="btn primary small" onClick={onCreate}>Create a post</button>} />
           ) : upcoming.slice(0, 4).map((p) => (
             <PostRow key={p.id} post={p} onEdit={onEdit} onDelete={onDelete} onPublish={onPublish} publishing={publishingId === p.id} onDuplicate={onDuplicate} onPostAgain={onPostAgain} onReschedule={onReschedule} onRescheduleNextBest={onRescheduleNextBest} />
           ))}
@@ -218,18 +253,11 @@ export default function Dashboard({ posts, media, user, stats, loading, error, o
 
         <section className="card">
           <div className="card-head"><div><h2>Recent activity</h2><p>Latest posts you created or edited.</p></div></div>
-          {loading ? <Skeleton rows={3} /> : recent.length === 0 ? (
+          {loading ? <Skeleton variant="posts" rows={3} /> : recent.length === 0 ? (
             <Empty title="No posts yet" body="Your recent posts will appear here once you create one." />
           ) : recent.map((p) => (
             <PostRow key={p.id} post={p} onEdit={onEdit} onDelete={onDelete} onPublish={onPublish} publishing={publishingId === p.id} onPostAgain={onPostAgain} />
           ))}
-          <div className="warn blue" style={{ marginTop: 14 }}>
-            <IconClock size={17} />
-            <div><b>Instagram status: </b>{!settings ? 'Checking connection…' : settings.instagramConnected ? `Connected${settings.instagramHandle ? ` as @${settings.instagramHandle}` : ''}. Publishing is ready.` : 'Not connected yet — connect Instagram in Settings to publish live.'}</div>
-          </div>
-          {settings?.instagramConnected && (
-            <p className="muted mt">Token is stored on the server only — it is never shown in this app.</p>
-          )}
         </section>
       </div>
 

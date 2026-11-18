@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { fmtDateTime } from '../api.js'
-import { IconPlay, IconMedia } from './icons.jsx'
+import { IconPlay } from './icons.jsx'
 
 export function StatusBadge({ status }) {
   return <span className={`badge ${status || 'draft'}`}>{status || 'draft'}</span>
@@ -39,9 +39,39 @@ export function Thumb({ post }) {
   return <div className="thumb-ph"><IconPlay size={22} /></div>
 }
 
-export function Skeleton({ rows = 3 }) {
+export function Skeleton({ rows = 3, variant = 'rows' }) {
+  if (variant === 'posts') {
+    return (
+      <div aria-hidden="true">
+        {Array.from({ length: rows }).map((_, i) => (
+          <div key={i} className="skel-post">
+            <div className="skel" style={{ width: 56, height: 76, flex: 'none' }} />
+            <div className="skel-lines">
+              <div className="skel" style={{ height: 14, width: '38%' }} />
+              <div className="skel" style={{ height: 14, width: '82%' }} />
+              <div className="skel" style={{ height: 12, width: '55%' }} />
+            </div>
+          </div>
+        ))}
+      </div>
+    )
+  }
+  if (variant === 'calendar') {
+    return (
+      <div className="skel-cal" aria-hidden="true">
+        {Array.from({ length: 35 }).map((_, i) => <div key={i} className="skel" />)}
+      </div>
+    )
+  }
+  if (variant === 'media') {
+    return (
+      <div className="media-grid" aria-hidden="true">
+        {Array.from({ length: rows * 2 }).map((_, i) => <div key={i} className="skel skel-media" />)}
+      </div>
+    )
+  }
   return (
-    <div>
+    <div aria-hidden="true">
       {Array.from({ length: rows }).map((_, i) => (
         <div key={i} className="skel" style={{ height: 74, marginBottom: 10 }} />
       ))}
@@ -65,10 +95,50 @@ export function ErrorBox({ error, onRetry }) {
 export function Empty({ title, body, action }) {
   return (
     <div className="empty">
-      <div style={{ display: 'grid', placeItems: 'center', marginBottom: 10, color: 'var(--brand)' }}><IconMedia size={30} /></div>
+      <div className="empty-art" aria-hidden="true"><img src="/icon-192.png" alt="" width="42" height="42" /></div>
       <b>{title}</b>
       <p style={{ maxWidth: 420, margin: '0 auto' }}>{body}</p>
       {action && <div style={{ marginTop: 14 }}>{action}</div>}
+    </div>
+  )
+}
+
+/**
+ * One-line progress for a post, derived only from its stored fields:
+ * scheduled/draft sit on step 1; a publish attempt in flight (the
+ * caller is publishing it, a container is processing, or an automatic
+ * retry is pending) lights step 2; published completes all three and
+ * links out. A failed post with no retry pending shows a failed state
+ * instead of pretending to progress.
+ */
+export function StatusTracker({ post, publishing }) {
+  if (!post) return null
+  if (post.status === 'failed' && !post.retryPending) {
+    return (
+      <div className="post-tracker failed" title={post.lastPublishError || undefined}>
+        <span className="trk-fail-dot" aria-hidden="true" />
+        <span>Failed{post.lastPublishError ? ' — see Home for the reason' : ''}</span>
+      </div>
+    )
+  }
+  const published = post.status === 'published'
+  const inFlight = Boolean(publishing || post.containerId || post.retryPending)
+  const step = published ? 3 : inFlight ? 2 : 1
+  const steps = ['Scheduled', 'Publishing', 'Live']
+  return (
+    <div className="post-tracker" aria-label={`Status: ${published ? 'live on Instagram' : inFlight ? 'publishing' : 'scheduled'}`}>
+      {steps.map((label, i) => {
+        const n = i + 1
+        const cls = n < step || published ? 'done' : n === step ? 'now' : ''
+        return (
+          <span key={label} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            {i > 0 && <span className={`trk-line ${n <= step || published ? 'done' : ''}`} aria-hidden="true" />}
+            <span className={`trk ${cls}`}><span className="trk-dot" aria-hidden="true" />{label}</span>
+          </span>
+        )
+      })}
+      {post.status === 'failed' && post.retryPending && <span className="trk-note">auto-retry pending</span>}
+      {published && post.liveUrl && <a className="trk-live" href={post.liveUrl} target="_blank" rel="noreferrer">View on Instagram</a>}
     </div>
   )
 }
@@ -105,6 +175,7 @@ export function PostRow({ post, onEdit, onDelete, onPublish, publishing, onDupli
           {post.hashtags && <span>{post.hashtags}</span>}
           {post.cta && <span>CTA: {post.cta}</span>}
         </div>
+        <StatusTracker post={post} publishing={publishing} />
         <div className="post-foot">
           {post.status !== 'published' && (
             <button type="button" className="btn primary small" disabled={publishing} onClick={() => onPublish && onPublish(post)}>

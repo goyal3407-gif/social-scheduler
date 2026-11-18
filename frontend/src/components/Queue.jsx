@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { fmtDateTime } from '../api.js'
+import { queueOrder } from '../queueOrder.js'
 import { PostRow, Skeleton, Empty, StatusBadge, PlatformBadge, Thumb } from './shared.jsx'
 
 const STATUSES = ['scheduled', 'draft', 'published', 'failed']
@@ -19,14 +20,16 @@ export default function Queue({ posts, loading, onEdit, onDelete, onPublish, pub
   }, [q])
 
   const filtered = useMemo(() => {
-    let list = [...(posts || [])].sort((a, b) => new Date(a.scheduleTime || 0) - new Date(b.scheduleTime || 0))
+    let list = [...(posts || [])]
     if (filter !== 'all') list = list.filter((p) => p.status === filter)
     if (platform !== 'all') list = list.filter((p) => p.platform === platform)
     if (qDebounced.trim()) {
       const needle = qDebounced.toLowerCase()
       list = list.filter((p) => `${p.caption || ''} ${p.hashtags || ''} ${p.cta || ''}`.toLowerCase().includes(needle))
     }
-    return list
+    // Scheduled first (soonest at the top), everything else after —
+    // the kanban columns below inherit this order within each status.
+    return queueOrder(list)
   }, [posts, filter, platform, qDebounced])
 
   const exportCsv = () => {
@@ -81,8 +84,12 @@ export default function Queue({ posts, loading, onEdit, onDelete, onPublish, pub
         </div>
       )}
 
-      {loading ? <div className="card"><Skeleton rows={4} /></div> : filtered.length === 0 ? (
-        <div className="card"><Empty title="Nothing matches" body="Try clearing a filter, or create a post — scheduled posts land here first." action={<button type="button" className="btn primary small" onClick={onCreate}>Create a post</button>} /></div>
+      {loading ? <div className="card"><Skeleton variant="posts" rows={4} /></div> : filtered.length === 0 ? (
+        (posts || []).length === 0 ? (
+          <div className="card"><Empty title="Nothing scheduled yet" body="Your queue is empty. Schedule your first post and it will appear here, soonest first." action={<button type="button" className="btn primary small" onClick={onCreate}>Schedule your first post</button>} /></div>
+        ) : (
+          <div className="card"><Empty title="Nothing matches" body="Try clearing a filter, or create a post — scheduled posts land here first." action={<button type="button" className="btn primary small" onClick={onCreate}>Create a post</button>} /></div>
+        )
       ) : view === 'list' ? (
         <div className="card">
           <label className="small muted" style={{ display: 'flex', gap: 6, alignItems: 'center', paddingBottom: 10, cursor: 'pointer' }}>
