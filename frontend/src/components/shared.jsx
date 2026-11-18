@@ -152,8 +152,15 @@ export function StatusTracker({ post, publishing, onReconnect }) {
   const inFlight = Boolean(publishing || post.containerId || post.retryPending)
   const step = published ? 3 : inFlight ? 2 : 1
   const steps = ['Scheduled', 'Publishing', 'Live']
+  // The wording follows the platforms the post actually used: a
+  // YouTube-only post (Instagram unticked) went live on YouTube — its
+  // liveUrl IS the watch URL — so it gets YouTube wording and no
+  // "also on YouTube" side note; with Instagram ticked, the main line
+  // stays Instagram and YouTube rides along as the side note.
+  const ytOnly = post.igEnabled === false
+  const ytOn = Boolean(post.youtube && post.youtube.enabled)
   return (
-    <div className="post-tracker" aria-label={`Status: ${published ? 'live on Instagram' : inFlight ? 'publishing' : 'scheduled'}`}>
+    <div className="post-tracker" aria-label={`Status: ${published ? (ytOnly ? 'live on YouTube' : 'live on Instagram') : inFlight ? 'publishing' : 'scheduled'}`}>
       {steps.map((label, i) => {
         const n = i + 1
         const cls = n < step || published ? 'done' : n === step ? 'now' : ''
@@ -165,16 +172,16 @@ export function StatusTracker({ post, publishing, onReconnect }) {
         )
       })}
       {post.status === 'failed' && post.retryPending && <span className="trk-note">auto-retry pending</span>}
-      {published && post.liveUrl && <a className="trk-live" href={post.liveUrl} target="_blank" rel="noreferrer">View on Instagram</a>}
-      {post.youtube?.enabled && (
+      {published && post.liveUrl && <a className="trk-live" href={post.liveUrl} target="_blank" rel="noreferrer">{ytOnly ? 'View on YouTube' : 'View on Instagram'}</a>}
+      {ytOn && !ytOnly && (
         <span className="trk-note" title={post.youtubeError || undefined}>
           {post.youtubeStatus === 'uploaded' && post.youtubeVideoId
-            ? <>· YouTube: <a className="trk-live" href={`https://www.youtube.com/watch?v=${post.youtubeVideoId}`} target="_blank" rel="noreferrer">uploaded (private)</a></>
+            ? <>· also on YouTube: <a className="trk-live" href={`https://www.youtube.com/watch?v=${post.youtubeVideoId}`} target="_blank" rel="noreferrer">watch (private)</a></>
             : post.youtubeStatus === 'failed'
               ? '· YouTube: upload failed — Instagram is live'
               : post.youtubeStatus === 'skipped'
                 ? '· YouTube: skipped (videos only)'
-                : '· YouTube: also posting'}
+                : '· also on YouTube: posting'}
         </span>
       )}
     </div>

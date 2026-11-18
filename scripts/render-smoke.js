@@ -18,7 +18,9 @@
 //   A logged-out: /api/auth/me -> 401; the login form must render.
 //   B logged-in:  stubbed API with seeded posts; the dashboard must render,
 //                 then the Queue tab must render with scheduled posts first
-//                 (soonest at top), other statuses below, newest first.
+//                 (soonest at top), other statuses below, newest first, and
+//                 status trackers naming the platform(s) each post used
+//                 (YouTube-only / Instagram-only / both).
 //   C update guard: like B, but /build-id.json + /api/version report a
 //                 DIFFERENT build id than the bundle's own — the "new
 //                 version available" banner must render. (In A/B the
@@ -125,6 +127,20 @@ async function runScenario(scenario, bundleDir) {
     post('p-pub', 'PUB OLD', 'published', now - 86400000, { liveUrl: 'https://instagram.com/p/smoke' }),
     post('p-sch-soon', 'SCH SOON', 'scheduled', now + 3600000),
     post('p-fail', 'FAIL NEW', 'failed', now - 7200000),
+    // Platform-wording regression seeds (older than PUB OLD so the
+    // newest-first ordering assertions above are untouched): a
+    // YouTube-only published post must read "live on YouTube" with no
+    // Instagram wording and no "also" side note; a both-platforms post
+    // keeps the Instagram main line plus an "also on YouTube" note.
+    post('p-both-pub', 'BOTH PUB', 'published', now - 2 * 86400000, {
+      liveUrl: 'https://instagram.com/p/both',
+      youtube: { enabled: true, title: 'BOTH PUB' }, youtubeVideoId: 'bothVid1', youtubeStatus: 'uploaded',
+    }),
+    post('p-yt-pub', 'YT ONLY PUB', 'published', now - 3 * 86400000, {
+      igEnabled: false,
+      liveUrl: 'https://www.youtube.com/watch?v=ytOnlyVid1',
+      youtube: { enabled: true, title: 'YT ONLY PUB' }, youtubeVideoId: 'ytOnlyVid1', youtubeStatus: 'uploaded',
+    }),
   ]
   const json = (status, body) => ({ ok: status >= 200 && status < 300, status, json: async () => body })
   const ownBuildId = process.env.SMOKE_BUILD_ID || ''
@@ -211,6 +227,29 @@ async function runScenario(scenario, bundleDir) {
     if (!(idx('SCH SOON') > -1 && idx('SCH SOON') < idx('SCH LATE'))) fail('scheduled posts not soonest-first in Queue')
     if (!(idx('SCH LATE') < idx('FAIL NEW'))) fail('non-scheduled posts not below scheduled in Queue')
     if (!(idx('FAIL NEW') < idx('PUB OLD'))) fail('non-scheduled group not newest-first in Queue')
+    // Status tracker platform wording: the tracker line must name the
+    // platform(s) the post actually used (regression: a YouTube-only
+    // post used to read "live on Instagram" + "YouTube: also posting").
+    const trackerOf = (caption) => {
+      const row = [...window.document.querySelectorAll('.post-row')].find((r) => r.textContent.includes(caption))
+      return row ? row.querySelector('.post-tracker') : null
+    }
+    const ytTrk = trackerOf('YT ONLY PUB')
+    if (!ytTrk) fail('no status tracker rendered for the YouTube-only post')
+    if (!ytTrk.textContent.includes('View on YouTube')) fail('YouTube-only tracker does not say "View on YouTube"')
+    if (ytTrk.textContent.includes('Instagram')) fail('YouTube-only tracker still mentions Instagram: ' + ytTrk.textContent)
+    if (ytTrk.textContent.includes('also')) fail('YouTube-only tracker still has an "also" side note: ' + ytTrk.textContent)
+    if (!String(ytTrk.getAttribute('aria-label') || '').includes('live on YouTube')) fail('YouTube-only tracker aria-label is not "live on YouTube"')
+    const ytLink = ytTrk.querySelector('a.trk-live')
+    if (!ytLink || !String(ytLink.getAttribute('href') || '').includes('youtube.com/watch')) fail('YouTube-only tracker link does not point at the watch URL')
+    const bothTrk = trackerOf('BOTH PUB')
+    if (!bothTrk) fail('no status tracker rendered for the both-platforms post')
+    if (!bothTrk.textContent.includes('View on Instagram')) fail('both-platforms tracker lost "View on Instagram"')
+    if (!bothTrk.textContent.includes('also on YouTube')) fail('both-platforms tracker missing the "also on YouTube" note: ' + bothTrk.textContent)
+    const igTrk = trackerOf('PUB OLD')
+    if (!igTrk) fail('no status tracker rendered for the Instagram-only post')
+    if (!igTrk.textContent.includes('View on Instagram')) fail('Instagram-only tracker lost "View on Instagram"')
+    if (igTrk.textContent.includes('YouTube')) fail('Instagram-only tracker mentions YouTube: ' + igTrk.textContent)
     // Visit the other pack-2-touched lazy views too: a render crash in any
     // of them unmounts the whole app (there is no error boundary).
     for (const [tab, marker] of [['Calendar', 'posts in total'], ['Media', 'Media Library']]) {
@@ -243,7 +282,7 @@ async function runScenario(scenario, bundleDir) {
     const step3 = [...window.document.querySelectorAll('button')].find((el) => el.textContent.includes('Schedule & publish'))
     if (step3) step3.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }))
     await waitFor(() => root.textContent.includes('Publish to') && root.textContent.includes('Smoke Channel'), 'studio platform picker to render')
-    console.log('render-smoke scenario B: PASS (dashboard + queue + calendar + media + connections + studio render, scheduled-first order holds)')
+    console.log('render-smoke scenario B: PASS (dashboard + queue + calendar + media + connections + studio render, scheduled-first order holds, tracker platform wording correct)')
   } else if (scenario === 'C') {
     await waitFor(() => root.innerHTML.length > 0, 'app shell to render')
     const skip = [...window.document.querySelectorAll('button, a')].find((el) => el.textContent.trim() === 'Skip setup')
