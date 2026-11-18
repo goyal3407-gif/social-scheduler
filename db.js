@@ -41,6 +41,7 @@ const JSON_FILES = {
   users: 'users.json', sessions: 'sessions.json', posts: 'posts.json',
   media: 'media.json', mediaFiles: 'media-files.json', templates: 'templates.json', settings: 'settings.json',
   hashtagGroups: 'hashtag-groups.json',
+  passwordResets: 'password-resets.json',
   instagram: 'instagram.json', importJobs: 'import-jobs.json',
   notifications: 'notifications.json', uploadSessions: 'upload-sessions.json',
 };
@@ -101,6 +102,15 @@ const hashtagGroupSchema = new mongoose.Schema({
   userId: { type: String, index: true }, name: String, tags: String,
   createdAt: String,
 });
+// Password reset tokens: only the SHA-256 hash of the token is stored,
+// never the token itself. One doc per issued link; a successful reset
+// deletes every outstanding doc for the user (single-use + revoke-all).
+const passwordResetSchema = new mongoose.Schema({
+  id: { type: String, unique: true, index: true },
+  userId: { type: String, index: true },
+  tokenHash: { type: String, index: true },
+  expiresAt: String, createdAt: String,
+}, { strict: false });
 const settingsSchema = new mongoose.Schema({
   userId: { type: String, unique: true, index: true },
   data: { type: mongoose.Schema.Types.Mixed, default: {} },
@@ -174,6 +184,7 @@ const Media = mongoose.models.SsMedia || mongoose.model('SsMedia', mediaSchema, 
 const MediaFile = mongoose.models.SsMediaFile || mongoose.model('SsMediaFile', mediaFileSchema, 'mediafiles');
 const Template = mongoose.models.SsTemplate || mongoose.model('SsTemplate', templateSchema, 'templates');
 const HashtagGroup = mongoose.models.SsHashtagGroup || mongoose.model('SsHashtagGroup', hashtagGroupSchema, 'hashtaggroups');
+const PasswordReset = mongoose.models.SsPasswordReset || mongoose.model('SsPasswordReset', passwordResetSchema, 'passwordresets');
 const SettingsDoc = mongoose.models.SsSettings || mongoose.model('SsSettings', settingsSchema, 'settings');
 const InstagramDoc = mongoose.models.SsInstagram || mongoose.model('SsInstagram', instagramSchema, 'instagram');
 const ImportJob = mongoose.models.SsImportJob || mongoose.model('SsImportJob', importJobSchema, 'importjobs');
@@ -373,6 +384,7 @@ async function deleteUserData(userId) {
       MediaFile.deleteMany({ userId }),
       Template.deleteMany({ userId }),
       HashtagGroup.deleteMany({ userId }),
+      PasswordReset.deleteMany({ userId }),
       SettingsDoc.deleteOne({ userId }),
       InstagramDoc.deleteOne({ userId }),
       ImportJob.deleteMany({ userId }),
@@ -389,6 +401,7 @@ async function deleteUserData(userId) {
   jsonSave('mediaFiles', jsonList('mediaFiles').filter((x) => x.userId !== userId));
   jsonSave('templates', jsonList('templates').filter((x) => x.userId !== userId));
   jsonSave('hashtagGroups', jsonList('hashtagGroups').filter((x) => x.userId !== userId));
+  jsonSave('passwordResets', jsonList('passwordResets').filter((x) => x.userId !== userId));
   const settings = load(JSON_FILES.settings, {});
   if (settings && typeof settings === 'object') { delete settings[userId]; save(JSON_FILES.settings, settings); }
   const ig = load(JSON_FILES.instagram, {});
@@ -648,6 +661,29 @@ async function deleteHashtagGroup(userId, id) {
   if (kept.length === list.length) return false;
   jsonSave('hashtagGroups', kept);
   return true;
+}
+
+// ---------- password resets (hashed tokens, single-use) ----------
+async function createPasswordReset(doc) {
+  await ensureMongo();
+  if (isMongo()) { await PasswordReset.create(doc); return doc; }
+  const list = jsonList('passwordResets'); list.push(doc); jsonSave('passwordResets', list); return doc;
+}
+async function getPasswordResetByHash(tokenHash) {
+  await ensureMongo();
+  if (!tokenHash) return null;
+  if (isMongo()) { const d = await PasswordReset.findOne({ tokenHash }).lean(); return d ? strip(d) : null; }
+  return jsonList('passwordResets').find((x) => x.tokenHash === tokenHash) || null;
+}
+async function listPasswordResetsForUser(userId) {
+  await ensureMongo();
+  if (isMongo()) return stripAll(await PasswordReset.find({ userId }).lean());
+  return jsonList('passwordResets').filter((x) => x.userId === userId);
+}
+async function deletePasswordResetsForUser(userId) {
+  await ensureMongo();
+  if (isMongo()) { await PasswordReset.deleteMany({ userId }); return; }
+  jsonSave('passwordResets', jsonList('passwordResets').filter((x) => x.userId !== userId));
 }
 
 // ---------- settings (one doc per user) ----------
@@ -1133,6 +1169,7 @@ module.exports = {
   saveMediaFile, getMediaFile, deleteMediaFile,
   listTemplates, saveTemplate, deleteTemplate,
   listHashtagGroups, saveHashtagGroup, deleteHashtagGroup,
+  createPasswordReset, getPasswordResetByHash, listPasswordResetsForUser, deletePasswordResetsForUser,
   getSettings, saveSettings,
   getInstagram, listInstagram, saveInstagram, clearInstagram,
   getInstagramAccounts, getInstagramAccount, saveInstagramAccount, removeInstagramAccount, setDefaultInstagramAccount,

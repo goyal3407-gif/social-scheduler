@@ -17,6 +17,8 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const net = require('net');
+const tls = require('tls');
 const db = require('./db');
 
 const app = express();
@@ -451,7 +453,7 @@ async function requireAuth(req, res, next) {
 // requires login.
 app.use('/api', apiRateLimit, (req, res, next) => { if (req.path.startsWith('/auth/')) return authRateLimit(req, res, next); return next(); });
 app.use('/api', ah(async (req, res, next) => {
-  if (req.path === '/health' || req.path === '/db-status' || req.path.startsWith('/auth/') || req.path.startsWith('/cron/')) return next();
+  if (req.path === '/health' || req.path === '/db-status' || req.path === '/version' || req.path.startsWith('/auth/') || req.path.startsWith('/cron/')) return next();
   // Make sure the database connection is up (no-op when already connected
   // or when no MONGODB_URI is set — JSON fallback is used then).
   await db.ensureMongo();
@@ -580,6 +582,207 @@ app.delete('/api/auth/account', ah(async (req, res) => {
     const remaining = await db.listUsers();
     if (remaining.length) await db.updateUser(remaining[0].id, { role: 'owner' });
   }
+  res.json({ ok: true });
+}));
+
+// ---------- transactional email (password resets) ----------
+// The ONLY email this app sends is the password-reset link. Sender is
+// configured purely by env: SMTP_HOST, SMTP_PORT (465 = implicit TLS;
+// anything else starts plain and upgrades via STARTTLS when the server
+// offers it), SMTP_USER, SMTP_PASS, MAIL_FROM. No new dependency — the
+// client below is a minimal SMTP speaker over net/tls.
+// When NO sender is configured the reset flow still works end to end
+// (token created, /reset page functional); in non-production the link
+// is written to the SERVER LOG ONLY so local development can complete
+// the flow, and in production a sender-less request is logged without
+// the link. A send is never faked: the API answers the same generic
+// response either way, exactly like an unknown email does.
+const SMTP_CONF = {
+  host: (process.env.SMTP_HOST || '').trim(),
+  port: Number(process.env.SMTP_PORT || 0) || 587,
+  user: (process.env.SMTP_USER || '').trim(),
+  pass: process.env.SMTP_PASS || '',
+  from: (process.env.MAIL_FROM || '').trim(),
+};
+function mailerConfigured() { return !!(SMTP_CONF.host && SMTP_CONF.user && SMTP_CONF.pass && SMTP_CONF.from); }
+
+function smtpSend({ to, subject, text }) {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => { try { socket.destroy(); } catch { /* already gone */ } reject(new Error('Email server took too long to answer.')); }, 20000);
+    let socket = null;
+    let buffer = '';
+    let waiters = [];
+    const fail = (e) => { clearTimeout(timeout); try { socket && socket.destroy(); } catch { /* ignore */ } reject(e); };
+    const onData = (chunk) => {
+      buffer += chunk.toString('utf8');
+      // SMTP replies end with "<code> " (continuations use "<code>-").
+      const lines = buffer.split(/\r?\n/);
+      buffer = lines.pop() || '';
+      for (const line of lines) {
+        const m = /^(\d{3})([ -])/.exec(line);
+        if (!m || !waiters.length) continue;
+        const w = waiters[0];
+        w.all = w.all ? `${w.all}\n${line}` : line;
+        if (m[2] === ' ') {
+          waiters.shift();
+          w.done(Number(m[1]), w.all);
+        }
+      }
+    };
+    const expect = (codes) => new Promise((res2, rej2) => {
+      waiters.push({
+        all: '',
+        done: (code, all) => {
+          if (codes.includes(code)) res2(all);
+          else rej2(new Error(`Email server answered ${code}: ${String(all).split('\n').pop().slice(0, 120)}`));
+        },
+      });
+    });
+    const send = (line) => socket.write(line + '\r\n');
+    const connect = () => {
+      socket.on('data', onData);
+      socket.on('error', fail);
+      (async () => {
+        await expect([220]);
+        send(`EHLO kiluaai.app`);
+        let ehlo = await expect([250]);
+        if (SMTP_CONF.port !== 465 && /STARTTLS/i.test(ehlo)) {
+          send('STARTTLS');
+          await expect([220]);
+          const upgraded = tls.connect({ socket, servername: SMTP_CONF.host });
+          await new Promise((res2, rej2) => { upgraded.once('secureConnect', res2); upgraded.once('error', rej2); });
+          socket = upgraded;
+          socket.on('data', onData);
+          socket.on('error', fail);
+          send(`EHLO kiluaai.app`);
+          ehlo = await expect([250]);
+        }
+        send('AUTH LOGIN');
+        await expect([334]);
+        send(Buffer.from(SMTP_CONF.user, 'utf8').toString('base64'));
+        await expect([334]);
+        send(Buffer.from(SMTP_CONF.pass, 'utf8').toString('base64'));
+        await expect([235]);
+        send(`MAIL FROM:<${SMTP_CONF.from}>`);
+        await expect([250]);
+        send(`RCPT TO:<${to}>`);
+        await expect([250, 251]);
+        send('DATA');
+        await expect([354]);
+        const headers = [
+          `From: KiluaAI <${SMTP_CONF.from}>`,
+          `To: <${to}>`,
+          `Subject: ${subject}`,
+          'MIME-Version: 1.0',
+          'Content-Type: text/plain; charset=utf-8',
+          '',
+        ].join('\r\n');
+        socket.write(headers + String(text).replace(/\r?\n/g, '\r\n').replace(/^\./gm, '..') + '\r\n.\r\n');
+        await expect([250]);
+        send('QUIT');
+        clearTimeout(timeout);
+        try { socket.end(); } catch { /* done */ }
+        resolve(true);
+      })().catch(fail);
+    };
+    try {
+      socket = SMTP_CONF.port === 465
+        ? tls.connect({ host: SMTP_CONF.host, port: SMTP_CONF.port, servername: SMTP_CONF.host }, connect)
+        : net.connect({ host: SMTP_CONF.host, port: SMTP_CONF.port }, connect);
+      socket.on('error', fail);
+    } catch (e) { fail(e); }
+  });
+}
+
+async function sendPasswordResetEmail(user, link) {
+  if (!mailerConfigured()) {
+    if (process.env.NODE_ENV !== 'production') {
+      // Dev-only escape hatch: the link exists so the flow can be
+      // completed locally, but it reaches the server log ONLY — never
+      // an API response, never another user.
+      console.log(`[password-reset] No email sender configured (set SMTP_HOST, SMTP_USER, SMTP_PASS, MAIL_FROM). Reset link for ${user.email}: ${link}`);
+    } else {
+      console.log('[password-reset] A reset was requested but no email sender is configured (set SMTP_HOST, SMTP_USER, SMTP_PASS, MAIL_FROM) — nothing was sent.');
+    }
+    return false;
+  }
+  try {
+    await smtpSend({
+      to: user.email,
+      subject: 'Reset your KiluaAI password',
+      text: [
+        'Hello,',
+        '',
+        'Someone asked to reset the password for this KiluaAI account.',
+        'Open this link within 60 minutes to choose a new password:',
+        '',
+        link,
+        '',
+        'The link works once. If you did not ask for this, ignore this email — your password stays the same.',
+        '',
+        '— KiluaAI',
+      ].join('\n'),
+    });
+    return true;
+  } catch (e) {
+    console.error('[password-reset] Send failed:', String((e && e.message) || e).slice(0, 200));
+    return false;
+  }
+}
+
+// ---------- forgot / reset password ----------
+// POST /api/auth/forgot ALWAYS answers the same generic success —
+// whether the email has an account, whether a link was sent, whether
+// the per-account throttle (3 links/hour) tripped. Nothing in the
+// response can be used to probe which emails are registered.
+const RESET_TOKEN_TTL_MS = 60 * 60 * 1000;
+app.post('/api/auth/forgot', ah(async (req, res) => {
+  const generic = { ok: true, message: 'If an account exists for that email, a password reset link is on its way.' };
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  if (!validEmail(email) || email.length > 254) return res.json(generic);
+  const user = await db.getUserByEmail(email);
+  if (!user) {
+    try { hashPassword('timing', DUMMY_SALT); } catch { /* timing equalisation only */ }
+    return res.json(generic);
+  }
+  const recent = (await db.listPasswordResetsForUser(user.id))
+    .filter((r) => r.createdAt && Date.now() - new Date(r.createdAt).getTime() < 3600000);
+  if (recent.length >= 3) return res.json(generic);
+  const raw = crypto.randomBytes(32).toString('base64url');
+  const tokenHash = crypto.createHash('sha256').update(raw).digest('hex');
+  await db.createPasswordReset({
+    id: uid('rst'), userId: user.id, tokenHash,
+    expiresAt: new Date(Date.now() + RESET_TOKEN_TTL_MS).toISOString(),
+    createdAt: new Date().toISOString(),
+  });
+  const link = `${publicBase(req)}/reset?token=${encodeURIComponent(raw)}`;
+  await sendPasswordResetEmail(user, link);
+  return res.json(generic);
+}));
+// POST /api/auth/reset { token, newPassword }: validates the token
+// (hashed lookup, unused because a successful reset deletes every
+// outstanding token for the user, unexpired), sets a fresh scrypt
+// hash, and revokes ALL of the user's sessions — a reset logs every
+// device out, exactly like a password change.
+app.post('/api/auth/reset', ah(async (req, res) => {
+  const invalid = () => res.status(400).json({ ok: false, error: 'That reset link is not valid or has expired — request a new one from the login screen.' });
+  const token = String(req.body?.token || '');
+  const next = String(req.body?.newPassword || '');
+  if (!token || token.length > 200) return invalid();
+  if (next.length < 8) return res.status(400).json({ ok: false, error: 'The new password must be at least 8 characters long.' });
+  if (next.length > 128) return res.status(400).json({ ok: false, error: 'The new password must be at most 128 characters long.' });
+  const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+  const rec = await db.getPasswordResetByHash(tokenHash);
+  if (!rec || !rec.expiresAt || new Date(rec.expiresAt).getTime() < Date.now()) return invalid();
+  const user = await db.getUserById(rec.userId);
+  if (!user) return invalid();
+  const salt = crypto.randomBytes(16).toString('hex');
+  await db.updateUser(user.id, { salt, passwordHash: hashPassword(next, salt) });
+  await db.deletePasswordResetsForUser(user.id);
+  try {
+    const sessions = await db.listSessions();
+    for (const s of sessions) if (s.userId === user.id) await db.revokeSession(s.id);
+  } catch { /* password already reset; session cleanup is best-effort */ }
   res.json({ ok: true });
 }));
 
@@ -1062,6 +1265,22 @@ function friendlyGraphError(data, fallback) {
 }
 
 // ---------- health / stats ----------
+// The build id of the running deployment: the Vercel git SHA when
+// deployed, else the id the frontend build wrote to dist/build-id.json
+// (the same value baked into the bundle as __BUILD_ID__). The app's
+// update guard compares its own baked-in id with this one (and with
+// the static /build-id.json) and offers a refresh when they differ —
+// a stale tab can then never sit on chunks that no longer exist.
+function serverBuildId() {
+  if (process.env.VERCEL_GIT_COMMIT_SHA) return process.env.VERCEL_GIT_COMMIT_SHA;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(path.join(DIST, 'build-id.json'), 'utf8'));
+    return typeof parsed.buildId === 'string' && parsed.buildId ? parsed.buildId : null;
+  } catch { return null; }
+}
+app.get('/api/version', (req, res) => {
+  res.json({ ok: true, buildId: serverBuildId() });
+});
 app.get('/api/health', ah(async (req, res) => {
   res.json({ ok: true, service: 'social-scheduler', db: db.getStatus().db, instagramConfigured: await igConfigured(req).catch(() => false) });
 }));
@@ -1136,6 +1355,7 @@ app.get('/api/db-status', ah(async (req, res) => {
   } catch (e) { igDiag.keeperError = String((e && e.message) || e).slice(0, 200); }
   res.json({
     ok: true,
+    buildId: serverBuildId(),
     db: s.db,
     database: s.database,
     mongoReady: s.mongoReady,

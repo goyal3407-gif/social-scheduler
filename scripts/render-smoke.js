@@ -19,6 +19,11 @@
 //   B logged-in:  stubbed API with seeded posts; the dashboard must render,
 //                 then the Queue tab must render with scheduled posts first
 //                 (soonest at top), other statuses below, newest first.
+//   C update guard: like B, but /build-id.json + /api/version report a
+//                 DIFFERENT build id than the bundle's own — the "new
+//                 version available" banner must render. (In A/B the
+//                 stub reports the bundle's real build id, read from
+//                 dist/build-id.json, and no banner may appear.)
 // Any ReferenceError/TypeError reaching console.error, an unhandled
 // rejection, or an empty #root fails the test.
 
@@ -122,10 +127,13 @@ async function runScenario(scenario, bundleDir) {
     post('p-fail', 'FAIL NEW', 'failed', now - 7200000),
   ]
   const json = (status, body) => ({ ok: status >= 200 && status < 300, status, json: async () => body })
+  const ownBuildId = process.env.SMOKE_BUILD_ID || ''
   global.fetch = async (url) => {
     const p = new URL(String(url), 'https://smoke.local').pathname
     if (scenario === 'A') return json(401, { error: 'Not signed in' })
     switch (p) {
+      case '/build-id.json': return json(200, { buildId: scenario === 'C' ? 'a-different-build-id' : ownBuildId })
+      case '/api/version': return json(200, { ok: true, buildId: scenario === 'C' ? 'a-different-build-id' : ownBuildId })
       case '/api/auth/me': return json(200, { user: { id: 'u-smoke', email: 'smoke@test.local', name: 'Smoke' } })
       case '/api/posts': return json(200, seeded)
       case '/api/media': return json(200, [])
@@ -164,7 +172,7 @@ async function runScenario(scenario, bundleDir) {
       'login form to render'
     )
     console.log('render-smoke scenario A: PASS (login form renders, #root ' + root.innerHTML.length + ' bytes)')
-  } else {
+  } else if (scenario === 'B') {
     await waitFor(() => root.innerHTML.length > 0, 'app shell to render')
     // A fresh account lands on the setup wizard first; skip through to the
     // dashboard like a real user would.
@@ -204,6 +212,15 @@ async function runScenario(scenario, bundleDir) {
       await waitFor(() => root.textContent.includes(marker), tab + ' view to render')
     }
     console.log('render-smoke scenario B: PASS (dashboard + queue + calendar + media render, scheduled-first order holds)')
+  } else if (scenario === 'C') {
+    await waitFor(() => root.innerHTML.length > 0, 'app shell to render')
+    const skip = [...window.document.querySelectorAll('button, a')].find((el) => el.textContent.trim() === 'Skip setup')
+    if (skip) skip.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }))
+    await waitFor(
+      () => root.textContent.includes('new version of KiluaAI is available'),
+      'update guard banner to render on build-id mismatch'
+    )
+    console.log('render-smoke scenario C: PASS (update guard banner renders when the deployment build differs)')
   }
   if (errors.length) fail('render errors captured: ' + errors[0])
   process.exit(0)
@@ -221,9 +238,14 @@ if (process.argv[2] === '--run') {
     console.error('render-smoke: no build found at ' + bundleDir + ' — run: npm --prefix frontend run build')
     process.exit(2)
   }
+  // The bundle's own build id (written next to it by the build) is what
+  // scenarios A/B report back as "current", so the update guard stays
+  // quiet there; scenario C overrides it with a different id.
+  let smokeBuildId = ''
+  try { smokeBuildId = JSON.parse(fs.readFileSync(path.join(bundleDir, 'build-id.json'), 'utf8')).buildId || '' } catch { /* older bundle: guard stays quiet via the empty id */ }
   let failed = false
-  for (const s of ['A', 'B']) {
-    const r = spawnSync(process.execPath, [__filename, '--run', s, bundleDir], { stdio: 'inherit' })
+  for (const s of ['A', 'B', 'C']) {
+    const r = spawnSync(process.execPath, [__filename, '--run', s, bundleDir], { stdio: 'inherit', env: { ...process.env, SMOKE_BUILD_ID: smokeBuildId } })
     if (r.status !== 0) failed = true
   }
   console.log(failed ? 'render-smoke: FAIL' : 'render-smoke: PASS')

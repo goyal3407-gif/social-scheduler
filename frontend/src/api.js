@@ -130,6 +130,7 @@ function asArray(data, key) {
 export const api = {
   health: () => req('/api/health'),
   dbStatus: () => req('/api/db-status'),
+  getVersion: () => req('/api/version'),
 
   // Auth (session cookie is httpOnly; the frontend never sees a token)
   signup: (email, password, name) => req('/api/auth/signup', { method: 'POST', body: JSON.stringify(name ? { email, password, name } : { email, password }) }),
@@ -137,6 +138,8 @@ export const api = {
   me: () => req('/api/auth/me'),
   logout: () => req('/api/auth/logout', { method: 'POST', body: JSON.stringify({}) }),
   changePassword: (currentPassword, newPassword) => req('/api/auth/change-password', { method: 'POST', body: JSON.stringify({ currentPassword, newPassword }) }),
+  forgotPassword: (email) => req('/api/auth/forgot', { method: 'POST', body: JSON.stringify({ email }) }),
+  resetPassword: (token, newPassword) => req('/api/auth/reset', { method: 'POST', body: JSON.stringify({ token, newPassword }) }),
   deleteAccount: () => req('/api/auth/account', { method: 'DELETE' }),
   exportData: () => req('/api/export'),
 

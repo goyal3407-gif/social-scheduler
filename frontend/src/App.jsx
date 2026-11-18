@@ -1,19 +1,48 @@
 import { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense } from 'react'
 import { api, nextBestTime } from './api.js'
-import Auth from './components/Auth.jsx'
+import Auth, { ResetPassword } from './components/Auth.jsx'
 import Dashboard from './components/Dashboard.jsx'
 import { IconHome, IconCal, IconQueue, IconPlus, IconMedia, IconBulk, IconTools, IconSpark, IconSettings, IconSun, IconMoon, IconMenu, IconX, IconBell } from './components/icons.jsx'
 import { Skeleton, isOwnMediaUrl } from './components/shared.jsx'
+// The build id baked in at build time (vite define). The update guard
+// below compares it with the id the server/static file reports for
+// the CURRENT deployment.
+// eslint-disable-next-line no-undef
+const MY_BUILD_ID = typeof __BUILD_ID__ !== 'undefined' ? __BUILD_ID__ : ''
 // Heavy tabs load on demand so the first paint is only Dashboard + shell.
-const SetupWizard = lazy(() => import('./components/SetupWizard.jsx'))
-const CalendarView = lazy(() => import('./components/CalendarView.jsx'))
-const Queue = lazy(() => import('./components/Queue.jsx'))
-const Studio = lazy(() => import('./components/Studio.jsx'))
-const Bulk = lazy(() => import('./components/Bulk.jsx'))
-const MediaLibrary = lazy(() => import('./components/MediaLibrary.jsx'))
-const Tools = lazy(() => import('./components/Tools.jsx'))
-const AIStudio = lazy(() => import('./components/AIStudio.jsx'))
-const Settings = lazy(() => import('./components/Settings.jsx'))
+// A lazy import that fails because a deploy replaced the chunks gets
+// ONE automatic reload (session-guarded) instead of a white page; a
+// successful load clears the guard so a later, separate failure can
+// reload again.
+function lazyRetry(factory) {
+  return lazy(async () => {
+    try {
+      const mod = await factory()
+      try { sessionStorage.removeItem('ss-chunk-reload') } catch { /* ignore */ }
+      return mod
+    } catch (e) {
+      let guarded = false
+      try {
+        guarded = !!sessionStorage.getItem('ss-chunk-reload')
+        if (!guarded) sessionStorage.setItem('ss-chunk-reload', '1')
+      } catch { /* storage unavailable — fall through to the error */ }
+      if (!guarded) {
+        window.location.reload()
+        return new Promise(() => { /* page is reloading */ })
+      }
+      throw e
+    }
+  })
+}
+const SetupWizard = lazyRetry(() => import('./components/SetupWizard.jsx'))
+const CalendarView = lazyRetry(() => import('./components/CalendarView.jsx'))
+const Queue = lazyRetry(() => import('./components/Queue.jsx'))
+const Studio = lazyRetry(() => import('./components/Studio.jsx'))
+const Bulk = lazyRetry(() => import('./components/Bulk.jsx'))
+const MediaLibrary = lazyRetry(() => import('./components/MediaLibrary.jsx'))
+const Tools = lazyRetry(() => import('./components/Tools.jsx'))
+const AIStudio = lazyRetry(() => import('./components/AIStudio.jsx'))
+const Settings = lazyRetry(() => import('./components/Settings.jsx'))
 
 function TabFallback() {
   return <div className="section"><div className="card"><Skeleton rows={4} /></div></div>
@@ -50,6 +79,7 @@ export default function App() {
   })
   const [user, setUser] = useState(null)
   const [authChecked, setAuthChecked] = useState(false)
+  const [updateAvailable, setUpdateAvailable] = useState(false)
   const [posts, setPosts] = useState([])
   const [media, setMedia] = useState([])
   const [templates, setTemplates] = useState([])
@@ -152,6 +182,41 @@ export default function App() {
     document.documentElement.setAttribute('data-theme', theme)
     try { localStorage.setItem('ss-theme', theme) } catch { /* storage unavailable */ }
   }, [theme])
+
+  // Update guard: ask what build the deployment is on now (the static
+  // build-id.json written by the same build that produced this bundle,
+  // falling back to /api/version) and compare with the id baked into
+  // this bundle. A mismatch means this tab is running an old build —
+  // offer a refresh instead of letting it rot onto missing chunks.
+  // Runs on load, on window focus and when the tab becomes visible.
+  useEffect(() => {
+    if (!MY_BUILD_ID) return undefined
+    let alive = true
+    const check = async () => {
+      try {
+        let serverId = ''
+        try {
+          const r = await fetch(`/build-id.json?_=${Date.now()}`, { cache: 'no-store' })
+          if (r && r.ok) { const j = await r.json().catch(() => null); serverId = (j && j.buildId) || '' }
+        } catch { /* fall through to the API */ }
+        if (!serverId) {
+          const v = await api.getVersion().catch(() => null)
+          serverId = (v && v.buildId) || ''
+        }
+        if (alive && serverId && serverId !== MY_BUILD_ID) setUpdateAvailable(true)
+      } catch { /* a failed check must never disturb the app */ }
+    }
+    check()
+    const onFocus = () => check()
+    const onVis = () => { if (document.visibilityState === 'visible') check() }
+    window.addEventListener('focus', onFocus)
+    document.addEventListener('visibilitychange', onVis)
+    return () => {
+      alive = false
+      window.removeEventListener('focus', onFocus)
+      document.removeEventListener('visibilitychange', onVis)
+    }
+  }, [])
 
   // Who is logged in? Logged-out visitors see only the Auth screen.
   useEffect(() => {
@@ -593,6 +658,18 @@ export default function App() {
     mediaCount: media.length
   }, [stats, visiblePosts, media])
 
+  // --- Password reset: the emailed link lands on /reset?token=… and
+  // that screen stands alone, signed in or not.
+  let isResetRoute = false
+  try { isResetRoute = window.location.pathname.startsWith('/reset') } catch { /* no window in this context */ }
+  if (isResetRoute) {
+    return (
+      <div className="app">
+        <ResetPassword />
+      </div>
+    )
+  }
+
   // --- Login gate: nothing but the Auth screen until the server says who this is.
   if (!authChecked) {
     return <div className="app"><div className="wrap" style={{ paddingTop: 60, textAlign: 'center' }}><p className="muted">Loading…</p></div></div>
@@ -619,6 +696,13 @@ export default function App() {
   return (
     <div className="app">
       <a className="skip-link" href="#main">Skip to content</a>
+      {updateAvailable && (
+        <div className="update-bar" role="status">
+          <span>A new version of KiluaAI is available</span>
+          <button type="button" className="update-refresh" onClick={() => window.location.reload()}>Refresh</button>
+          <button type="button" className="update-close" aria-label="Dismiss" onClick={() => setUpdateAvailable(false)}>✕</button>
+        </div>
+      )}
       <header className="topbar">
         <div className="topbar-in">
           <button type="button" className="icon-btn burger-btn" onClick={() => setMenuOpen(true)} aria-label="Open menu" aria-expanded={menuOpen}>
