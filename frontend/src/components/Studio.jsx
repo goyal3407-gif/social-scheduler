@@ -4,20 +4,22 @@ import { IconWarn, IconCheck, IconHeart, IconComment, IconSend, IconBookmark } f
 
 const PLATFORMS = ['Instagram', 'YouTube', 'Facebook', 'TikTok']
 const FORMATS = ['REELS', 'FEED', 'STORY']
-const EMPTY = { mediaUrl: '', mediaType: 'video', posterUrl: '', caption: '', hashtags: '', cta: '', platform: 'Instagram', scheduleTime: '', status: 'scheduled', format: 'REELS', igAccountId: '', igAccountUsername: '', youtubeEnabled: false, youtubeTitle: '' }
-// A post's stored YouTube setting is an object ({ enabled, title });
-// the form keeps it as two flat fields and submit() folds them back.
+const EMPTY = { mediaUrl: '', mediaType: 'video', posterUrl: '', caption: '', hashtags: '', cta: '', platform: 'Instagram', scheduleTime: '', status: 'scheduled', format: 'REELS', igAccountId: '', igAccountUsername: '', youtubeEnabled: false, youtubeTitle: '', firstComment: '', repeatWeekly: false }
+// A post's stored YouTube setting is an object ({ enabled, title }) and
+// its repeat is a string ('weekly'); the form keeps flat fields and
+// submit() folds them back.
 const withYouTubeFields = (base) => {
   const y = (base && base.youtube) || {}
-  const f = { ...EMPTY, ...base, youtubeEnabled: !!y.enabled, youtubeTitle: y.title || '' }
+  const f = { ...EMPTY, ...base, youtubeEnabled: !!y.enabled, youtubeTitle: y.title || '', repeatWeekly: (base && base.repeat) === 'weekly' }
   delete f.youtube
+  delete f.repeat
   return f
 }
 // Built-in starter templates (server seeds) have ids tpl-1, tpl-2, … —
 // they are not stored per-user, so they cannot be deleted.
 const isSeedTemplate = (t) => /^tpl-\d+$/.test(String(t?.id || ''))
 
-export default function Studio({ editing, seed, media, templates, hashtagGroups, onCreateTemplate, onDeleteTemplate, onCreateHashtagGroup, onDeleteHashtagGroup, onSave, onCancel, saving, posts, igAccounts, defaultIgUserId, settings }) {
+export default function Studio({ editing, seed, media, templates, hashtagGroups, onCreateTemplate, onDeleteTemplate, onCreateHashtagGroup, onDeleteHashtagGroup, drafts, onSaveLibraryDraft, onDeleteLibraryDraft, onSave, onCancel, saving, posts, igAccounts, defaultIgUserId, settings }) {
   const [form, setForm] = useState(EMPTY)
   const [step, setStep] = useState(1)
   const [width, setWidth] = useState('')
@@ -29,6 +31,8 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
   const [tagName, setTagName] = useState('')
   const [showTagSave, setShowTagSave] = useState(false)
   const [bankMsg, setBankMsg] = useState('')
+  const [draftLibName, setDraftLibName] = useState('')
+  const [draftLibMsg, setDraftLibMsg] = useState('')
   const [ytStatus, setYtStatus] = useState(null)
   const restoredDraftRef = useRef(false)
 
@@ -166,9 +170,12 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
       // Fold the flat YouTube fields back into the stored object. The
       // toggle only counts when a channel is actually connected.
       youtube: { enabled: Boolean(form.youtubeEnabled && ytStatus?.connected), title: (form.youtubeTitle || '').trim() },
+      firstComment: (form.firstComment || '').trim(),
+      repeat: form.repeatWeekly ? 'weekly' : '',
     }
     delete payload.youtubeEnabled
     delete payload.youtubeTitle
+    delete payload.repeatWeekly
     try {
       await onSave(payload, Boolean(editing?.id))
       if (!editing?.id) clearDrafts()
@@ -211,6 +218,44 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
     } catch (e) { setBankMsg(e.message || 'Could not save the hashtag group.') }
   }
 
+  // First comment from a hashtag group (Phase C2): the group's tags,
+  // each guaranteed a leading #, become the comment text.
+  const useGroupAsFirstComment = (g) => {
+    if (!g) return
+    const tags = String(g.tags || '').split(/[\s,]+/).filter(Boolean).map((t) => (t.startsWith('#') ? t : `#${t}`)).join(' ')
+    setForm((f) => ({ ...f, firstComment: tags }))
+    setBankMsg(`First comment set from “${g.name}”.`)
+  }
+
+  // Drafts library (Phase C3): save the current composer as a named
+  // draft; loading one fills the composer — it never schedules.
+  const saveToDraftsLibrary = async () => {
+    setDraftLibMsg('')
+    if (!onSaveLibraryDraft) return
+    if (!draftLibName.trim()) { setDraftLibMsg('Give the draft a name first.'); return }
+    try {
+      await onSaveLibraryDraft({
+        name: draftLibName.trim(),
+        caption: form.caption, hashtags: form.hashtags, cta: form.cta,
+        mediaUrl: form.mediaUrl, mediaType: form.mediaType, posterUrl: form.posterUrl,
+        platform: form.platform, format: form.format,
+        igAccountId: form.igAccountId, igAccountUsername: form.igAccountUsername,
+        youtube: { enabled: Boolean(form.youtubeEnabled), title: form.youtubeTitle || '' },
+        firstComment: form.firstComment || '',
+        repeat: form.repeatWeekly ? 'weekly' : '',
+      })
+      setDraftLibName('')
+      setDraftLibMsg('Saved to your Drafts library.')
+    } catch (e) { setDraftLibMsg(e.message || 'Could not save the draft.') }
+  }
+
+  const loadDraft = (d) => {
+    if (!d) return
+    setForm(withYouTubeFields({ ...d, scheduleTime: '', status: 'scheduled' }))
+    setStep(1); setError('')
+    setDraftLibMsg(`Loaded “${d.name}” — pick a time in Step 3 when you're ready. Nothing is scheduled yet.`)
+  }
+
   const pickMedia = (m) => {
     setForm((f) => ({ ...f, mediaUrl: m.url, mediaType: m.kind === 'image' ? 'image' : 'video', posterUrl: m.posterUrl || '', title: m.title }))
   }
@@ -230,6 +275,27 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
     <div>
       <h2 className="section-title">{editing ? 'Edit post' : 'Studio — create a post'}</h2>
       <p className="section-sub">Three steps: media, caption, schedule. The preview updates live as you type.</p>
+      {onSaveLibraryDraft && (
+        <div className="card" style={{ marginBottom: 16 }}>
+          <h3>Drafts library</h3>
+          <p className="muted small" style={{ marginTop: 6 }}>Save this composer setup under a name and load it back any time. Loading a draft never schedules anything.</p>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
+            <input placeholder="Draft name, e.g. Salon offer post" value={draftLibName} onChange={(e) => setDraftLibName(e.target.value)} style={{ flex: 1, minWidth: 180 }} aria-label="Draft name" />
+            <button type="button" className="btn small" onClick={saveToDraftsLibrary}>Save to Drafts library</button>
+          </div>
+          {draftLibMsg && <p className="small mt">{draftLibMsg}</p>}
+          {(drafts || []).length > 0 && (
+            <div style={{ marginTop: 10 }}>
+              {drafts.map((d) => (
+                <span key={d.id} className="chip" style={{ marginRight: 6, marginBottom: 6 }}>
+                  <button type="button" onClick={() => loadDraft(d)} style={{ border: 'none', background: 'transparent', fontWeight: 700, padding: 0, color: 'var(--ink)' }} title={d.caption || ''}>{d.name}</button>
+                  {onDeleteLibraryDraft && <button type="button" aria-label={`Delete draft ${d.name}`} onClick={() => onDeleteLibraryDraft(d)} style={{ border: 'none', background: 'transparent', color: 'var(--red)', fontWeight: 700, padding: 0, marginLeft: 2 }}>✕</button>}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="steps" aria-label="Composer steps">
         {['Media', 'Caption & hashtags', 'Schedule & publish'].map((label, i) => (
@@ -347,6 +413,7 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
                     {hashtagGroups.map((g) => (
                       <span key={g.id} className="chip" style={{ marginRight: 6, marginBottom: 6 }}>
                         <button type="button" onClick={() => appendHashtagGroup(g)} style={{ border: 'none', background: 'transparent', fontWeight: 700, padding: 0, color: 'var(--ink)' }} title={g.tags}>{g.name} +</button>
+                        <button type="button" onClick={() => useGroupAsFirstComment(g)} style={{ border: 'none', background: 'transparent', fontWeight: 700, padding: 0, marginLeft: 4, color: 'var(--gold, #b98a1c)' }} title="Use this group as the first comment">→ 1st comment</button>
                         {onDeleteHashtagGroup && <button type="button" aria-label={`Delete hashtag group ${g.name}`} onClick={() => onDeleteHashtagGroup(g)} style={{ border: 'none', background: 'transparent', color: 'var(--red)', fontWeight: 700, padding: 0, marginLeft: 2 }}>✕</button>}
                       </span>
                     ))}
@@ -365,6 +432,9 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
                 )}
                 {bankMsg && <p className="small mt" role="status">{bankMsg}</p>}
               </div>
+              <label htmlFor="firstComment" style={{ marginTop: 14 }}>First comment <span className="muted">(posted automatically right after publishing — a good place for hashtags)</span></label>
+              <textarea id="firstComment" rows={2} maxLength={2200} placeholder="#your #hashtags #here" value={form.firstComment} onChange={(e) => set({ firstComment: e.target.value })} />
+              <p className="muted small" style={{ textAlign: 'right' }}>{(form.firstComment || '').length} / 2200 characters</p>
               <label htmlFor="cta" style={{ marginTop: 14 }}>Call to action</label>
               <input id="cta" placeholder="e.g. Comment GUIDE and I'll send it" value={form.cta} onChange={(e) => set({ cta: e.target.value })} />
               <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
@@ -442,6 +512,10 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
                 </div>
               )}
               <p className="muted small mt">Evenings 7–9 PM usually perform best — a general guide, not your audience data. Your own suggested slot above comes from your schedule.</p>
+              <label style={{ display: 'flex', gap: 8, alignItems: 'center', cursor: 'pointer', marginTop: 14 }}>
+                <input type="checkbox" checked={Boolean(form.repeatWeekly)} onChange={(e) => set({ repeatWeekly: e.target.checked })} style={{ width: 'auto' }} />
+                <span><b>Repeat weekly</b> <span className="muted small">— when this post publishes, the next one is scheduled automatically for the same day &amp; time next week. Untick it on any occurrence to stop the chain.</span></span>
+              </label>
               {duplicateOf && <div className="warn amber"><IconWarn size={17} /><div>This same media is already in your queue ({duplicateOf.status}, {duplicateOf.scheduleTime ? new Date(duplicateOf.scheduleTime).toLocaleString() : 'no time'}). Scheduling it again will post the same video twice.</div></div>}
               {collision && <div className="warn amber"><IconWarn size={17} /><div>Another post is scheduled within 30 minutes of this time ({collision.caption ? collision.caption.slice(0, 60) : 'untitled'}). Consider spacing posts at least an hour apart.</div></div>}
               {feedVerticalWarn && <div className="warn red"><IconWarn size={17} /><div>Vertical video (ratio {ratio?.toFixed(2)}) with FEED format — this is likely to fail or crop. Switch to REELS above.</div></div>}

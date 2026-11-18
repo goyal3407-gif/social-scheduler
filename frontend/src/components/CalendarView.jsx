@@ -4,7 +4,7 @@ import { PostRow, Skeleton, Empty, MediaVisual } from './shared.jsx'
 
 const DOW = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
-export default function CalendarView({ posts, loading, onEdit, onDelete, onPublish, publishingId, onGoQueue, onCreate }) {
+export default function CalendarView({ posts, loading, onEdit, onDelete, onPublish, publishingId, onGoQueue, onCreate, onReconnect }) {
   const today = new Date()
   const [cursor, setCursor] = useState(new Date(today.getFullYear(), today.getMonth(), 1))
   const [selected, setSelected] = useState(today.toDateString())
@@ -93,7 +93,7 @@ export default function CalendarView({ posts, loading, onEdit, onDelete, onPubli
         {selectedPosts.length === 0 ? (
           <Empty title="Nothing scheduled yet" body="No posts on this day. Schedule one and it will show up here and in your queue." action={onCreate ? <button type="button" className="btn primary small" onClick={onCreate}>Schedule a post</button> : undefined} />
         ) : selectedPosts.map((p) => (
-          <PostRow key={p.id} post={p} onEdit={onEdit} onDelete={onDelete} onPublish={onPublish} publishing={publishingId === p.id} />
+          <PostRow key={p.id} post={p} onEdit={onEdit} onDelete={onDelete} onPublish={onPublish} publishing={publishingId === p.id} onReconnect={onReconnect} />
         ))}
         <p className="muted mt">Times shown in your local timezone. {fmtDateTime(selectedPosts[0]?.scheduleTime)}</p>
       </section>

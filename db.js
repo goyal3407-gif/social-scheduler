@@ -43,6 +43,7 @@ const JSON_FILES = {
   hashtagGroups: 'hashtag-groups.json',
   passwordResets: 'password-resets.json',
   youtube: 'youtube.json',
+  drafts: 'drafts.json',
   instagram: 'instagram.json', importJobs: 'import-jobs.json',
   notifications: 'notifications.json', uploadSessions: 'upload-sessions.json',
 };
@@ -95,6 +96,21 @@ const templateSchema = new mongoose.Schema({
   id: { type: String, unique: true, index: true },
   userId: { type: String, index: true }, name: String, text: String,
 });
+// Drafts library (Phase C3): NAMED composer drafts — distinct from
+// draft-status posts. A snapshot of the composer (media ref, caption,
+// hashtags, format/account, YouTube setting, first comment, repeat)
+// the user can load back into the Studio. Per-user, like templates.
+const draftSchema = new mongoose.Schema({
+  id: { type: String, unique: true, index: true },
+  userId: { type: String, index: true }, name: String,
+  caption: String, hashtags: String, cta: String,
+  mediaUrl: String, mediaType: String, posterUrl: String,
+  platform: String, format: String,
+  igAccountId: String, igAccountUsername: String,
+  youtube: { type: mongoose.Schema.Types.Mixed, default: null },
+  firstComment: String, repeat: String,
+  createdAt: String,
+}, { strict: false });
 // Hashtag groups (the composer's hashtag bank): a named bundle of
 // hashtags the user appends to a caption in one tap. Per-user, like
 // templates.
@@ -193,6 +209,7 @@ const Post = mongoose.models.SsPost || mongoose.model('SsPost', postSchema, 'pos
 const Media = mongoose.models.SsMedia || mongoose.model('SsMedia', mediaSchema, 'media');
 const MediaFile = mongoose.models.SsMediaFile || mongoose.model('SsMediaFile', mediaFileSchema, 'mediafiles');
 const Template = mongoose.models.SsTemplate || mongoose.model('SsTemplate', templateSchema, 'templates');
+const Draft = mongoose.models.SsDraft || mongoose.model('SsDraft', draftSchema, 'drafts');
 const HashtagGroup = mongoose.models.SsHashtagGroup || mongoose.model('SsHashtagGroup', hashtagGroupSchema, 'hashtaggroups');
 const PasswordReset = mongoose.models.SsPasswordReset || mongoose.model('SsPasswordReset', passwordResetSchema, 'passwordresets');
 const YouTube = mongoose.models.SsYouTube || mongoose.model('SsYouTube', youtubeSchema, 'youtube');
@@ -394,6 +411,7 @@ async function deleteUserData(userId) {
       Media.deleteMany({ userId }),
       MediaFile.deleteMany({ userId }),
       Template.deleteMany({ userId }),
+      Draft.deleteMany({ userId }),
       HashtagGroup.deleteMany({ userId }),
       PasswordReset.deleteMany({ userId }),
       YouTube.deleteOne({ userId }),
@@ -412,6 +430,7 @@ async function deleteUserData(userId) {
   jsonSave('media', jsonList('media').filter((x) => x.userId !== userId));
   jsonSave('mediaFiles', jsonList('mediaFiles').filter((x) => x.userId !== userId));
   jsonSave('templates', jsonList('templates').filter((x) => x.userId !== userId));
+  jsonSave('drafts', jsonList('drafts').filter((x) => x.userId !== userId));
   jsonSave('hashtagGroups', jsonList('hashtagGroups').filter((x) => x.userId !== userId));
   jsonSave('passwordResets', jsonList('passwordResets').filter((x) => x.userId !== userId));
   const yt = load(JSON_FILES.youtube, {});
@@ -648,6 +667,32 @@ async function deleteTemplate(userId, id) {
   const kept = list.filter((x) => !(x.id === id && visibleTo([x], userId, owner).length));
   if (kept.length === list.length) return false;
   jsonSave('templates', kept);
+  return true;
+}
+
+// ---------- drafts library (named composer drafts, Phase C3) ----------
+async function listDrafts(userId) {
+  await ensureMongo();
+  const owner = await ownerId();
+  if (isMongo()) return stripAll(await Draft.find(scopeFilter(userId, owner)).lean());
+  return visibleTo(jsonList('drafts'), userId, owner);
+}
+async function saveDraft(draft) {
+  await ensureMongo();
+  if (isMongo()) { await Draft.create(draft); return draft; }
+  const list = jsonList('drafts'); list.push(draft); jsonSave('drafts', list); return draft;
+}
+async function deleteDraft(userId, id) {
+  await ensureMongo();
+  const owner = await ownerId();
+  if (isMongo()) {
+    const r = await Draft.deleteOne({ id, ...scopeFilter(userId, owner) });
+    return r.deletedCount > 0;
+  }
+  const list = jsonList('drafts');
+  const kept = list.filter((x) => !(x.id === id && visibleTo([x], userId, owner).length));
+  if (kept.length === list.length) return false;
+  jsonSave('drafts', kept);
   return true;
 }
 
@@ -1212,6 +1257,7 @@ module.exports = {
   listMedia, saveMedia, saveMediaBulk, updateMedia, deleteMedia,
   saveMediaFile, getMediaFile, deleteMediaFile,
   listTemplates, saveTemplate, deleteTemplate,
+  listDrafts, saveDraft, deleteDraft,
   listHashtagGroups, saveHashtagGroup, deleteHashtagGroup,
   createPasswordReset, getPasswordResetByHash, listPasswordResetsForUser, deletePasswordResetsForUser,
   getYouTube, saveYouTube, deleteYouTube,

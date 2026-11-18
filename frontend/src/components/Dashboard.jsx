@@ -18,7 +18,7 @@ function useCountdown(targetIso) {
   return { label: formatCountdown(targetIso), parts: { d, h, m } }
 }
 
-export default function Dashboard({ posts, media, user, stats, loading, error, onRetry, onCreate, onGoQueue, onNavigate, onEdit, onDelete, onPublish, publishingId, settings, onDuplicate, onPostAgain, onReschedule, onRescheduleNextBest, onDismissChecklist, overdue, onPublishDue, notifications }) {
+export default function Dashboard({ posts, media, user, stats, loading, error, onRetry, onCreate, onGoQueue, onNavigate, onEdit, onDelete, onPublish, publishingId, settings, onDuplicate, onPostAgain, onReschedule, onRescheduleNextBest, onDismissChecklist, overdue, onPublishDue, notifications, onReconnect }) {
   // Publishing streak (real data only): consecutive days with at least one
   // published post, ending today or yesterday.
   const streak = useMemo(() => {
@@ -247,7 +247,7 @@ export default function Dashboard({ posts, media, user, stats, loading, error, o
           {loading ? <Skeleton variant="posts" rows={3} /> : upcoming.length === 0 ? (
             <Empty title="Nothing scheduled yet" body="No posts are scheduled. Schedule one from Studio or Bulk and it will show up here, soonest first." action={<button type="button" className="btn primary small" onClick={onCreate}>Create a post</button>} />
           ) : upcoming.slice(0, 4).map((p) => (
-            <PostRow key={p.id} post={p} onEdit={onEdit} onDelete={onDelete} onPublish={onPublish} publishing={publishingId === p.id} onDuplicate={onDuplicate} onPostAgain={onPostAgain} onReschedule={onReschedule} onRescheduleNextBest={onRescheduleNextBest} />
+            <PostRow key={p.id} post={p} onEdit={onEdit} onDelete={onDelete} onPublish={onPublish} publishing={publishingId === p.id} onDuplicate={onDuplicate} onPostAgain={onPostAgain} onReschedule={onReschedule} onRescheduleNextBest={onRescheduleNextBest} onReconnect={onReconnect} />
           ))}
         </section>
 
@@ -256,7 +256,7 @@ export default function Dashboard({ posts, media, user, stats, loading, error, o
           {loading ? <Skeleton variant="posts" rows={3} /> : recent.length === 0 ? (
             <Empty title="No posts yet" body="Your recent posts will appear here once you create one." />
           ) : recent.map((p) => (
-            <PostRow key={p.id} post={p} onEdit={onEdit} onDelete={onDelete} onPublish={onPublish} publishing={publishingId === p.id} onPostAgain={onPostAgain} />
+            <PostRow key={p.id} post={p} onEdit={onEdit} onDelete={onDelete} onPublish={onPublish} publishing={publishingId === p.id} onPostAgain={onPostAgain} onReconnect={onReconnect} />
           ))}
         </section>
       </div>

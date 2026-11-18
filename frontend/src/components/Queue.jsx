@@ -6,7 +6,7 @@ import { PostRow, Skeleton, Empty, StatusBadge, PlatformBadge, Thumb } from './s
 const STATUSES = ['scheduled', 'draft', 'published', 'failed']
 const LABELS = { scheduled: 'Scheduled', draft: 'Drafts', published: 'Published', failed: 'Failed' }
 
-export default function Queue({ posts, loading, onEdit, onDelete, onPublish, publishingId, onCreate, onDuplicate, onPostAgain, onReschedule, onRescheduleNextBest, overdue, onPublishDue, onDeleteMany }) {
+export default function Queue({ posts, loading, onEdit, onDelete, onPublish, publishingId, onCreate, onDuplicate, onPostAgain, onReschedule, onRescheduleNextBest, overdue, onPublishDue, onDeleteMany, onReconnect }) {
   const [view, setView] = useState('list')
   const [filter, setFilter] = useState('all')
   const [platform, setPlatform] = useState('all')
@@ -79,6 +79,7 @@ export default function Queue({ posts, loading, onEdit, onDelete, onPublish, pub
       {selected.size > 0 && (
         <div className="toolbar" role="region" aria-label="Bulk actions">
           <span className="pill">{selected.size} selected</span>
+          <button type="button" className="btn ghost small" onClick={async () => { if (!onReschedule) return; const items = selectedItems.filter((p) => p.status === 'scheduled'); for (const p of items) { await onReschedule(p, { addDays: 1 }) } setSelected(new Set()) }}>Move +1 day</button>
           <button type="button" className="btn danger small" onClick={() => { onDeleteMany && onDeleteMany(selectedItems); setSelected(new Set()) }}>Delete selected</button>
           <button type="button" className="btn ghost small" onClick={() => setSelected(new Set())}>Clear selection</button>
         </div>
@@ -99,7 +100,7 @@ export default function Queue({ posts, loading, onEdit, onDelete, onPublish, pub
           {filtered.map((p) => (
             <div key={p.id} style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
               <input type="checkbox" aria-label={`Select post: ${(p.caption || 'No caption').slice(0, 40)}`} checked={selected.has(p.id)} onChange={() => toggleSelect(p.id)} style={{ width: 18, height: 18, marginTop: 16, flex: 'none' }} />
-              <div style={{ flex: 1, minWidth: 0 }}><PostRow post={p} onEdit={onEdit} onDelete={onDelete} onPublish={onPublish} publishing={publishingId === p.id} onDuplicate={onDuplicate} onPostAgain={onPostAgain} onReschedule={onReschedule} onRescheduleNextBest={onRescheduleNextBest} /></div>
+              <div style={{ flex: 1, minWidth: 0 }}><PostRow post={p} onEdit={onEdit} onDelete={onDelete} onPublish={onPublish} publishing={publishingId === p.id} onDuplicate={onDuplicate} onPostAgain={onPostAgain} onReschedule={onReschedule} onRescheduleNextBest={onRescheduleNextBest} onReconnect={onReconnect} /></div>
             </div>
           ))}
         </div>

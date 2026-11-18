@@ -85,6 +85,7 @@ export default function App() {
   const [posts, setPosts] = useState([])
   const [media, setMedia] = useState([])
   const [templates, setTemplates] = useState([])
+  const [drafts, setDrafts] = useState([])
   const [settings, setSettings] = useState(null)
   const [dbStatus, setDbStatus] = useState(null)
   const [stats, setStats] = useState(null)
@@ -244,7 +245,8 @@ export default function App() {
         api.getStats(),
         api.dbStatus().catch(() => null),
         api.getNotifications().catch(() => null),
-        api.getHashtagGroups().catch(() => [])
+        api.getHashtagGroups().catch(() => []),
+        api.getDrafts().catch(() => [])
       ])
       for (const r of results) {
         if (r.status === 'rejected' && r.reason && r.reason.status === 401) { setUser(null); return }
@@ -255,6 +257,7 @@ export default function App() {
       const notif = value(6, null)
       if (notif) { setNotifications(notif.notifications || []); setUnread(notif.unread || 0) }
       setHashtagGroups(value(7, []))
+      setDrafts(value(8, []))
       if (firstError) setError(firstError.reason)
     } catch (e) {
       if (e && e.status === 401) { setUser(null); return }
@@ -343,7 +346,7 @@ export default function App() {
 
   const handleLogout = useCallback(async () => {
     try { await api.logout() } catch { /* cookie cleared server-side anyway */ }
-    setUser(null); setPosts([]); setMedia([]); setTemplates([]); setHashtagGroups([]); setSettings(null); setStats(null); setTab('home')
+    setUser(null); setPosts([]); setMedia([]); setTemplates([]); setHashtagGroups([]); setDrafts([]); setSettings(null); setStats(null); setTab('home')
   }, [])
 
   const goStudio = (post = null) => {
@@ -607,6 +610,28 @@ export default function App() {
     } catch (e) { setError(e) }
   }, [])
 
+  // Drafts library (Phase C3): named composer snapshots, loaded back
+  // into the Studio — never auto-scheduled.
+  const handleCreateDraft = useCallback(async (d) => {
+    const created = await api.createDraft(d)
+    const item = created?.draft || created
+    if (item && item.id) setDrafts((prev) => [...prev, item])
+    else { const fresh = await api.getDrafts().catch(() => null); if (fresh) setDrafts(fresh) }
+    return item
+  }, [])
+
+  const handleDeleteDraft = useCallback(async (d) => {
+    try {
+      await api.deleteDraft(d.id)
+      setDrafts((prev) => prev.filter((x) => x.id !== d.id))
+      showToast('Draft deleted.')
+    } catch (e) { setError(e) }
+  }, [])
+
+  // Plain-language failure fix action (Phase C5): a token/connection
+  // failure's fix is reconnecting — that lives on the Connections page.
+  const handleReconnect = useCallback(() => setTab('connections'), [])
+
   // "Post again": reopen the composer with the original post's content
   // so the user picks a fresh time — nothing is scheduled or published
   // automatically. If the original's media was a server copy that has
@@ -629,6 +654,7 @@ export default function App() {
       platform: post.platform || 'Instagram', format: post.format || 'REELS',
       igAccountId: post.igAccountId || '', igAccountUsername: post.igAccountUsername || '',
       youtube: post.youtube || null,
+      firstComment: post.firstComment || '', repeat: post.repeat || '',
       scheduleTime: ''
     })
     setStudioKey((k) => k + 1)
@@ -820,19 +846,20 @@ export default function App() {
             onEdit={goStudio} onDelete={requestDeletePost}
             onPublish={handlePublish} publishingId={publishingId} settings={settings}
             onDuplicate={handleDuplicate} onPostAgain={handlePostAgain} onReschedule={handleReschedule} onRescheduleNextBest={handleRescheduleNextBest}
+            onReconnect={handleReconnect}
             onDismissChecklist={handleDismissChecklist}
             overdue={overdue} onPublishDue={handlePublishDue} notifications={notifications} />
         )}
         <Suspense fallback={<TabFallback />}>
         {tab === 'calendar' && (
-          <div className="section"><CalendarView posts={visiblePosts} loading={loading} onEdit={goStudio} onDelete={requestDeletePost} onPublish={handlePublish} publishingId={publishingId} onGoQueue={() => setTab('queue')} onCreate={() => goStudio(null)} /></div>
+          <div className="section"><CalendarView posts={visiblePosts} loading={loading} onEdit={goStudio} onDelete={requestDeletePost} onPublish={handlePublish} publishingId={publishingId} onGoQueue={() => setTab('queue')} onCreate={() => goStudio(null)} onReconnect={handleReconnect} /></div>
         )}
         {tab === 'queue' && (
-          <div className="section"><Queue posts={visiblePosts} loading={loading} onEdit={goStudio} onDelete={requestDeletePost} onPublish={handlePublish} publishingId={publishingId} onCreate={() => goStudio(null)} onDuplicate={handleDuplicate} onPostAgain={handlePostAgain} onReschedule={handleReschedule} onRescheduleNextBest={handleRescheduleNextBest} overdue={overdue} onPublishDue={handlePublishDue} onDeleteMany={(items) => setConfirmDelete({ type: 'posts', items })} /></div>
+          <div className="section"><Queue posts={visiblePosts} loading={loading} onEdit={goStudio} onDelete={requestDeletePost} onPublish={handlePublish} publishingId={publishingId} onCreate={() => goStudio(null)} onDuplicate={handleDuplicate} onPostAgain={handlePostAgain} onReschedule={handleReschedule} onRescheduleNextBest={handleRescheduleNextBest} overdue={overdue} onPublishDue={handlePublishDue} onDeleteMany={(items) => setConfirmDelete({ type: 'posts', items })} onReconnect={handleReconnect} /></div>
         )}
         {tab === 'studio' && (
           <div className="section">
-            <Studio key={`${studioKey}-${editing?.id || 'new'}`} editing={editing} seed={templateSeed ? { caption: templateSeed.text || templateSeed.caption || '', hashtags: templateSeed.hashtags || '', cta: templateSeed.cta || '', mediaUrl: templateSeed.mediaUrl || '', mediaType: templateSeed.mediaType || 'video', posterUrl: templateSeed.posterUrl || '', scheduleTime: templateSeed.scheduleTime || '', platform: templateSeed.platform || 'Instagram', format: templateSeed.format || 'REELS', igAccountId: templateSeed.igAccountId || '', igAccountUsername: templateSeed.igAccountUsername || '', youtube: templateSeed.youtube || null } : null} media={media} templates={templates} hashtagGroups={hashtagGroups} onCreateTemplate={handleCreateTemplate} onDeleteTemplate={handleDeleteTemplate} onCreateHashtagGroup={handleCreateHashtagGroup} onDeleteHashtagGroup={handleDeleteHashtagGroup} onSave={handleSavePost} onCancel={() => setTab('queue')} saving={saving} posts={visiblePosts} igAccounts={settings?.instagramAccounts || []} defaultIgUserId={settings?.defaultIgUserId || ''} settings={settings} />
+            <Studio key={`${studioKey}-${editing?.id || 'new'}`} editing={editing} seed={templateSeed ? { caption: templateSeed.text || templateSeed.caption || '', hashtags: templateSeed.hashtags || '', cta: templateSeed.cta || '', mediaUrl: templateSeed.mediaUrl || '', mediaType: templateSeed.mediaType || 'video', posterUrl: templateSeed.posterUrl || '', scheduleTime: templateSeed.scheduleTime || '', platform: templateSeed.platform || 'Instagram', format: templateSeed.format || 'REELS', igAccountId: templateSeed.igAccountId || '', igAccountUsername: templateSeed.igAccountUsername || '', youtube: templateSeed.youtube || null, firstComment: templateSeed.firstComment || '', repeat: templateSeed.repeat || '' } : null} media={media} templates={templates} hashtagGroups={hashtagGroups} onCreateTemplate={handleCreateTemplate} onDeleteTemplate={handleDeleteTemplate} onCreateHashtagGroup={handleCreateHashtagGroup} onDeleteHashtagGroup={handleDeleteHashtagGroup} drafts={drafts} onSaveLibraryDraft={handleCreateDraft} onDeleteLibraryDraft={handleDeleteDraft} onSave={handleSavePost} onCancel={() => setTab('queue')} saving={saving} posts={visiblePosts} igAccounts={settings?.instagramAccounts || []} defaultIgUserId={settings?.defaultIgUserId || ''} settings={settings} />
           </div>
         )}
         {tab === 'bulk' && <div className="section"><Bulk onImport={handleBulkImport} posts={visiblePosts} onUploadFile={handleUpload} igAccounts={settings?.instagramAccounts || []} defaultIgUserId={settings?.defaultIgUserId || ''} hashtagGroups={hashtagGroups} /></div>}

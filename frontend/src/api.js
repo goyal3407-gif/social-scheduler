@@ -218,6 +218,9 @@ export const api = {
   getTemplates: async () => asArray(await req('/api/templates'), 'templates'),
   createTemplate: async (tpl) => (await req('/api/templates', { method: 'POST', body: JSON.stringify(tpl) })).template,
   deleteTemplate: (id) => req(`/api/templates/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  getDrafts: async () => asArray(await req('/api/drafts'), 'drafts'),
+  createDraft: async (d) => (await req('/api/drafts', { method: 'POST', body: JSON.stringify(d) })).draft,
+  deleteDraft: (id) => req(`/api/drafts/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
   getHashtagGroups: async () => asArray(await req('/api/hashtag-groups'), 'hashtagGroups'),
   createHashtagGroup: async (group) => (await req('/api/hashtag-groups', { method: 'POST', body: JSON.stringify(group) })).hashtagGroup,

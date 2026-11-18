@@ -2306,7 +2306,7 @@ const PLATFORMS = ['Instagram', 'YouTube', 'Facebook', 'TikTok'];
 function validPostInput(b, { requireMedia = true } = {}) {
   // Field values must be plain strings — an object/array value used to be
   // cast to a string by the database layer and corrupt the saved post.
-  const STR_FIELDS = ['mediaUrl', 'mediaType', 'caption', 'hashtags', 'cta', 'platform', 'scheduleTime', 'status', 'format', 'liveUrl', 'posterUrl'];
+  const STR_FIELDS = ['mediaUrl', 'mediaType', 'caption', 'hashtags', 'cta', 'platform', 'scheduleTime', 'status', 'format', 'liveUrl', 'posterUrl', 'firstComment'];
   for (const k of STR_FIELDS) if (b[k] !== undefined && typeof b[k] !== 'string') return 'One of the fields in that post is not valid — please try again.';
   // Drafts are plans: they may be saved without media or a time yet, and
   // the media is added later in Studio. Scheduled posts must have media.
@@ -2332,6 +2332,11 @@ function validPostInput(b, { requireMedia = true } = {}) {
     if (b.youtube.title !== undefined && typeof b.youtube.title !== 'string') return 'That YouTube title is not valid.';
     if (b.youtube.title && b.youtube.title.length > 100) return 'YouTube titles can be at most 100 characters — shorten it and try again.';
   }
+  // First comment (Phase C2): plain text, capped at Instagram's
+  // comment length.
+  if (b.firstComment && b.firstComment.length > 2200) return 'The first comment is too long — keep it under 2,200 characters.';
+  // Recurrence (Phase C1): only weekly exists in v1.
+  if (b.repeat !== undefined && b.repeat !== '' && b.repeat !== 'weekly') return 'That repeat setting is not valid — only weekly repeats are supported.';
   return null;
 }
 // Normalized YouTube cross-post setting stored on a post.
@@ -2393,6 +2398,15 @@ function buildPost(b, userId, target = {}) {
     // youtubeError start empty).
     youtube: normalizeYouTubeSetting(b.youtube),
     youtubeVideoId: '', youtubeStatus: '', youtubeError: '',
+    // First comment (Phase C2): posted as a comment right after a
+    // successful publish; firstCommentPosted records that it landed.
+    firstComment: typeof b.firstComment === 'string' ? b.firstComment.slice(0, 2200) : '',
+    firstCommentPosted: false,
+    // Recurrence (Phase C1): 'weekly' or ''. seriesId links the
+    // occurrences; nextOccurrenceId on a published occurrence guards
+    // against ever spawning twice (retries included).
+    repeat: b.repeat === 'weekly' ? 'weekly' : '',
+    seriesId: '', nextOccurrenceId: '',
     createdAt: new Date().toISOString(),
   };
 }
@@ -2449,10 +2463,11 @@ app.patch('/api/posts/:id', ah(async (req, res) => {
   // set only by a real publish. Status may move between draft and
   // scheduled (the Studio edit), never into published/failed — those
   // belong to the publish flow alone.
-  const allowed = ['mediaUrl', 'mediaType', 'caption', 'hashtags', 'cta', 'platform', 'scheduleTime', 'format', 'posterUrl'];
+  const allowed = ['mediaUrl', 'mediaType', 'caption', 'hashtags', 'cta', 'platform', 'scheduleTime', 'format', 'posterUrl', 'firstComment'];
   const patch = {};
   for (const k of allowed) if (b[k] !== undefined) patch[k] = b[k];
   if (b.youtube !== undefined) patch.youtube = normalizeYouTubeSetting(b.youtube);
+  if (b.repeat !== undefined) patch.repeat = b.repeat === 'weekly' ? 'weekly' : '';
   // Retargeting a post to another connected account (multi-account):
   // the account must be connected; an empty value clears the target
   // (the post then publishes via the default account).
@@ -2591,6 +2606,21 @@ const AUTO_RETRY_DELAY_MS = 15 * 60 * 1000;
 // post up when retryAt passes, and retryCount records how many
 // automatic retries have been consumed so a post can never loop. A
 // failure of the automatic retry itself (isAutoRetry) is final.
+// Plain-language failure explanations (Phase C5): map the raw
+// publish error strings the pipeline produces onto a human reason.
+// Returns '' when nothing matches (callers then show the raw error).
+// The frontend carries the same mapping for Queue rows
+// (frontend/src/components/shared.jsx — keep the two in step).
+function friendlyFailureText(error) {
+  const s = String(error || '');
+  if (/not connected|no longer connected|connect Instagram/i.test(s)) return 'The Instagram account for this post is not connected. Reconnect it on the Connections page, then publish again.';
+  if (/token|session|OAuth|expired|revoked|authoriz/i.test(s)) return 'Instagram ended the login for this account. Reconnect Instagram on the Connections page, then publish again.';
+  if (/permission|scope|not authorized|does not have/i.test(s)) return 'Instagram did not give this app permission for that action. Reconnect Instagram on the Connections page and approve all permissions, then publish again.';
+  if (/rate|too many|throttl|limit/i.test(s)) return 'Instagram is rate-limiting right now. Wait a while, then publish again.';
+  if (/could not be prepared|not reachable|unreachable|fetch|network|reach Instagram|media.*(not|un)/i.test(s)) return 'The media file could not be reached or prepared. Re-upload it from the Media Library, then publish again.';
+  if (/format|process this media|H\.264|codec/i.test(s)) return 'Instagram could not process this media file. A standard MP4 (H.264) video or JPG image works best.';
+  return '';
+}
 async function markFailed(userId, post, error, { isAutoRetry = false } = {}) {
   const short = String(error || 'Publish failed.').slice(0, 200);
   const retriesUsed = (post.retryCount || 0) + (isAutoRetry ? 1 : 0);
@@ -2604,8 +2634,9 @@ async function markFailed(userId, post, error, { isAutoRetry = false } = {}) {
     patch.retryAt = new Date(Date.now() + AUTO_RETRY_DELAY_MS).toISOString();
   }
   await db.updatePost(userId, post.id, patch);
+  const friendly = friendlyFailureText(short);
   await notifyUser(userId, 'publish-failure', post.id,
-    `Publish failed: ${short}${patch.retryPending ? ' It will be retried automatically in about 15 minutes.' : ''}`);
+    `Publish failed: ${friendly ? `${friendly} (Details: ${short})` : short}${patch.retryPending ? ' It will be retried automatically in about 15 minutes.' : ''}`);
   return short;
 }
 // Server-copy auto-delete (the owner's storage model: the server is
@@ -2824,6 +2855,53 @@ async function attemptPublishLocked(userId, post, ig, publicBaseUrl) {
         try { await db.updatePost(userId, post.id, { youtubeStatus: 'failed', youtubeError: reason }); } catch { /* post may be gone */ }
         try { await notifyUser(userId, 'youtube-failed', post.id, `Instagram posted fine, but the YouTube upload failed for “${ytLabel}”: ${reason}. The Instagram post is live — nothing was duplicated.`); } catch { /* notifications never fail a publish */ }
       }
+    }
+    // First comment (Phase C2): post the prepared comment (usually
+    // the hashtags) on the just-created media. A comment failure is
+    // soft — the post is live either way; the user is notified.
+    if (post.firstComment && String(post.firstComment).trim()) {
+      try {
+        const c = await graph('/' + published.id + '/comments', 'POST', { message: String(post.firstComment).slice(0, 2200), access_token: token }, base);
+        if (!c || c.error) throw new Error(friendlyGraphError(c, 'Instagram refused the comment'));
+        await db.updatePost(userId, post.id, { firstCommentPosted: true });
+      } catch (e) {
+        try { await notifyUser(userId, 'comment-failed', post.id, `Your post “${String(post.caption || 'Untitled post').slice(0, 80)}” is live, but its first comment could not be added (${String((e && e.message) || e).slice(0, 160)}). You can add the comment manually on Instagram.`); } catch { /* notifications never fail a publish */ }
+      }
+    }
+    // Recurrence (Phase C1): a weekly post that just published spawns
+    // its next occurrence (+7 days, same time) as a fresh scheduled
+    // post in the same series. The spawn is guarded by
+    // nextOccurrenceId on THIS post, so the one automatic retry — or
+    // any repeated success path — can never spawn twice. Spawned
+    // BEFORE the server-copy cleanup below so the new occurrence
+    // keeps the bridge copy alive (cleanup skips media that a
+    // scheduled post still needs). Deleting an occurrence never
+    // touches the others; clearing "repeat" on an occurrence stops
+    // the chain from there.
+    if (post.repeat === 'weekly' && !post.nextOccurrenceId) {
+      try {
+        const seriesId = post.seriesId || post.id;
+        let nextMs = new Date(post.scheduleTime || Date.now()).getTime() + 7 * 86400000;
+        if (!Number.isFinite(nextMs)) nextMs = Date.now() + 7 * 86400000;
+        while (nextMs <= Date.now()) nextMs += 7 * 86400000; // a very late publish still lands on a future slot
+        const occurrence = {
+          id: uid('post'), userId,
+          mediaUrl: post.mediaUrl, mediaType: post.mediaType || 'video',
+          caption: post.caption || '', hashtags: post.hashtags || '', cta: post.cta || '',
+          platform: post.platform || 'Instagram',
+          igAccountId: post.igAccountId || '', igAccountUsername: post.igAccountUsername || '',
+          scheduleTime: new Date(nextMs).toISOString(),
+          status: 'scheduled', format: post.format || 'REELS', liveUrl: '',
+          posterUrl: post.posterUrl || '',
+          youtube: normalizeYouTubeSetting(post.youtube),
+          youtubeVideoId: '', youtubeStatus: '', youtubeError: '',
+          firstComment: post.firstComment || '', firstCommentPosted: false,
+          repeat: 'weekly', seriesId, nextOccurrenceId: '',
+          createdAt: new Date().toISOString(),
+        };
+        await db.savePost(occurrence);
+        await db.updatePost(userId, post.id, { seriesId, nextOccurrenceId: occurrence.id });
+      } catch { /* recurrence never fails a publish */ }
     }
     // The server was only a bridge for uploaded media: now that
     // Instagram has the post, drop the stored copy (unless the user
@@ -3338,6 +3416,43 @@ app.post('/api/templates', ah(async (req, res) => {
 app.delete('/api/templates/:id', ah(async (req, res) => {
   const removed = await db.deleteTemplate(req.userId, String(req.params.id || ''));
   if (!removed) return res.status(404).json({ ok: false, error: 'That template does not exist.' });
+  res.json({ ok: true });
+}));
+
+// ---------- drafts library (named composer drafts, Phase C3) ----------
+// Distinct from draft-status posts: a named snapshot of the composer
+// the user loads back into the Studio. Loading never schedules.
+app.get('/api/drafts', ah(async (req, res) => {
+  const drafts = await db.listDrafts(req.userId);
+  res.json({ ok: true, drafts });
+}));
+app.post('/api/drafts', ah(async (req, res) => {
+  const b = req.body || {};
+  if (typeof b.name !== 'string' || !b.name.trim()) return res.status(400).json({ ok: false, error: 'Give the draft a name first.' });
+  if (b.name.trim().length > 80) return res.status(400).json({ ok: false, error: 'Draft names can be at most 80 characters.' });
+  const STR = ['caption', 'hashtags', 'cta', 'mediaUrl', 'mediaType', 'posterUrl', 'platform', 'format', 'igAccountId', 'igAccountUsername', 'firstComment'];
+  for (const k of STR) if (b[k] !== undefined && typeof b[k] !== 'string') return res.status(400).json({ ok: false, error: 'That draft is not valid — please try again.' });
+  if (b.youtube !== undefined && (!b.youtube || typeof b.youtube !== 'object' || Array.isArray(b.youtube))) return res.status(400).json({ ok: false, error: 'That draft is not valid — please try again.' });
+  if (b.repeat !== undefined && b.repeat !== '' && b.repeat !== 'weekly') return res.status(400).json({ ok: false, error: 'That repeat setting is not valid.' });
+  const existing = await db.listDrafts(req.userId);
+  if (existing.length >= 100) return res.status(400).json({ ok: false, error: 'You have 100 saved drafts — delete some before saving more.' });
+  const d = {
+    id: uid('draft'), userId: req.userId, name: b.name.trim(),
+    caption: (b.caption || '').slice(0, 2200), hashtags: (b.hashtags || '').slice(0, 500), cta: (b.cta || '').slice(0, 300),
+    mediaUrl: (b.mediaUrl || '').slice(0, 2000), mediaType: b.mediaType || 'video', posterUrl: (b.posterUrl || '').slice(0, 2000),
+    platform: b.platform || 'Instagram', format: b.format || 'REELS',
+    igAccountId: b.igAccountId || '', igAccountUsername: b.igAccountUsername || '',
+    youtube: normalizeYouTubeSetting(b.youtube),
+    firstComment: (b.firstComment || '').slice(0, 2200),
+    repeat: b.repeat === 'weekly' ? 'weekly' : '',
+    createdAt: new Date().toISOString(),
+  };
+  await db.saveDraft(d);
+  res.json({ ok: true, draft: d });
+}));
+app.delete('/api/drafts/:id', ah(async (req, res) => {
+  const removed = await db.deleteDraft(req.userId, String(req.params.id || ''));
+  if (!removed) return res.status(404).json({ ok: false, error: 'That draft does not exist.' });
   res.json({ ok: true });
 }));
 

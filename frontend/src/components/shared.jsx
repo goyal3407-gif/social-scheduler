@@ -111,13 +111,40 @@ export function Empty({ title, body, action }) {
  * links out. A failed post with no retry pending shows a failed state
  * instead of pretending to progress.
  */
-export function StatusTracker({ post, publishing }) {
+// Plain-language failure explanations (Phase C5) — the same mapping
+// the server applies to failure notifications (friendlyFailureText in
+// server.js; keep the two in step). fix: 'reconnect' when reconnecting
+// Instagram is the remedy.
+export function friendlyFailure(error) {
+  const s = String(error || '')
+  if (/not connected|no longer connected|connect Instagram/i.test(s)) return { text: 'The Instagram account for this post is not connected.', fix: 'reconnect' }
+  if (/token|session|OAuth|expired|revoked|authoriz/i.test(s)) return { text: 'Instagram ended the login for this account.', fix: 'reconnect' }
+  if (/permission|scope|not authorized|does not have/i.test(s)) return { text: 'Instagram did not give this app permission for that action.', fix: 'reconnect' }
+  if (/rate|too many|throttl|limit/i.test(s)) return { text: 'Instagram is rate-limiting right now — wait a while, then publish again.', fix: '' }
+  if (/could not be prepared|not reachable|unreachable|fetch|network|reach Instagram/i.test(s)) return { text: 'The media file could not be reached or prepared — re-upload it from the Media Library.', fix: '' }
+  if (/format|process this media|H\.264|codec/i.test(s)) return { text: 'Instagram could not process this media file — a standard MP4 (H.264) or JPG works best.', fix: '' }
+  return { text: '', fix: '' }
+}
+
+export function StatusTracker({ post, publishing, onReconnect }) {
   if (!post) return null
   if (post.status === 'failed' && !post.retryPending) {
+    const friendly = friendlyFailure(post.lastPublishError)
     return (
-      <div className="post-tracker failed" title={post.lastPublishError || undefined}>
+      <div className="post-tracker failed">
         <span className="trk-fail-dot" aria-hidden="true" />
-        <span>Failed{post.lastPublishError ? ' — see Home for the reason' : ''}</span>
+        <span>
+          Failed{friendly.text ? ` — ${friendly.text}` : ''}
+          {friendly.fix === 'reconnect' && onReconnect && (
+            <button type="button" className="btn ghost small" style={{ marginLeft: 8 }} onClick={() => onReconnect()}>Reconnect Instagram</button>
+          )}
+          {post.lastPublishError && (
+            <details style={{ display: 'inline-block', marginLeft: 8 }}>
+              <summary className="small" style={{ cursor: 'pointer', display: 'inline' }}>Details</summary>
+              <span className="small" style={{ display: 'block', marginTop: 4 }}>{post.lastPublishError}</span>
+            </details>
+          )}
+        </span>
       </div>
     )
   }
@@ -154,7 +181,7 @@ export function StatusTracker({ post, publishing }) {
   )
 }
 
-export function PostRow({ post, onEdit, onDelete, onPublish, publishing, onDuplicate, onPostAgain, onReschedule, onRescheduleNextBest }) {
+export function PostRow({ post, onEdit, onDelete, onPublish, publishing, onDuplicate, onPostAgain, onReschedule, onRescheduleNextBest, onReconnect }) {
   const [menuOpen, setMenuOpen] = useState(false)
   const menuRef = useRef(null)
   useEffect(() => {
@@ -178,6 +205,7 @@ export function PostRow({ post, onEdit, onDelete, onPublish, publishing, onDupli
           <StatusBadge status={post.status} />
           <PlatformBadge platform={post.platform} />
           <span className="badge brand">{post.format || 'REELS'}</span>
+          {post.repeat === 'weekly' && <span className="badge neutral" title="This post repeats weekly — publishing it schedules the next one automatically">Repeats weekly</span>}
           {post.liveUrl && <a className="badge neutral" href={post.liveUrl} target="_blank" rel="noreferrer">Live ↗</a>}
         </div>
         <p>{post.caption || <span className="muted">No caption</span>}</p>
@@ -186,7 +214,7 @@ export function PostRow({ post, onEdit, onDelete, onPublish, publishing, onDupli
           {post.hashtags && <span>{post.hashtags}</span>}
           {post.cta && <span>CTA: {post.cta}</span>}
         </div>
-        <StatusTracker post={post} publishing={publishing} />
+        <StatusTracker post={post} publishing={publishing} onReconnect={onReconnect} />
         <div className="post-foot">
           {post.status !== 'published' && (
             <button type="button" className="btn primary small" disabled={publishing} onClick={() => onPublish && onPublish(post)}>
