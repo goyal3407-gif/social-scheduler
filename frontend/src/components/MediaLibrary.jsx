@@ -354,7 +354,7 @@ export default function MediaLibrary({ media, loading, error, onRetry, onAddLink
             {filtered.slice(0, visibleCount).map((m) => (
               <article key={m.id} className="media-card">
                 {m.serverCopyRemoved ? (
-                  <div className="media-removed"><b>Published ✓</b><span>Server copy removed to save space — the post is live on Instagram. Upload the file again to reuse it.</span></div>
+                  <div className="media-removed"><b>Published ✓</b><span>Server copy removed to save space — the post is live now. Upload the file again to reuse it.</span></div>
                 ) : <MediaVisual url={m.url} kind={m.kind} posterUrl={m.posterUrl} />}
                 <div className="mc-body">
                   <b title={m.title || m.url}>{m.title || 'Untitled'}</b>
