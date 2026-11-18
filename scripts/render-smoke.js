@@ -20,7 +20,10 @@
 //                 then the Queue tab must render with scheduled posts first
 //                 (soonest at top), other statuses below, newest first, and
 //                 status trackers naming the platform(s) each post used
-//                 (YouTube-only / Instagram-only / both).
+//                 (YouTube-only / Instagram-only / both). B also asserts
+//                 the header structure (brand block / nav / actions as
+//                 separate ordered children; mobile search icon button +
+//                 expandable row — the 2026-11-18 overlap fix).
 //   C update guard: like B, but /build-id.json + /api/version report a
 //                 DIFFERENT build id than the bundle's own — the "new
 //                 version available" banner must render. (In A/B the
@@ -208,6 +211,45 @@ async function runScenario(scenario, bundleDir) {
     if (!window.document.querySelector('.home-search img')) {
       throw new Error('home search pill logo missing')
     }
+    // Header structure (2026-11-18 overlap fix). jsdom does no layout,
+    // so overlap is asserted structurally: the brand block, the desktop
+    // nav and the actions must be SEPARATE children of .topbar-in, in
+    // that order — the old bug was the logo flex item shrinking to
+    // min-width:0 so the nav painted over the wordmark (the CSS now
+    // pins .logo{flex:none} and lets .topnav scroll). The desktop
+    // search form must be present, and the mobile header must carry
+    // the compact search ICON button in the actions row — NOT an
+    // always-visible wide pill (the old mobile bar rendered the
+    // desktop form next to the logo, truncating + overlapping it).
+    const topbarIn = window.document.querySelector('.topbar-in')
+    if (!topbarIn) fail('topbar row missing')
+    const kids = [...topbarIn.children]
+    const logoEl = kids.find((el) => el.classList.contains('logo'))
+    const navEl = kids.find((el) => el.classList.contains('topnav'))
+    const actionsEl = kids.find((el) => el.classList.contains('top-actions'))
+    if (!logoEl || !navEl || !actionsEl) fail('header row is missing the brand block, desktop nav or actions')
+    if (!(kids.indexOf(logoEl) < kids.indexOf(navEl) && kids.indexOf(navEl) < kids.indexOf(actionsEl))) {
+      fail('header order is not brand block, nav, actions')
+    }
+    if (logoEl.contains(navEl) || navEl.contains(logoEl)) fail('brand block and nav are nested (overlap family)')
+    if (!topbarIn.querySelector('form.topnav-search input[type="search"]')) fail('desktop header search input missing')
+    const searchToggle = actionsEl.querySelector('.search-toggle-btn')
+    if (!searchToggle) fail('mobile search icon button missing from the header actions')
+    if (window.document.querySelector('.mobile-search-row')) fail('mobile search row is expanded before the icon is tapped')
+    // Expand: a slim row appears under the header with the full
+    // placeholder visible; close returns to the icon state.
+    searchToggle.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }))
+    const mInput = await waitFor(
+      () => window.document.querySelector('.mobile-search-row input[type="search"]'),
+      'mobile search row to expand'
+    )
+    if (mInput.getAttribute('placeholder') !== 'Search posts & media…') {
+      fail('mobile search row placeholder wrong: ' + mInput.getAttribute('placeholder'))
+    }
+    const closeBtn = window.document.querySelector('.mobile-search-row .mobile-search-close')
+    if (!closeBtn) fail('mobile search row has no close button')
+    closeBtn.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }))
+    await waitFor(() => !window.document.querySelector('.mobile-search-row'), 'mobile search row to close')
     // Navigate to Queue (lazy chunk) and check ordering.
     const navBtn = await waitFor(() => {
       const els = [...window.document.querySelectorAll('button, a')]

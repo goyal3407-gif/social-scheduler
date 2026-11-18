@@ -3,7 +3,7 @@ import { api, nextBestTime } from './api.js'
 import { trFor } from './i18n.js'
 import Auth, { ResetPassword } from './components/Auth.jsx'
 import Dashboard from './components/Dashboard.jsx'
-import { IconHome, IconCal, IconQueue, IconPlus, IconMedia, IconBulk, IconTools, IconSpark, IconSettings, IconSun, IconMoon, IconMenu, IconX, IconBell, IconLink } from './components/icons.jsx'
+import { IconHome, IconCal, IconQueue, IconPlus, IconMedia, IconBulk, IconTools, IconSpark, IconSettings, IconSun, IconMoon, IconMenu, IconX, IconBell, IconLink, IconSearch } from './components/icons.jsx'
 import { Skeleton, isOwnMediaUrl } from './components/shared.jsx'
 // The build id baked in at build time (vite define). The update guard
 // below compares it with the id the server/static file reports for
@@ -117,6 +117,10 @@ export default function App() {
   const [offline, setOffline] = useState(() => typeof navigator !== 'undefined' && navigator.onLine === false)
   const [globalQ, setGlobalQ] = useState('')
   const [searchNonce, setSearchNonce] = useState(0)
+  // Mobile header search: collapsed to an icon button; tapping it
+  // expands a slim search row under the header (the always-visible
+  // pill was too wide — it truncated and overlapped the logo).
+  const [mobileSearchOpen, setMobileSearchOpen] = useState(false)
   const toastTimer = useRef(null)
   const toastSeq = useRef(0)
   const pendingDeleteTimers = useRef(new Map())
@@ -165,6 +169,7 @@ export default function App() {
     setSearchNonce((n) => n + 1)
     setTab('queue')
     setMenuOpen(false)
+    setMobileSearchOpen(false)
   }, [])
 
   // Side drawer: Escape closes it, and the page behind it must not
@@ -801,9 +806,12 @@ export default function App() {
             <button type="button" className={tab === 'connections' ? 'active' : ''} onClick={() => setTab('connections')}>{tr('connections')}</button>
           </nav>
           <form className="topnav-search" role="search" onSubmit={(e) => { e.preventDefault(); runGlobalSearch(globalQ) }} style={{ marginRight: 8 }}>
-            <input type="search" value={globalQ} onChange={(e) => setGlobalQ(e.target.value)} placeholder={tr('searchPlaceholder')} aria-label="Search posts and media" style={{ width: 170 }} />
+            <input type="search" value={globalQ} onChange={(e) => setGlobalQ(e.target.value)} placeholder={tr('searchPlaceholder')} aria-label="Search posts and media" />
           </form>
           <div className="top-actions">
+            <button type="button" className="icon-btn search-toggle-btn" onClick={() => setMobileSearchOpen((o) => !o)} aria-label="Search" aria-expanded={mobileSearchOpen}>
+              <IconSearch size={18} />
+            </button>
             <span className="pill" title={!settings ? 'Checking Instagram connection' : settings.instagramConnected ? 'Instagram connected' : 'Instagram not connected'}>
               <span className={`dot ${!settings ? 'amber' : settings.instagramConnected ? '' : 'off'}`} />
               {!settings ? 'IG checking…' : settings.instagramConnected ? `IG ${settings.instagramHandle || 'connected'}` : 'IG not connected'}
@@ -834,6 +842,16 @@ export default function App() {
             </div>
           </div>
         </div>
+        {mobileSearchOpen && (
+          <form className="mobile-search-row" role="search" onSubmit={(e) => { e.preventDefault(); runGlobalSearch(globalQ) }}>
+            <input type="search" autoFocus value={globalQ} onChange={(e) => setGlobalQ(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Escape') setMobileSearchOpen(false) }}
+              placeholder={tr('searchPlaceholder')} aria-label="Search posts and media" />
+            <button type="button" className="icon-btn mobile-search-close" onClick={() => { setGlobalQ(''); setMobileSearchOpen(false) }} aria-label="Close search">
+              <IconX size={16} />
+            </button>
+          </form>
+        )}
       </header>
 
       {menuOpen && (
