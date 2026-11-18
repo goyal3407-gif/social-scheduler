@@ -60,6 +60,13 @@ export default function App() {
   const [error, setError] = useState(null)
   const [toast, setToast] = useState(null) // { id, message, kind, actionLabel, onAction }
   const [pendingDeleteIds, setPendingDeleteIds] = useState(new Set())
+  // Posts with a pending (Undo-able) delete hidden. Declared here, before
+  // any handler that reads it: referencing a const above its declaration
+  // throws a TDZ ReferenceError on every render and blanks the whole app.
+  const visiblePosts = useMemo(
+    () => (pendingDeleteIds.size ? posts.filter((p) => !pendingDeleteIds.has(p.id)) : posts),
+    [posts, pendingDeleteIds]
+  )
   const [editing, setEditing] = useState(null)
   const [studioKey, setStudioKey] = useState(0)
   const [saving, setSaving] = useState(false)
@@ -399,11 +406,6 @@ export default function App() {
   useEffect(() => () => {
     for (const [id, t] of pendingDeleteTimers.current) { clearTimeout(t); api.deletePost(id).catch(() => {}) }
   }, [])
-
-  const visiblePosts = useMemo(
-    () => (pendingDeleteIds.size ? posts.filter((p) => !pendingDeleteIds.has(p.id)) : posts),
-    [posts, pendingDeleteIds]
-  )
 
   // Posts whose scheduled time has passed without publishing.
   const overdue = useMemo(() => {
