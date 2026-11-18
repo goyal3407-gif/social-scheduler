@@ -133,7 +133,7 @@ export const api = {
   getVersion: () => req('/api/version'),
 
   // Auth (session cookie is httpOnly; the frontend never sees a token)
-  signup: (email, password, name) => req('/api/auth/signup', { method: 'POST', body: JSON.stringify(name ? { email, password, name } : { email, password }) }),
+  signup: (email, password, name, ref) => req('/api/auth/signup', { method: 'POST', body: JSON.stringify({ email, password, ...(name ? { name } : {}), ...(ref ? { ref } : {}) }) }),
   login: (email, password) => req('/api/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
   me: () => req('/api/auth/me'),
   logout: () => req('/api/auth/logout', { method: 'POST', body: JSON.stringify({}) }),
@@ -221,6 +221,13 @@ export const api = {
   getDrafts: async () => asArray(await req('/api/drafts'), 'drafts'),
   createDraft: async (d) => (await req('/api/drafts', { method: 'POST', body: JSON.stringify(d) })).draft,
   deleteDraft: (id) => req(`/api/drafts/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  // Phase D: link-in-bio, preview/approval link, referrals.
+  getBio: () => req('/api/bio'),
+  saveBio: (data) => req('/api/bio', { method: 'POST', body: JSON.stringify(data) }),
+  getPreviewLink: () => req('/api/preview-link'),
+  createPreviewLink: () => req('/api/preview-link', { method: 'POST' }),
+  regeneratePreviewLink: () => req('/api/preview-link/regenerate', { method: 'POST' }),
+  getReferral: () => req('/api/referral'),
 
   getHashtagGroups: async () => asArray(await req('/api/hashtag-groups'), 'hashtagGroups'),
   createHashtagGroup: async (group) => (await req('/api/hashtag-groups', { method: 'POST', body: JSON.stringify(group) })).hashtagGroup,

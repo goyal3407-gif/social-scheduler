@@ -500,11 +500,21 @@ app.post('/api/auth/signup', ah(async (req, res) => {
   // this exact email is the one that is already registered.
   if (users.some((u) => u.email === email)) return res.status(409).json({ ok: false, error: 'We could not create an account with those details. If you already have an account, log in instead.' });
   const salt = crypto.randomBytes(16).toString('hex');
+  // Referral (Phase D11): every account gets a short invite code; a
+  // signup that arrives with ?ref=<code> records who invited them.
+  // An unknown code is ignored — never an error.
+  let referralCode = '';
+  do { referralCode = 'K' + crypto.randomBytes(4).toString('hex').toUpperCase().slice(0, 6); }
+  while (users.some((u) => u.referralCode === referralCode));
+  const ref = typeof req.body?.ref === 'string' ? req.body.ref.trim().toUpperCase().slice(0, 16) : '';
+  const referredBy = ref && users.some((u) => u.referralCode === ref) ? ref : '';
   const user = {
     id: uid('user'), email, salt,
     passwordHash: hashPassword(password, salt),
     role: users.length === 0 ? 'owner' : 'member',
     createdAt: new Date().toISOString(),
+    referralCode,
+    ...(referredBy ? { referredBy } : {}),
     ...(name ? { name } : {}),
   };
   await db.saveUser(user);
@@ -2335,6 +2345,10 @@ function validPostInput(b, { requireMedia = true } = {}) {
   // First comment (Phase C2): plain text, capped at Instagram's
   // comment length.
   if (b.firstComment && b.firstComment.length > 2200) return 'The first comment is too long — keep it under 2,200 characters.';
+  // Platform picker (Phase B revision): at least one platform must
+  // be ticked. Checked on create/bulk (full object present); PATCH
+  // sends partial bodies, so it is not enforced there.
+  if (requireMedia && b.igEnabled === false && !(b.youtube && b.youtube.enabled)) return 'Tick at least one platform — Instagram, YouTube, or both.';
   // Recurrence (Phase C1): only weekly exists in v1.
   if (b.repeat !== undefined && b.repeat !== '' && b.repeat !== 'weekly') return 'That repeat setting is not valid — only weekly repeats are supported.';
   return null;
@@ -2398,6 +2412,10 @@ function buildPost(b, userId, target = {}) {
     // youtubeError start empty).
     youtube: normalizeYouTubeSetting(b.youtube),
     youtubeVideoId: '', youtubeStatus: '', youtubeError: '',
+    // Platform picker (Phase B revision): Instagram is ticked unless
+    // explicitly unticked; a YouTube-only post publishes straight to
+    // YouTube with no Instagram leg.
+    igEnabled: b.igEnabled === false ? false : true,
     // First comment (Phase C2): posted as a comment right after a
     // successful publish; firstCommentPosted records that it landed.
     firstComment: typeof b.firstComment === 'string' ? b.firstComment.slice(0, 2200) : '',
@@ -2468,6 +2486,7 @@ app.patch('/api/posts/:id', ah(async (req, res) => {
   for (const k of allowed) if (b[k] !== undefined) patch[k] = b[k];
   if (b.youtube !== undefined) patch.youtube = normalizeYouTubeSetting(b.youtube);
   if (b.repeat !== undefined) patch.repeat = b.repeat === 'weekly' ? 'weekly' : '';
+  if (b.igEnabled !== undefined) patch.igEnabled = b.igEnabled === false ? false : true;
   // Retargeting a post to another connected account (multi-account):
   // the account must be connected; an empty value clears the target
   // (the post then publishes via the default account).
@@ -2749,6 +2768,73 @@ async function migrateLegacyMediaItem(userId, item, base) {
 // practice — the saved containerId resume below is the second line of
 // defence — but a same-process duplicate is now impossible.)
 const publishInFlight = new Set();
+// Recurrence (Phase C1): a weekly post that just published spawns its
+// next occurrence (+7 days, same time) as a fresh scheduled post in
+// the same series. Guarded by nextOccurrenceId on the published post,
+// so the one automatic retry — or any repeated success path — can
+// never spawn twice. Deleting an occurrence never touches the others;
+// clearing "repeat" on an occurrence stops the chain from there.
+// Shared by the Instagram path and the YouTube-only path.
+async function spawnNextOccurrence(userId, post) {
+  if (!post || post.repeat !== 'weekly' || post.nextOccurrenceId) return;
+  try {
+    const seriesId = post.seriesId || post.id;
+    let nextMs = new Date(post.scheduleTime || Date.now()).getTime() + 7 * 86400000;
+    if (!Number.isFinite(nextMs)) nextMs = Date.now() + 7 * 86400000;
+    while (nextMs <= Date.now()) nextMs += 7 * 86400000; // a very late publish still lands on a future slot
+    const occurrence = {
+      id: uid('post'), userId,
+      mediaUrl: post.mediaUrl, mediaType: post.mediaType || 'video',
+      caption: post.caption || '', hashtags: post.hashtags || '', cta: post.cta || '',
+      platform: post.platform || 'Instagram',
+      igAccountId: post.igAccountId || '', igAccountUsername: post.igAccountUsername || '',
+      igEnabled: post.igEnabled !== false,
+      scheduleTime: new Date(nextMs).toISOString(),
+      status: 'scheduled', format: post.format || 'REELS', liveUrl: '',
+      posterUrl: post.posterUrl || '',
+      youtube: normalizeYouTubeSetting(post.youtube),
+      youtubeVideoId: '', youtubeStatus: '', youtubeError: '',
+      firstComment: post.firstComment || '', firstCommentPosted: false,
+      repeat: 'weekly', seriesId, nextOccurrenceId: '',
+      createdAt: new Date().toISOString(),
+    };
+    await db.savePost(occurrence);
+    await db.updatePost(userId, post.id, { seriesId, nextOccurrenceId: occurrence.id });
+  } catch { /* recurrence never fails a publish */ }
+}
+// YouTube-only publish (Phase B platform picker: Instagram unticked).
+// No Instagram leg at all — the same media goes straight to YouTube.
+// Failures go through markFailed, so the exactly-one-retry rule and
+// the failure notifications behave exactly like an Instagram failure.
+async function attemptYouTubeOnlyPublish(userId, post) {
+  const isAutoRetry = !!(post && post._autoRetry);
+  const fail = async (err) => {
+    try { await markFailed(userId, post, err, { isAutoRetry }); } catch { /* post may be gone */ }
+    return { ok: false, error: err };
+  };
+  try {
+    await db.updatePost(userId, post.id, { publishAttempts: (post.publishAttempts || 0) + 1 });
+    if (post.youtubeVideoId) {
+      // Already uploaded by an earlier attempt — just mark it live.
+      const liveUrl = 'https://www.youtube.com/watch?v=' + post.youtubeVideoId;
+      await db.updatePost(userId, post.id, { status: 'published', liveUrl, containerId: null, lastPublishError: '', retryPending: false, retryAt: '' });
+      return { ok: true, liveUrl, mediaId: post.youtubeVideoId };
+    }
+    if (!post.youtube || !post.youtube.enabled) return fail('This post has no platform ticked — tick Instagram or YouTube and publish again.');
+    if ((post.mediaType || 'video') === 'image') return fail('YouTube accepts videos only — this post is an image. Tick Instagram as well, or use a video.');
+    const bytes = await fetchPostMediaBytes(post);
+    if (!bytes) return fail('This post\u2019s media could not be read for the YouTube upload — upload the file again from the Media Library, then publish.');
+    const videoId = await uploadVideoToYouTube(userId, post, bytes);
+    const liveUrl = 'https://www.youtube.com/watch?v=' + videoId;
+    await db.updatePost(userId, post.id, { status: 'published', liveUrl, youtubeVideoId: videoId, youtubeStatus: 'uploaded', youtubeError: '', containerId: null, lastPublishError: '', retryPending: false, retryAt: '' });
+    await notifyUser(userId, 'publish-success', post.id, `Published to YouTube (private): \u201C${String(post.caption || 'Untitled post').slice(0, 80)}\u201D`);
+    await spawnNextOccurrence(userId, post);
+    try { await maybeDeleteServerCopy(userId, post); } catch { /* cleanup never fails a publish */ }
+    return { ok: true, liveUrl, mediaId: videoId };
+  } catch (e) {
+    return fail('YouTube upload failed: ' + String((e && e.message) || e).slice(0, 240));
+  }
+}
 async function attemptPublish(userId, post, ig, publicBaseUrl) {
   const lockKey = `${userId}:${post && post.id}`;
   if (publishInFlight.has(lockKey)) {
@@ -2762,6 +2848,9 @@ async function attemptPublish(userId, post, ig, publicBaseUrl) {
   }
 }
 async function attemptPublishLocked(userId, post, ig, publicBaseUrl) {
+  // Platform picker (Phase B revision): Instagram unticked means a
+  // YouTube-only post — no Instagram leg runs at all.
+  if (post && post.igEnabled === false) return attemptYouTubeOnlyPublish(userId, post);
   const isAutoRetry = !!(post && post._autoRetry); // set by duePostsFor for the one automatic retry
   const token = ig.token;
   const igId = ig.igUserId;
@@ -2868,41 +2957,10 @@ async function attemptPublishLocked(userId, post, ig, publicBaseUrl) {
         try { await notifyUser(userId, 'comment-failed', post.id, `Your post “${String(post.caption || 'Untitled post').slice(0, 80)}” is live, but its first comment could not be added (${String((e && e.message) || e).slice(0, 160)}). You can add the comment manually on Instagram.`); } catch { /* notifications never fail a publish */ }
       }
     }
-    // Recurrence (Phase C1): a weekly post that just published spawns
-    // its next occurrence (+7 days, same time) as a fresh scheduled
-    // post in the same series. The spawn is guarded by
-    // nextOccurrenceId on THIS post, so the one automatic retry — or
-    // any repeated success path — can never spawn twice. Spawned
-    // BEFORE the server-copy cleanup below so the new occurrence
-    // keeps the bridge copy alive (cleanup skips media that a
-    // scheduled post still needs). Deleting an occurrence never
-    // touches the others; clearing "repeat" on an occurrence stops
-    // the chain from there.
-    if (post.repeat === 'weekly' && !post.nextOccurrenceId) {
-      try {
-        const seriesId = post.seriesId || post.id;
-        let nextMs = new Date(post.scheduleTime || Date.now()).getTime() + 7 * 86400000;
-        if (!Number.isFinite(nextMs)) nextMs = Date.now() + 7 * 86400000;
-        while (nextMs <= Date.now()) nextMs += 7 * 86400000; // a very late publish still lands on a future slot
-        const occurrence = {
-          id: uid('post'), userId,
-          mediaUrl: post.mediaUrl, mediaType: post.mediaType || 'video',
-          caption: post.caption || '', hashtags: post.hashtags || '', cta: post.cta || '',
-          platform: post.platform || 'Instagram',
-          igAccountId: post.igAccountId || '', igAccountUsername: post.igAccountUsername || '',
-          scheduleTime: new Date(nextMs).toISOString(),
-          status: 'scheduled', format: post.format || 'REELS', liveUrl: '',
-          posterUrl: post.posterUrl || '',
-          youtube: normalizeYouTubeSetting(post.youtube),
-          youtubeVideoId: '', youtubeStatus: '', youtubeError: '',
-          firstComment: post.firstComment || '', firstCommentPosted: false,
-          repeat: 'weekly', seriesId, nextOccurrenceId: '',
-          createdAt: new Date().toISOString(),
-        };
-        await db.savePost(occurrence);
-        await db.updatePost(userId, post.id, { seriesId, nextOccurrenceId: occurrence.id });
-      } catch { /* recurrence never fails a publish */ }
-    }
+    // Recurrence (Phase C1): spawn the next weekly occurrence BEFORE
+    // the server-copy cleanup below, so the new occurrence keeps the
+    // bridge copy alive (cleanup skips media a scheduled post needs).
+    await spawnNextOccurrence(userId, post);
     // The server was only a bridge for uploaded media: now that
     // Instagram has the post, drop the stored copy (unless the user
     // keeps copies, or another unpublished post still needs the file).
@@ -2930,16 +2988,20 @@ app.post('/api/posts/:id/publish', ah(async (req, res) => {
   // Multi-account: publish with the TARGET account's token. A post
   // whose target account was disconnected fails here with a clear
   // message + the usual failure notification — it is never silently
-  // published from a different account.
-  const resolved = await resolvePublishCreds(req.userId, post);
-  if (resolved.missing) {
-    const err = missingAccountError(resolved);
-    await markFailed(req.userId, post, err, { isAutoRetry: !!post._autoRetry });
-    return res.status(400).json({ ok: false, error: err });
-  }
-  const ig = resolved.ig;
-  if (!ig.token || !ig.igUserId) {
-    return res.status(400).json({ ok: false, error: 'Instagram is not connected — connect Instagram in Settings to publish from here.' });
+  // published from a different account. YouTube-only posts (Instagram
+  // unticked) skip credential resolution entirely.
+  let ig = {};
+  if (post.igEnabled !== false) {
+    const resolved = await resolvePublishCreds(req.userId, post);
+    if (resolved.missing) {
+      const err = missingAccountError(resolved);
+      await markFailed(req.userId, post, err, { isAutoRetry: !!post._autoRetry });
+      return res.status(400).json({ ok: false, error: err });
+    }
+    ig = resolved.ig;
+    if (!ig.token || !ig.igUserId) {
+      return res.status(400).json({ ok: false, error: 'Instagram is not connected — connect Instagram in Settings to publish from here.' });
+    }
   }
   const result = await attemptPublish(req.userId, post, ig, publicBase(req));
   if (result.ok) return res.json({ ok: true, liveUrl: result.liveUrl, mediaId: result.mediaId });
@@ -2972,14 +3034,24 @@ app.post('/api/publish-due', ah(async (req, res) => {
   await ensureInstagramTokenFresh(req.userId).catch(() => null);
   const { accounts } = await db.getInstagramAccounts(req.userId);
   const defaultIg = await getInstagramCreds(req.userId);
-  if ((!defaultIg.token || !defaultIg.igUserId) && accounts.length === 0) {
+  const due = await duePostsFor(req.userId, 5);
+  // The not-connected guard only applies when something due actually
+  // needs Instagram — a queue of YouTube-only posts publishes fine
+  // without any Instagram connection.
+  if ((!defaultIg.token || !defaultIg.igUserId) && accounts.length === 0 && due.some((p) => p.igEnabled !== false)) {
     return res.status(400).json({ ok: false, error: 'Instagram is not connected — connect Instagram in Settings to publish from here.' });
   }
-  const due = await duePostsFor(req.userId, 5);
   const published = [];
   const failed = [];
   const retrying = [];
   for (const post of due) {
+    if (post.igEnabled === false) {
+      const result = await attemptPublish(req.userId, post, {}, publicBase(req));
+      if (result.ok) published.push({ id: post.id, liveUrl: result.liveUrl });
+      else if (result.retry) retrying.push({ id: post.id, error: result.error });
+      else failed.push({ id: post.id, error: result.error });
+      continue;
+    }
     // Per-post connection (multi-account): keeper first for the
     // target account, then publish with THAT account's token. A post
     // whose target was disconnected fails with a clear notification —
@@ -3027,10 +3099,18 @@ const cronPublishDue = ah(async (req, res) => {
     await ensureInstagramTokenFresh(user.id).catch(() => null);
     const { accounts } = await db.getInstagramAccounts(user.id);
     const defaultIg = await getInstagramCreds(user.id);
-    if ((!defaultIg.token || !defaultIg.igUserId) && accounts.length === 0) { summary.push({ userId: user.id, skipped: 'instagram-not-connected' }); continue; }
     const due = await duePostsFor(user.id, 3);
+    // Skip only when nothing due can publish: YouTube-only posts do
+    // not need an Instagram connection.
+    if ((!defaultIg.token || !defaultIg.igUserId) && accounts.length === 0 && !due.some((p) => p.igEnabled === false)) { summary.push({ userId: user.id, skipped: 'instagram-not-connected' }); continue; }
     let published = 0; let failed = 0;
     for (const post of due) {
+      if (post.igEnabled === false) {
+        const result = await attemptPublish(user.id, post, {}, publicBase(req));
+        if (result.ok) published++;
+        else if (!result.retry) failed++;
+        continue;
+      }
       // Per-post connection (multi-account): publish with the target
       // account's token; a disconnected target fails the post with a
       // notification instead of borrowing another account.
@@ -3386,6 +3466,18 @@ const SEED_TEMPLATES = [
   { id: 'tpl-2', name: 'Behind the scenes', text: 'A little behind the scenes from today. What do you want to see next?' },
   { id: 'tpl-3', name: 'Question post', text: 'Quick question for you all — drop your answer in the comments!' },
 ];
+// KiluaAI caption pack (Phase D9): built-in starter templates for
+// Gulf businesses, appended for EVERY user alongside their own (or
+// the seeds). Flagged pack:'kiluaai' with pack-* ids — built-ins are
+// never stored per-user and cannot be deleted. English copy plus one
+// Arabic line each; honest and generic — no invented offers or claims.
+const KILUAAI_PACK = [
+  { id: 'pack-salon', pack: 'kiluaai', name: 'Salon — fresh look', text: 'Fresh cut, fresh confidence. Book your chair today — walk-ins welcome!\nتصفيف شعر جديد يمنحك ثقة جديدة. احجز موعدك اليوم!' },
+  { id: 'pack-realestate', pack: 'kiluaai', name: 'Real estate — new listing', text: 'New listing just in — bright, spacious and ready to view. DM us to book a viewing this week.\nعقار جديد متاح الآن — احجز موعدك للمعاينة هذا الأسبوع.' },
+  { id: 'pack-restaurant', pack: 'kiluaai', name: 'Restaurant — today\u2019s special', text: 'Today\u2019s special is on the pass and smelling incredible. Come hungry, leave happy!\nطبق اليوم جاهز الآن — تفضلوا بزيارتنا!' },
+  { id: 'pack-garage', pack: 'kiluaai', name: 'Garage — service day', text: 'Engine light on? Strange noise? Bring your car in for a check-up — honest advice, fair prices.\nهل سيارتك تحتاج إلى صيانة؟ تفضل بزيارتنا لفحص شامل.' },
+  { id: 'pack-cleaning', pack: 'kiluaai', name: 'Cleaning — sparkle day', text: 'Deep clean day! Homes, offices and move-ins — we leave every corner sparkling. Message us for a free quote.\nتنظيف عميق للمنازل والمكاتب — راسلنا للحصول على عرض سعر مجاني.' },
+];
 // ---------- notifications (publish successes/failures) ----------
 app.get('/api/notifications', ah(async (req, res) => {
   const [notifications, unread] = await Promise.all([
@@ -3401,7 +3493,8 @@ app.post('/api/notifications/read', ah(async (req, res) => {
 
 app.get('/api/templates', ah(async (req, res) => {
   const t = await getTemplates(req);
-  res.json({ ok: true, templates: t.length ? t : SEED_TEMPLATES });
+  const base = t.length ? t : SEED_TEMPLATES;
+  res.json({ ok: true, templates: [...base, ...KILUAAI_PACK] });
 }));
 app.post('/api/templates', ah(async (req, res) => {
   const b = req.body || {};
@@ -3414,6 +3507,7 @@ app.post('/api/templates', ah(async (req, res) => {
   res.json({ ok: true, template: t });
 }));
 app.delete('/api/templates/:id', ah(async (req, res) => {
+  if (String(req.params.id || '').startsWith('pack-')) return res.status(400).json({ ok: false, error: 'KiluaAI pack templates are built in and cannot be deleted.' });
   const removed = await db.deleteTemplate(req.userId, String(req.params.id || ''));
   if (!removed) return res.status(404).json({ ok: false, error: 'That template does not exist.' });
   res.json({ ok: true });
@@ -3442,6 +3536,7 @@ app.post('/api/drafts', ah(async (req, res) => {
     mediaUrl: (b.mediaUrl || '').slice(0, 2000), mediaType: b.mediaType || 'video', posterUrl: (b.posterUrl || '').slice(0, 2000),
     platform: b.platform || 'Instagram', format: b.format || 'REELS',
     igAccountId: b.igAccountId || '', igAccountUsername: b.igAccountUsername || '',
+    igEnabled: b.igEnabled === false ? false : true,
     youtube: normalizeYouTubeSetting(b.youtube),
     firstComment: (b.firstComment || '').slice(0, 2200),
     repeat: b.repeat === 'weekly' ? 'weekly' : '',
@@ -3478,6 +3573,160 @@ app.delete('/api/hashtag-groups/:id', ah(async (req, res) => {
   const removed = await db.deleteHashtagGroup(req.userId, String(req.params.id || ''));
   if (!removed) return res.status(404).json({ ok: false, error: 'That hashtag group does not exist.' });
   res.json({ ok: true });
+}));
+
+// ---------- Phase D: referral, link-in-bio, preview link ----------
+// Referral (D11): the signed-in user's invite code + link + how many
+// friends joined through it. Codes are minted at signup; accounts
+// from before referrals get one lazily here. No rewards are promised
+// anywhere — invites are tracked, rewards arrive with Pro.
+app.get('/api/referral', ah(async (req, res) => {
+  let user = await db.getUserById(req.userId);
+  if (!user) return res.status(404).json({ ok: false, error: 'Account not found.' });
+  if (!user.referralCode) {
+    let code = '';
+    do { code = 'K' + crypto.randomBytes(4).toString('hex').toUpperCase().slice(0, 6); }
+    while (await db.getUserByReferralCode(code));
+    await db.updateUser(user.id, { referralCode: code });
+    user = { ...user, referralCode: code };
+  }
+  const count = await db.countReferrals(user.referralCode);
+  res.json({ ok: true, code: user.referralCode, link: `${publicBase(req)}/?ref=${user.referralCode}`, count });
+}));
+// Link-in-bio (D6): the owner's own config (session-authenticated).
+app.get('/api/bio', ah(async (req, res) => {
+  const bio = await db.getBio(req.userId).catch(() => null);
+  res.json({ ok: true, bio: bio ? { slug: bio.slug || '', enabled: !!bio.enabled, links: Array.isArray(bio.links) ? bio.links : [] } : { slug: '', enabled: false, links: [] } });
+}));
+app.post('/api/bio', ah(async (req, res) => {
+  const b = req.body || {};
+  const slug = typeof b.slug === 'string' ? b.slug.trim().toLowerCase() : '';
+  if (slug && !/^[a-z0-9-]{3,30}$/.test(slug)) return res.status(400).json({ ok: false, error: 'Your page name must be 3–30 characters: lowercase letters, numbers and dashes only.' });
+  if (b.enabled !== undefined && typeof b.enabled !== 'boolean') return res.status(400).json({ ok: false, error: 'That bio setting is not valid.' });
+  if (b.enabled && !slug) return res.status(400).json({ ok: false, error: 'Pick a page name (slug) before switching the page on.' });
+  if (!Array.isArray(b.links) || b.links.length > 10) return res.status(400).json({ ok: false, error: 'Add at most 10 links.' });
+  const links = [];
+  for (const l of b.links) {
+    if (!l || typeof l.title !== 'string' || typeof l.url !== 'string') return res.status(400).json({ ok: false, error: 'Each link needs a title and a URL.' });
+    const title = l.title.trim().slice(0, 60);
+    const url = l.url.trim().slice(0, 500);
+    if (!title || !/^https?:\/\//i.test(url)) return res.status(400).json({ ok: false, error: 'Each link needs a title and a full https:// URL.' });
+    links.push({ title, url });
+  }
+  if (slug) {
+    const taken = await db.getBioBySlug(slug).catch(() => null);
+    if (taken && taken.userId !== req.userId) return res.status(409).json({ ok: false, error: 'That page name is taken — pick another one.' });
+  }
+  const doc = { userId: req.userId, slug, enabled: !!b.enabled, links, updatedAt: new Date().toISOString() };
+  await db.saveBio(doc);
+  res.json({ ok: true, bio: { slug: doc.slug, enabled: doc.enabled, links: doc.links }, url: slug ? `${publicBase(req)}/bio/${slug}` : '' });
+}));
+// Preview/approval link (D8): a signed, revocable, read-only link
+// listing upcoming scheduled posts. The token binds the user id to
+// the user's current previewTokenId (stored in settings); rotating
+// the id kills every previously shared link.
+function previewTokenFor(userId, tokenId) {
+  const payload = Buffer.from(`preview.${userId}`, 'utf8').toString('base64url');
+  const sig = crypto.createHmac('sha256', SESSION_SECRET).update(`preview.${userId}.${tokenId}`).digest('hex');
+  return `${payload}.${sig}`;
+}
+async function userIdFromPreviewToken(token) {
+  try {
+    if (!token || typeof token !== 'string') return '';
+    const dot = token.lastIndexOf('.');
+    if (dot < 0) return '';
+    const payload = Buffer.from(token.slice(0, dot), 'base64url').toString('utf8');
+    const parts = payload.split('.');
+    if (parts.length !== 2 || parts[0] !== 'preview' || !parts[1]) return '';
+    const userId = parts[1];
+    const settings = await db.getSettings(userId).catch(() => null);
+    if (!settings || !settings.previewTokenId) return '';
+    const expected = crypto.createHmac('sha256', SESSION_SECRET).update(`preview.${userId}.${settings.previewTokenId}`).digest('hex');
+    const a = Buffer.from(token.slice(dot + 1), 'utf8'); const b2 = Buffer.from(expected, 'utf8');
+    if (a.length !== b2.length || !crypto.timingSafeEqual(a, b2)) return '';
+    return userId;
+  } catch { return ''; }
+}
+app.get('/api/preview-link', ah(async (req, res) => {
+  const settings = await db.getSettings(req.userId).catch(() => ({}));
+  const url = settings.previewTokenId ? `${publicBase(req)}/preview/${previewTokenFor(req.userId, settings.previewTokenId)}` : '';
+  res.json({ ok: true, url });
+}));
+app.post('/api/preview-link', ah(async (req, res) => {
+  const settings = await db.getSettings(req.userId);
+  if (!settings.previewTokenId) {
+    settings.previewTokenId = crypto.randomBytes(12).toString('hex');
+    await db.saveSettings(req.userId, settings);
+  }
+  res.json({ ok: true, url: `${publicBase(req)}/preview/${previewTokenFor(req.userId, settings.previewTokenId)}` });
+}));
+app.post('/api/preview-link/regenerate', ah(async (req, res) => {
+  const settings = await db.getSettings(req.userId);
+  settings.previewTokenId = crypto.randomBytes(12).toString('hex');
+  await db.saveSettings(req.userId, settings);
+  res.json({ ok: true, url: `${publicBase(req)}/preview/${previewTokenFor(req.userId, settings.previewTokenId)}` });
+}));
+// Public pages (no login): link-in-bio + preview. Everything rendered
+// is escaped; only public data (published posts / scheduled times)
+// is ever shown.
+function escHtml(s) { return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+function publicPageShell(title, inner) {
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${escHtml(title)} — KiluaAI</title></head>
+<body style="margin:0;font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;background:#0e1325;color:#f5f1e6;min-height:100vh;padding:32px 20px;box-sizing:border-box">
+<main style="max-width:520px;margin:0 auto">${inner}
+<p style="text-align:center;font-size:12px;opacity:.55;margin-top:36px">Powered by <b>KiluaAI</b></p>
+</main></body></html>`;
+}
+app.get('/bio/:slug', ah(async (req, res) => {
+  const slug = String(req.params.slug || '').toLowerCase();
+  const bio = await db.getBioBySlug(slug).catch(() => null);
+  if (!bio || !bio.enabled) {
+    return res.status(404).type('html').send(publicPageShell('Page not found', '<h1 style="text-align:center;font-size:22px;margin:24px 0 8px">This page is not available</h1><p style="text-align:center;opacity:.75">The link may be wrong, or the creator has switched this page off.</p>'));
+  }
+  const user = await db.getUserById(bio.userId).catch(() => null);
+  const displayName = (user && user.name) || 'KiluaAI creator';
+  const initial = displayName.trim().charAt(0).toUpperCase() || 'K';
+  const posts = (await db.listPosts(bio.userId, { all: true }).catch(() => []))
+    .filter((p) => p.status === 'published' && p.liveUrl)
+    .sort((a, b2) => new Date(b2.scheduleTime || b2.createdAt || 0) - new Date(a.scheduleTime || a.createdAt || 0))
+    .slice(0, 6);
+  const linksHtml = (Array.isArray(bio.links) ? bio.links : []).map((l) => `<a href="${escHtml(l.url)}" style="display:block;background:#1a2140;color:#f5f1e6;text-decoration:none;font-weight:600;padding:13px 18px;border-radius:12px;margin:10px 0;text-align:center;border:1px solid #2b3560">${escHtml(l.title)}</a>`).join('');
+  const postsHtml = posts.length ? `<h2 style="font-size:16px;margin:28px 0 10px;color:#e8c268">Latest posts</h2><div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">${posts.map((p) => {
+    const thumb = p.posterUrl || (p.mediaType === 'image' ? p.mediaUrl : '');
+    const img = thumb && /^(https?:\/\/|\/)/i.test(thumb) ? `<img src="${escHtml(thumb)}" alt="" style="width:100%;height:100%;object-fit:cover;display:block">` : '<span style="font-size:11px;opacity:.7;padding:8px;text-align:center">View post</span>';
+    return `<a href="${escHtml(p.liveUrl)}" style="display:flex;align-items:center;justify-content:center;aspect-ratio:4/5;background:#1a2140;border-radius:10px;overflow:hidden;text-decoration:none;color:#f5f1e6">${img}</a>`;
+  }).join('')}</div>` : '';
+  return res.type('html').send(publicPageShell(displayName, `
+<div style="text-align:center">
+<div style="width:76px;height:76px;border-radius:50%;background:#e8c268;color:#0e1325;font-size:32px;font-weight:800;display:flex;align-items:center;justify-content:center;margin:6px auto 12px">${escHtml(initial)}</div>
+<h1 style="font-size:24px;margin:0 0 6px">${escHtml(displayName)}</h1>
+<p style="opacity:.7;margin:0 0 18px;font-size:14px">Creator on KiluaAI</p>
+</div>
+${linksHtml}
+${postsHtml}`));
+}));
+app.get('/preview/:token', ah(async (req, res) => {
+  const userId = await userIdFromPreviewToken(String(req.params.token || ''));
+  if (!userId) {
+    return res.status(404).type('html').send(publicPageShell('Link not valid', '<h1 style="text-align:center;font-size:22px;margin:24px 0 8px">This preview link is not valid</h1><p style="text-align:center;opacity:.75">It may have been replaced by a newer link — ask the creator for the current one.</p>'));
+  }
+  const now = Date.now();
+  const posts = (await db.listPosts(userId, { all: true }).catch(() => []))
+    .filter((p) => p.status === 'scheduled' && p.scheduleTime && new Date(p.scheduleTime).getTime() >= now - 3600000)
+    .sort((a, b2) => new Date(a.scheduleTime) - new Date(b2.scheduleTime))
+    .slice(0, 20);
+  const rows = posts.length ? posts.map((p) => {
+    const thumb = p.posterUrl || (p.mediaType === 'image' ? p.mediaUrl : '');
+    const img = thumb && /^(https?:\/\/|\/)/i.test(thumb) ? `<img src="${escHtml(thumb)}" alt="" style="width:64px;height:80px;object-fit:cover;border-radius:8px;flex:none">` : '<span style="width:64px;height:80px;background:#1a2140;border-radius:8px;flex:none"></span>';
+    const when = new Date(p.scheduleTime).toLocaleString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
+    return `<div style="display:flex;gap:12px;align-items:flex-start;background:#141b36;border:1px solid #2b3560;border-radius:12px;padding:12px;margin:10px 0">${img}<div><div style="font-weight:700;color:#e8c268;font-size:13px">${escHtml(when)} · ${escHtml(p.format || 'REELS')}</div><p style="margin:6px 0 0;font-size:14px;line-height:1.45">${escHtml(p.caption || '(no caption)')}</p>${p.hashtags ? `<p style="margin:4px 0 0;font-size:13px;opacity:.7">${escHtml(p.hashtags)}</p>` : ''}</div></div>`;
+  }).join('') : '<p style="text-align:center;opacity:.75">Nothing is scheduled right now.</p>';
+  return res.type('html').send(publicPageShell('Upcoming posts — preview', `
+<h1 style="font-size:22px;margin:8px 0 4px">Upcoming posts</h1>
+<p style="opacity:.7;margin:0 0 14px;font-size:14px">A read-only preview shared for approval. Times are UTC.</p>
+${rows}`));
 }));
 
 // Unknown /api routes — and method mismatches on known ones — answer

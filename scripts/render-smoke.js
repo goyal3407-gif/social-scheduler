@@ -224,7 +224,7 @@ async function runScenario(scenario, bundleDir) {
       'connections page to render (Instagram + YouTube + Coming soon cards)'
     )
     // Studio (Create): with a YouTube channel connected (stub), Step 3
-    // must offer the "Also post to YouTube" toggle.
+    // must show the platform picker — Instagram + YouTube ticks.
     const createBtn = await waitFor(() => {
       const els = [...window.document.querySelectorAll('button, a')]
       return els.find((el) => el.textContent.trim() === 'Create Post')
@@ -233,7 +233,7 @@ async function runScenario(scenario, bundleDir) {
     await waitFor(() => root.textContent.includes('Step 1'), 'studio to render')
     const step3 = [...window.document.querySelectorAll('button')].find((el) => el.textContent.includes('Schedule & publish'))
     if (step3) step3.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }))
-    await waitFor(() => root.textContent.includes('Also post to YouTube'), 'studio YouTube toggle to render')
+    await waitFor(() => root.textContent.includes('Publish to') && root.textContent.includes('Smoke Channel'), 'studio platform picker to render')
     console.log('render-smoke scenario B: PASS (dashboard + queue + calendar + media + connections + studio render, scheduled-first order holds)')
   } else if (scenario === 'C') {
     await waitFor(() => root.innerHTML.length > 0, 'app shell to render')

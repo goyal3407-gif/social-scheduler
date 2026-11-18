@@ -18,7 +18,8 @@ function useCountdown(targetIso) {
   return { label: formatCountdown(targetIso), parts: { d, h, m } }
 }
 
-export default function Dashboard({ posts, media, user, stats, loading, error, onRetry, onCreate, onGoQueue, onNavigate, onEdit, onDelete, onPublish, publishingId, settings, onDuplicate, onPostAgain, onReschedule, onRescheduleNextBest, onDismissChecklist, overdue, onPublishDue, notifications, onReconnect }) {
+export default function Dashboard({ posts, media, user, stats, loading, error, onRetry, onCreate, onGoQueue, onNavigate, onEdit, onDelete, onPublish, publishingId, settings, onDuplicate, onPostAgain, onReschedule, onRescheduleNextBest, onDismissChecklist, overdue, onPublishDue, notifications, onReconnect, tr }) {
+  const t = tr || ((k) => k)
   // Publishing streak (real data only): consecutive days with at least one
   // published post, ending today or yesterday.
   const streak = useMemo(() => {
@@ -43,10 +44,28 @@ export default function Dashboard({ posts, media, user, stats, loading, error, o
   const checklistDismissed = settings?.checklistDismissed === true
   const greeting = useMemo(() => {
     const h = new Date().getHours()
-    const word = h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening'
+    const word = h < 12 ? t('goodMorning') : h < 17 ? t('goodAfternoon') : t('goodEvening')
     const first = user?.name ? String(user.name).trim().split(/\s+/)[0] : ''
     return first ? `${word}, ${first}` : word
-  }, [user])
+  }, [user, t])
+  // D1: posts per day for the last 14 days (published + scheduled by
+  // their scheduleTime) — a tiny theme-aware bar chart, no libraries.
+  const chart14 = useMemo(() => {
+    const days = []
+    const now = new Date()
+    for (let i = 13; i >= 0; i--) {
+      const d = new Date(now); d.setDate(d.getDate() - i)
+      days.push({ key: d.toDateString(), label: d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }), count: 0, today: i === 0 })
+    }
+    const byKey = new Map(days.map((d) => [d.key, d]))
+    for (const p of posts || []) {
+      if (!p.scheduleTime || (p.status !== 'published' && p.status !== 'scheduled')) continue
+      const slot = byKey.get(new Date(p.scheduleTime).toDateString())
+      if (slot) slot.count++
+    }
+    const max = Math.max(1, ...days.map((d) => d.count))
+    return { days, max }
+  }, [posts])
   const postedThisWeek = useMemo(() => {
     const now = Date.now()
     return (posts || []).filter((p) => p.status === 'published' && p.scheduleTime && new Date(p.scheduleTime).getTime() <= now && new Date(p.scheduleTime).getTime() >= now - 7 * 86400000).length
@@ -114,12 +133,26 @@ export default function Dashboard({ posts, media, user, stats, loading, error, o
       <div className="stats stats-3" aria-label="Overview">
         {loading ? Array.from({ length: 3 }).map((_, i) => <div key={i} className="skel" style={{ height: 92 }} />) : (
           <>
-            <div className="stat"><b>{s.scheduled ?? upcoming.length}</b><span>Scheduled</span><small>{weekCount} in the next 7 days</small></div>
-            <div className="stat"><b>{s.published ?? (posts || []).filter((p) => p.status === 'published').length}</b><span>Published</span><small>{postedThisWeek} this week{streak > 0 ? ` · ${streak}-day streak` : ''}</small></div>
-            <div className="stat"><b>{s.total ?? (posts || []).length}</b><span>Total posts</span><small>{s.mediaCount ?? (media || []).length} media in library</small></div>
+            <div className="stat"><b>{s.scheduled ?? upcoming.length}</b><span>{t('scheduled')}</span><small>{weekCount} in the next 7 days</small></div>
+            <div className="stat"><b>{s.published ?? (posts || []).filter((p) => p.status === 'published').length}</b><span>{t('published')}</span><small>{postedThisWeek} this week{streak > 0 ? ` · ${streak}-day streak` : ''}</small></div>
+            <div className="stat"><b>{s.total ?? (posts || []).length}</b><span>{t('totalPosts')}</span><small>{s.mediaCount ?? (media || []).length} media in library</small></div>
           </>
         )}
       </div>
+
+      {!loading && (
+        <div className="card" style={{ padding: '14px 16px', marginTop: 12 }} aria-label="Posts per day, last 14 days">
+          <p className="small" style={{ margin: '0 0 10px' }}><b>Last 14 days</b> <span className="muted">— posts per day (published + scheduled)</span></p>
+          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, height: 64 }} role="img" aria-label={chart14.days.map((d) => `${d.label}: ${d.count}`).join(', ')}>
+            {chart14.days.map((d) => (
+              <div key={d.key} title={`${d.label}: ${d.count} post${d.count === 1 ? '' : 's'}`} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, minWidth: 0 }}>
+                <div style={{ width: '100%', maxWidth: 26, height: `${Math.max(4, Math.round((d.count / chart14.max) * 44))}px`, borderRadius: '4px 4px 0 0', background: d.today ? 'var(--gold, #e8c268)' : 'var(--accent, #7c8cff)', opacity: d.count ? 1 : 0.25 }} />
+                <span className="muted" style={{ fontSize: 9 }}>{d.label.split(' ')[0]}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {!loading && (
         <div className="ig-row" role="status">
@@ -241,7 +274,7 @@ export default function Dashboard({ posts, media, user, stats, loading, error, o
       <div className="two-col section">
         <section className="card">
           <div className="card-head">
-            <div><h2>Up next</h2><p>Your next scheduled posts, in order.</p></div>
+            <div><h2>{t('upNext')}</h2><p>Your next scheduled posts, in order.</p></div>
             <button type="button" className="btn ghost small" onClick={onGoQueue}>Queue →</button>
           </div>
           {loading ? <Skeleton variant="posts" rows={3} /> : upcoming.length === 0 ? (

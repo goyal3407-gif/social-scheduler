@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense } from 'react'
 import { api, nextBestTime } from './api.js'
+import { trFor } from './i18n.js'
 import Auth, { ResetPassword } from './components/Auth.jsx'
 import Dashboard from './components/Dashboard.jsx'
 import { IconHome, IconCal, IconQueue, IconPlus, IconMedia, IconBulk, IconTools, IconSpark, IconSettings, IconSun, IconMoon, IconMenu, IconX, IconBell, IconLink } from './components/icons.jsx'
@@ -110,6 +111,12 @@ export default function App() {
   const [templateSeed, setTemplateSeed] = useState(null)
   const [hashtagGroups, setHashtagGroups] = useState([])
   const [avatarMenuOpen, setAvatarMenuOpen] = useState(false)
+  // Phase D: UI language (D10), offline state (D2), global search (D3).
+  const [lang, setLangState] = useState(() => { try { return localStorage.getItem('ss-lang') || 'en' } catch { return 'en' } })
+  const tr = trFor(lang)
+  const [offline, setOffline] = useState(() => typeof navigator !== 'undefined' && navigator.onLine === false)
+  const [globalQ, setGlobalQ] = useState('')
+  const [searchNonce, setSearchNonce] = useState(0)
   const toastTimer = useRef(null)
   const toastSeq = useRef(0)
   const pendingDeleteTimers = useRef(new Map())
@@ -128,6 +135,37 @@ export default function App() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [confirmDelete])
+
+  // D10: adopt the language stored on the user's settings when they load.
+  useEffect(() => {
+    if (settings && (settings.uiLanguage === 'en' || settings.uiLanguage === 'hi')) {
+      setLangState((cur) => (cur === settings.uiLanguage ? cur : settings.uiLanguage))
+    }
+  }, [settings?.uiLanguage])
+  const setLang = useCallback((l) => {
+    setLangState(l)
+    try { localStorage.setItem('ss-lang', l) } catch { /* private mode */ }
+    api.saveSettings({ uiLanguage: l }).catch(() => { /* local choice still applies */ })
+  }, [])
+
+  // D2: offline banner state.
+  useEffect(() => {
+    const onOff = () => setOffline(true)
+    const onOn = () => { setOffline(false); showToastRef.current && showToastRef.current('Back online') }
+    window.addEventListener('offline', onOff)
+    window.addEventListener('online', onOn)
+    return () => { window.removeEventListener('offline', onOff); window.removeEventListener('online', onOn) }
+  }, [])
+  const showToastRef = useRef(null)
+
+  // D3: run a global search — land on Queue with the query applied
+  // (Media picks the same seed up when visited).
+  const runGlobalSearch = useCallback((q) => {
+    setGlobalQ(q)
+    setSearchNonce((n) => n + 1)
+    setTab('queue')
+    setMenuOpen(false)
+  }, [])
 
   // Side drawer: Escape closes it, and the page behind it must not
   // scroll while it is open (the drawer's own list scrolls instead).
@@ -325,6 +363,7 @@ export default function App() {
     toastTimer.current = setTimeout(() => setToast((cur) => (cur && cur.id === id ? null : cur)), duration)
   }, [])
   const showToast = useCallback((msg, kind) => pushToast({ message: msg, kind }), [pushToast])
+  useEffect(() => { showToastRef.current = showToast }, [showToast])
   useEffect(() => () => { if (toastTimer.current) clearTimeout(toastTimer.current) }, [])
 
   const refreshStats = useCallback(async () => {
@@ -654,6 +693,7 @@ export default function App() {
       platform: post.platform || 'Instagram', format: post.format || 'REELS',
       igAccountId: post.igAccountId || '', igAccountUsername: post.igAccountUsername || '',
       youtube: post.youtube || null,
+      igEnabled: post.igEnabled,
       firstComment: post.firstComment || '', repeat: post.repeat || '',
       scheduleTime: ''
     })
@@ -732,6 +772,11 @@ export default function App() {
           <button type="button" className="update-close" aria-label="Dismiss" onClick={() => setUpdateAvailable(false)}>✕</button>
         </div>
       )}
+      {offline && (
+        <div className="update-bar" role="status" style={{ background: '#3a3f52' }}>
+          <span>You&rsquo;re offline — changes will sync when you&rsquo;re back</span>
+        </div>
+      )}
       <header className="topbar">
         <div className="topbar-in">
           <button type="button" className="icon-btn burger-btn" onClick={() => setMenuOpen(true)} aria-label="Open menu" aria-expanded={menuOpen}>
@@ -745,22 +790,25 @@ export default function App() {
             </div>
           </div>
           <nav className="topnav" aria-label="Main navigation">
-            <button type="button" className={tab === 'home' ? 'active' : ''} onClick={() => setTab('home')}>Home</button>
-            <button type="button" onClick={() => goStudio(null)}>Create</button>
-            <button type="button" className={tab === 'queue' ? 'active' : ''} onClick={() => setTab('queue')}>Queue</button>
-            <button type="button" className={tab === 'calendar' ? 'active' : ''} onClick={() => setTab('calendar')}>Calendar</button>
-            <button type="button" className={tab === 'media' ? 'active' : ''} onClick={() => setTab('media')}>Media</button>
-            <button type="button" className={tab === 'ai' ? 'active' : ''} onClick={() => setTab('ai')}>AI Studio</button>
-            <button type="button" className={tab === 'bulk' ? 'active' : ''} onClick={() => setTab('bulk')}>Bulk</button>
-            <button type="button" className={tab === 'tools' ? 'active' : ''} onClick={() => setTab('tools')}>Tools</button>
-            <button type="button" className={tab === 'connections' ? 'active' : ''} onClick={() => setTab('connections')}>Connections</button>
+            <button type="button" className={tab === 'home' ? 'active' : ''} onClick={() => setTab('home')}>{tr('home')}</button>
+            <button type="button" onClick={() => goStudio(null)}>{tr('create')}</button>
+            <button type="button" className={tab === 'queue' ? 'active' : ''} onClick={() => setTab('queue')}>{tr('queue')}</button>
+            <button type="button" className={tab === 'calendar' ? 'active' : ''} onClick={() => setTab('calendar')}>{tr('calendar')}</button>
+            <button type="button" className={tab === 'media' ? 'active' : ''} onClick={() => setTab('media')}>{tr('media')}</button>
+            <button type="button" className={tab === 'ai' ? 'active' : ''} onClick={() => setTab('ai')}>{tr('aiStudio')}</button>
+            <button type="button" className={tab === 'bulk' ? 'active' : ''} onClick={() => setTab('bulk')}>{tr('bulk')}</button>
+            <button type="button" className={tab === 'tools' ? 'active' : ''} onClick={() => setTab('tools')}>{tr('tools')}</button>
+            <button type="button" className={tab === 'connections' ? 'active' : ''} onClick={() => setTab('connections')}>{tr('connections')}</button>
           </nav>
+          <form className="topnav-search" role="search" onSubmit={(e) => { e.preventDefault(); runGlobalSearch(globalQ) }} style={{ marginRight: 8 }}>
+            <input type="search" value={globalQ} onChange={(e) => setGlobalQ(e.target.value)} placeholder={tr('searchPlaceholder')} aria-label="Search posts and media" style={{ width: 170 }} />
+          </form>
           <div className="top-actions">
             <span className="pill" title={!settings ? 'Checking Instagram connection' : settings.instagramConnected ? 'Instagram connected' : 'Instagram not connected'}>
               <span className={`dot ${!settings ? 'amber' : settings.instagramConnected ? '' : 'off'}`} />
               {!settings ? 'IG checking…' : settings.instagramConnected ? `IG ${settings.instagramHandle || 'connected'}` : 'IG not connected'}
             </span>
-            <button type="button" className="btn topnav-create" onClick={() => goStudio(null)}>Create Post</button>
+            <button type="button" className="btn topnav-create" onClick={() => goStudio(null)}>{tr('createPost')}</button>
             <button type="button" className="icon-btn bell-btn" onClick={openNotifications} aria-label={unread ? `Notifications — ${unread} unread` : 'Notifications'}>
               <IconBell size={18} />
               {unread > 0 && <span className="bell-badge">{unread > 9 ? '9+' : unread}</span>}
@@ -775,10 +823,11 @@ export default function App() {
                   <div className="avatar-menu" role="menu">
                     <p className="avatar-email">{user.name || user.email}</p>
                     {user.name && <p className="muted small" style={{ padding: '0 10px 6px' }}>{user.email}</p>}
-                    <button type="button" role="menuitem" onClick={() => { setAvatarMenuOpen(false); setTab('settings') }}>Settings</button>
-                    <a role="menuitem" href="/contact.html" onClick={() => setAvatarMenuOpen(false)}>Contact</a>
+                    <button type="button" role="menuitem" onClick={() => { setAvatarMenuOpen(false); setTab('settings') }}>{tr('settings')}</button>
+                    <a role="menuitem" href="/contact.html" onClick={() => setAvatarMenuOpen(false)}>{tr('contact')}</a>
                     <button type="button" role="menuitem" onClick={() => { setAvatarMenuOpen(false); setTheme(theme === 'dark' ? 'light' : 'dark') }}>{theme === 'dark' ? 'Light theme' : 'Dark theme'}</button>
-                    <button type="button" role="menuitem" onClick={() => { setAvatarMenuOpen(false); handleLogout() }}>Log out</button>
+                    <button type="button" role="menuitem" onClick={() => { setAvatarMenuOpen(false); setLang(lang === 'hi' ? 'en' : 'hi') }}>{lang === 'hi' ? 'Language: English' : 'Language: Hinglish'}</button>
+                    <button type="button" role="menuitem" onClick={() => { setAvatarMenuOpen(false); handleLogout() }}>{tr('logout')}</button>
                   </div>
                 </>
               )}
@@ -802,15 +851,18 @@ export default function App() {
                 <IconX size={18} />
               </button>
             </div>
+            <form role="search" onSubmit={(e) => { e.preventDefault(); runGlobalSearch(globalQ) }} style={{ padding: '10px 14px 0' }}>
+              <input type="search" value={globalQ} onChange={(e) => setGlobalQ(e.target.value)} placeholder={tr('searchPlaceholder')} aria-label="Search posts and media" />
+            </form>
             <nav className="drawer-nav" aria-label="Menu navigation">
               {NAV.map(({ id, label, Icon }) => (
                 <button key={id} type="button" className={`drawer-item ${tab === id ? 'active' : ''}`} aria-current={tab === id ? 'page' : undefined}
                   onClick={() => { setTab(id); setMenuOpen(false); window.scrollTo({ top: 0 }) }}>
-                  <Icon size={20} /><span>{label}</span>
+                  <Icon size={20} /><span>{tr(id === 'ai' ? 'aiStudio' : id) || label}</span>
                 </button>
               ))}
               <button type="button" className="drawer-item drawer-create" onClick={() => { goStudio(null); setMenuOpen(false) }}>
-                <IconPlus size={20} /><span>Create a post</span>
+                <IconPlus size={20} /><span>{tr('createPost')}</span>
               </button>
             </nav>
             <div className="drawer-foot">
@@ -841,7 +893,7 @@ export default function App() {
         )}
 
         {tab === 'home' && (
-          <Dashboard posts={visiblePosts} media={media} user={user} stats={statsFallback} loading={loading} error={error} onRetry={loadAll}
+          <Dashboard tr={tr} posts={visiblePosts} media={media} user={user} stats={statsFallback} loading={loading} error={error} onRetry={loadAll}
             onCreate={() => goStudio(null)} onGoQueue={() => setTab('queue')} onNavigate={setTab}
             onEdit={goStudio} onDelete={requestDeletePost}
             onPublish={handlePublish} publishingId={publishingId} settings={settings}
@@ -852,19 +904,19 @@ export default function App() {
         )}
         <Suspense fallback={<TabFallback />}>
         {tab === 'calendar' && (
-          <div className="section"><CalendarView posts={visiblePosts} loading={loading} onEdit={goStudio} onDelete={requestDeletePost} onPublish={handlePublish} publishingId={publishingId} onGoQueue={() => setTab('queue')} onCreate={() => goStudio(null)} onReconnect={handleReconnect} /></div>
+          <div className="section"><CalendarView posts={visiblePosts} loading={loading} onEdit={goStudio} onDelete={requestDeletePost} onPublish={handlePublish} publishingId={publishingId} onGoQueue={() => setTab('queue')} onCreate={() => goStudio(null)} onReconnect={handleReconnect} onReschedule={handleReschedule} /></div>
         )}
         {tab === 'queue' && (
-          <div className="section"><Queue posts={visiblePosts} loading={loading} onEdit={goStudio} onDelete={requestDeletePost} onPublish={handlePublish} publishingId={publishingId} onCreate={() => goStudio(null)} onDuplicate={handleDuplicate} onPostAgain={handlePostAgain} onReschedule={handleReschedule} onRescheduleNextBest={handleRescheduleNextBest} overdue={overdue} onPublishDue={handlePublishDue} onDeleteMany={(items) => setConfirmDelete({ type: 'posts', items })} onReconnect={handleReconnect} /></div>
+          <div className="section"><Queue tr={tr} searchSeed={globalQ} searchNonce={searchNonce} posts={visiblePosts} loading={loading} onEdit={goStudio} onDelete={requestDeletePost} onPublish={handlePublish} publishingId={publishingId} onCreate={() => goStudio(null)} onDuplicate={handleDuplicate} onPostAgain={handlePostAgain} onReschedule={handleReschedule} onRescheduleNextBest={handleRescheduleNextBest} overdue={overdue} onPublishDue={handlePublishDue} onDeleteMany={(items) => setConfirmDelete({ type: 'posts', items })} onReconnect={handleReconnect} /></div>
         )}
         {tab === 'studio' && (
           <div className="section">
-            <Studio key={`${studioKey}-${editing?.id || 'new'}`} editing={editing} seed={templateSeed ? { caption: templateSeed.text || templateSeed.caption || '', hashtags: templateSeed.hashtags || '', cta: templateSeed.cta || '', mediaUrl: templateSeed.mediaUrl || '', mediaType: templateSeed.mediaType || 'video', posterUrl: templateSeed.posterUrl || '', scheduleTime: templateSeed.scheduleTime || '', platform: templateSeed.platform || 'Instagram', format: templateSeed.format || 'REELS', igAccountId: templateSeed.igAccountId || '', igAccountUsername: templateSeed.igAccountUsername || '', youtube: templateSeed.youtube || null, firstComment: templateSeed.firstComment || '', repeat: templateSeed.repeat || '' } : null} media={media} templates={templates} hashtagGroups={hashtagGroups} onCreateTemplate={handleCreateTemplate} onDeleteTemplate={handleDeleteTemplate} onCreateHashtagGroup={handleCreateHashtagGroup} onDeleteHashtagGroup={handleDeleteHashtagGroup} drafts={drafts} onSaveLibraryDraft={handleCreateDraft} onDeleteLibraryDraft={handleDeleteDraft} onSave={handleSavePost} onCancel={() => setTab('queue')} saving={saving} posts={visiblePosts} igAccounts={settings?.instagramAccounts || []} defaultIgUserId={settings?.defaultIgUserId || ''} settings={settings} />
+            <Studio key={`${studioKey}-${editing?.id || 'new'}`} editing={editing} seed={templateSeed ? { caption: templateSeed.text || templateSeed.caption || '', hashtags: templateSeed.hashtags || '', cta: templateSeed.cta || '', mediaUrl: templateSeed.mediaUrl || '', mediaType: templateSeed.mediaType || 'video', posterUrl: templateSeed.posterUrl || '', scheduleTime: templateSeed.scheduleTime || '', platform: templateSeed.platform || 'Instagram', format: templateSeed.format || 'REELS', igAccountId: templateSeed.igAccountId || '', igAccountUsername: templateSeed.igAccountUsername || '', youtube: templateSeed.youtube || null, igEnabled: templateSeed.igEnabled, firstComment: templateSeed.firstComment || '', repeat: templateSeed.repeat || '' } : null} media={media} templates={templates} hashtagGroups={hashtagGroups} onCreateTemplate={handleCreateTemplate} onDeleteTemplate={handleDeleteTemplate} onCreateHashtagGroup={handleCreateHashtagGroup} onDeleteHashtagGroup={handleDeleteHashtagGroup} drafts={drafts} onSaveLibraryDraft={handleCreateDraft} onDeleteLibraryDraft={handleDeleteDraft} onSave={handleSavePost} onCancel={() => setTab('queue')} saving={saving} posts={visiblePosts} igAccounts={settings?.instagramAccounts || []} defaultIgUserId={settings?.defaultIgUserId || ''} settings={settings} onNavigate={setTab} />
           </div>
         )}
         {tab === 'bulk' && <div className="section"><Bulk onImport={handleBulkImport} posts={visiblePosts} onUploadFile={handleUpload} igAccounts={settings?.instagramAccounts || []} defaultIgUserId={settings?.defaultIgUserId || ''} hashtagGroups={hashtagGroups} /></div>}
         {tab === 'media' && (
-          <div className="section"><MediaLibrary media={media} loading={loading} error={error} onRetry={loadAll}
+          <div className="section"><MediaLibrary searchSeed={globalQ} searchNonce={searchNonce} media={media} loading={loading} error={error} onRetry={loadAll}
             onAddLink={handleAddLink} onUpload={handleUpload}
             onToggleFav={async (m) => { const u = await api.updateMedia(m.id, { favorite: !m.favorite }); setMedia((prev) => prev.map((x) => (x.id === m.id ? { ...x, ...(u || {}), favorite: !m.favorite } : x))) }}
             onDelete={(m) => setConfirmDelete({ type: 'media', item: m })}
@@ -877,7 +929,7 @@ export default function App() {
           <div className="section"><AIStudio posts={visiblePosts} settings={settings} onSendToStudio={useInStudio} onSaveDraft={handleSaveDraft} onSaveDrafts={handleSaveDrafts} /></div>
         )}
         {tab === 'settings' && (
-          <div className="section"><Settings settings={settings} dbStatus={dbStatus} saving={saving} onSave={async (s) => { setSaving(true); try { const u = await api.saveSettings(s); setSettings(u || s) } finally { setSaving(false) } }} onInstagramChanged={refreshSettings} user={user} onAccountDeleted={handleLogout} onNavigate={setTab} /></div>
+          <div className="section"><Settings settings={settings} dbStatus={dbStatus} saving={saving} onSave={async (s) => { setSaving(true); try { const u = await api.saveSettings(s); setSettings(u || s) } finally { setSaving(false) } }} onInstagramChanged={refreshSettings} user={user} onAccountDeleted={handleLogout} onNavigate={setTab} lang={lang} onLangChange={setLang} /></div>
         )}
         {tab === 'connections' && (
           <div className="section"><Connections settings={settings} onInstagramChanged={refreshSettings} /></div>

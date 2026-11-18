@@ -6,7 +6,8 @@ import { PostRow, Skeleton, Empty, StatusBadge, PlatformBadge, Thumb } from './s
 const STATUSES = ['scheduled', 'draft', 'published', 'failed']
 const LABELS = { scheduled: 'Scheduled', draft: 'Drafts', published: 'Published', failed: 'Failed' }
 
-export default function Queue({ posts, loading, onEdit, onDelete, onPublish, publishingId, onCreate, onDuplicate, onPostAgain, onReschedule, onRescheduleNextBest, overdue, onPublishDue, onDeleteMany, onReconnect }) {
+export default function Queue({ posts, loading, onEdit, onDelete, onPublish, publishingId, onCreate, onDuplicate, onPostAgain, onReschedule, onRescheduleNextBest, overdue, onPublishDue, onDeleteMany, onReconnect, tr, searchSeed, searchNonce }) {
+  const t = tr || ((k) => k)
   const [view, setView] = useState('list')
   const [filter, setFilter] = useState('all')
   const [platform, setPlatform] = useState('all')
@@ -15,9 +16,34 @@ export default function Queue({ posts, loading, onEdit, onDelete, onPublish, pub
   const [selected, setSelected] = useState(new Set())
 
   useEffect(() => {
-    const t = setTimeout(() => setQDebounced(q), 150)
-    return () => clearTimeout(t)
+    const t2 = setTimeout(() => setQDebounced(q), 150)
+    return () => clearTimeout(t2)
   }, [q])
+
+  // D3: a global search from the top nav / drawer lands here as a seed.
+  useEffect(() => {
+    if (searchNonce) setQ(searchSeed || '')
+  }, [searchNonce]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // D5: touch swipe on a queue row — left deletes (optimistic + Undo),
+  // right moves to the next best time. Only clearly-horizontal swipes
+  // count, so vertical scrolling is never hijacked.
+  const swipeRef = useState(() => ({ x: 0, y: 0, id: null }))[0]
+  const swipeStart = (e, p) => {
+    const touch = e.touches && e.touches[0]
+    if (!touch) return
+    swipeRef.x = touch.clientX; swipeRef.y = touch.clientY; swipeRef.id = p.id
+  }
+  const swipeEnd = (e, p) => {
+    const touch = e.changedTouches && e.changedTouches[0]
+    if (!touch || swipeRef.id !== p.id) return
+    const dx = touch.clientX - swipeRef.x
+    const dy = touch.clientY - swipeRef.y
+    swipeRef.id = null
+    if (Math.abs(dx) < 70 || Math.abs(dx) < Math.abs(dy) * 1.5) return
+    if (dx < 0) onDelete && onDelete(p)
+    else if (p.status === 'scheduled') onRescheduleNextBest && onRescheduleNextBest(p)
+  }
 
   const filtered = useMemo(() => {
     let list = [...(posts || [])]
@@ -48,7 +74,7 @@ export default function Queue({ posts, loading, onEdit, onDelete, onPublish, pub
 
   return (
     <div>
-      <h2 className="section-title">Queue</h2>
+      <h2 className="section-title">{t('queue')}</h2>
       <p className="section-sub">Everything you&apos;ve planned — drag-free, but organised. Switch to Kanban to see it by status.</p>
 
       {overdue && overdue.length > 0 && (
@@ -98,7 +124,8 @@ export default function Queue({ posts, loading, onEdit, onDelete, onPublish, pub
             Select all {filtered.length} shown
           </label>
           {filtered.map((p) => (
-            <div key={p.id} style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+            <div key={p.id} style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}
+              onTouchStart={(e) => swipeStart(e, p)} onTouchEnd={(e) => swipeEnd(e, p)}>
               <input type="checkbox" aria-label={`Select post: ${(p.caption || 'No caption').slice(0, 40)}`} checked={selected.has(p.id)} onChange={() => toggleSelect(p.id)} style={{ width: 18, height: 18, marginTop: 16, flex: 'none' }} />
               <div style={{ flex: 1, minWidth: 0 }}><PostRow post={p} onEdit={onEdit} onDelete={onDelete} onPublish={onPublish} publishing={publishingId === p.id} onDuplicate={onDuplicate} onPostAgain={onPostAgain} onReschedule={onReschedule} onRescheduleNextBest={onRescheduleNextBest} onReconnect={onReconnect} /></div>
             </div>

@@ -44,6 +44,7 @@ const JSON_FILES = {
   passwordResets: 'password-resets.json',
   youtube: 'youtube.json',
   drafts: 'drafts.json',
+  bios: 'bios.json',
   instagram: 'instagram.json', importJobs: 'import-jobs.json',
   notifications: 'notifications.json', uploadSessions: 'upload-sessions.json',
 };
@@ -127,6 +128,15 @@ const passwordResetSchema = new mongoose.Schema({
   userId: { type: String, index: true },
   tokenHash: { type: String, index: true },
   expiresAt: String, createdAt: String,
+}, { strict: false });
+// Link-in-bio page (Phase D6): one per user, addressed publicly by a
+// unique slug. links is a small [{title, url}] list (Mixed).
+const bioSchema = new mongoose.Schema({
+  userId: { type: String, unique: true, index: true },
+  slug: { type: String, unique: true, index: true },
+  enabled: { type: Boolean, default: false },
+  links: { type: mongoose.Schema.Types.Mixed, default: [] },
+  updatedAt: String,
 }, { strict: false });
 // YouTube connection (Phase B cross-post): one per user. The OAuth
 // refresh token is stored encrypted (refreshTokenEnc); access tokens
@@ -213,6 +223,7 @@ const Draft = mongoose.models.SsDraft || mongoose.model('SsDraft', draftSchema, 
 const HashtagGroup = mongoose.models.SsHashtagGroup || mongoose.model('SsHashtagGroup', hashtagGroupSchema, 'hashtaggroups');
 const PasswordReset = mongoose.models.SsPasswordReset || mongoose.model('SsPasswordReset', passwordResetSchema, 'passwordresets');
 const YouTube = mongoose.models.SsYouTube || mongoose.model('SsYouTube', youtubeSchema, 'youtube');
+const Bio = mongoose.models.SsBio || mongoose.model('SsBio', bioSchema, 'bios');
 const SettingsDoc = mongoose.models.SsSettings || mongoose.model('SsSettings', settingsSchema, 'settings');
 const InstagramDoc = mongoose.models.SsInstagram || mongoose.model('SsInstagram', instagramSchema, 'instagram');
 const ImportJob = mongoose.models.SsImportJob || mongoose.model('SsImportJob', importJobSchema, 'importjobs');
@@ -415,6 +426,7 @@ async function deleteUserData(userId) {
       HashtagGroup.deleteMany({ userId }),
       PasswordReset.deleteMany({ userId }),
       YouTube.deleteOne({ userId }),
+      Bio.deleteOne({ userId }),
       SettingsDoc.deleteOne({ userId }),
       InstagramDoc.deleteOne({ userId }),
       ImportJob.deleteMany({ userId }),
@@ -435,6 +447,8 @@ async function deleteUserData(userId) {
   jsonSave('passwordResets', jsonList('passwordResets').filter((x) => x.userId !== userId));
   const yt = load(JSON_FILES.youtube, {});
   if (yt && typeof yt === 'object') { delete yt[userId]; save(JSON_FILES.youtube, yt); }
+  const bioMap = load(JSON_FILES.bios, {});
+  if (bioMap && typeof bioMap === 'object') { delete bioMap[userId]; save(JSON_FILES.bios, bioMap); }
   const settings = load(JSON_FILES.settings, {});
   if (settings && typeof settings === 'object') { delete settings[userId]; save(JSON_FILES.settings, settings); }
   const ig = load(JSON_FILES.instagram, {});
@@ -773,6 +787,55 @@ async function deleteYouTube(userId) {
   if (isMongo()) { await YouTube.deleteOne({ userId }); return; }
   const all = load(JSON_FILES.youtube, {});
   if (all && typeof all === 'object' && all[userId]) { delete all[userId]; save(JSON_FILES.youtube, all); }
+}
+
+// ---------- link-in-bio (one doc per user; JSON = keyed map) ----------
+async function getBio(userId) {
+  await ensureMongo();
+  if (!userId) return null;
+  if (isMongo()) {
+    const d = await Bio.findOne({ userId }).lean();
+    return d ? strip(d) : null;
+  }
+  const all = load(JSON_FILES.bios, {});
+  return (all && typeof all === 'object' && all[userId]) || null;
+}
+async function getBioBySlug(slug) {
+  await ensureMongo();
+  if (!slug) return null;
+  if (isMongo()) {
+    const d = await Bio.findOne({ slug }).lean();
+    return d ? strip(d) : null;
+  }
+  const all = load(JSON_FILES.bios, {});
+  if (!all || typeof all !== 'object') return null;
+  return Object.values(all).find((b) => b && b.slug === slug) || null;
+}
+async function saveBio(doc) {
+  await ensureMongo();
+  if (isMongo()) {
+    await Bio.replaceOne({ userId: doc.userId }, { ...doc }, { upsert: true });
+    return doc;
+  }
+  const all = load(JSON_FILES.bios, {});
+  const map = (all && typeof all === 'object') ? all : {};
+  map[doc.userId] = doc;
+  save(JSON_FILES.bios, map);
+  return doc;
+}
+
+// ---------- referrals (Phase D11): codes live on the user doc ----------
+async function getUserByReferralCode(code) {
+  await ensureMongo();
+  if (!code) return null;
+  if (isMongo()) { const u = await User.findOne({ referralCode: code }).lean(); return u ? strip(u) : null; }
+  return jsonList('users').find((u) => u.referralCode === code) || null;
+}
+async function countReferrals(code) {
+  await ensureMongo();
+  if (!code) return 0;
+  if (isMongo()) return User.countDocuments({ referredBy: code });
+  return jsonList('users').filter((u) => u.referredBy === code).length;
 }
 
 // ---------- settings (one doc per user) ----------
@@ -1261,6 +1324,8 @@ module.exports = {
   listHashtagGroups, saveHashtagGroup, deleteHashtagGroup,
   createPasswordReset, getPasswordResetByHash, listPasswordResetsForUser, deletePasswordResetsForUser,
   getYouTube, saveYouTube, deleteYouTube,
+  getBio, getBioBySlug, saveBio,
+  getUserByReferralCode, countReferrals,
   getSettings, saveSettings,
   getInstagram, listInstagram, saveInstagram, clearInstagram,
   getInstagramAccounts, getInstagramAccount, saveInstagramAccount, removeInstagramAccount, setDefaultInstagramAccount,

@@ -1,7 +1,135 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api.js'
 
-export default function Settings({ settings, dbStatus, onSave, saving, onInstagramChanged, user, onAccountDeleted, onNavigate }) {
+async function copyText(text, setCopied) {
+  try { await navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 2000) }
+  catch { setCopied(false) }
+}
+
+// D6: link-in-bio page — slug + on/off + up to 10 links.
+function BioCard() {
+  const [slug, setSlug] = useState('')
+  const [enabled, setEnabled] = useState(false)
+  const [links, setLinks] = useState([])
+  const [busy, setBusy] = useState(false)
+  const [note, setNote] = useState('')
+  const [error, setError] = useState('')
+  const [copied, setCopied] = useState(false)
+  useEffect(() => {
+    let alive = true
+    api.getBio().then((r) => {
+      if (!alive || !r || !r.bio) return
+      setSlug(r.bio.slug || ''); setEnabled(!!r.bio.enabled); setLinks(Array.isArray(r.bio.links) ? r.bio.links : [])
+    }).catch(() => {})
+    return () => { alive = false }
+  }, [])
+  const save = async () => {
+    setBusy(true); setError(''); setNote('')
+    try {
+      const r = await api.saveBio({ slug: slug.trim().toLowerCase(), enabled, links })
+      setNote(enabled ? 'Your page is live.' : 'Saved — your page is switched off.')
+      if (r && r.bio) { setSlug(r.bio.slug || ''); setLinks(r.bio.links || []) }
+    } catch (e) { setError(e.message || 'Could not save your page.') }
+    finally { setBusy(false) }
+  }
+  const pageUrl = slug ? `${window.location.origin}/bio/${slug}` : ''
+  return (
+    <section className="card" style={{ marginTop: 16 }}>
+      <h2>Link-in-bio page</h2>
+      <p className="muted small" style={{ marginTop: 8 }}>One public page with your links and your latest published posts — put it in your Instagram bio. No login needed to view it.</p>
+      <label htmlFor="bioSlug" style={{ marginTop: 12 }}>Page name</label>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <span className="muted small">/bio/</span>
+        <input id="bioSlug" placeholder="yourname" value={slug} onChange={(e) => setSlug(e.target.value)} style={{ flex: 1 }} />
+      </div>
+      <label style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 12, cursor: 'pointer' }}>
+        <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} style={{ width: 18, height: 18 }} />
+        <span><b>Page is on</b> <span className="muted small">(off = the link shows “not available”)</span></span>
+      </label>
+      <h3 style={{ marginTop: 16 }}>Your links</h3>
+      {links.map((l, i) => (
+        <div key={i} style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+          <input placeholder="Title (e.g. My shop)" value={l.title} onChange={(e) => setLinks(links.map((x, j) => (j === i ? { ...x, title: e.target.value } : x)))} style={{ flex: 1 }} />
+          <input placeholder="https://…" value={l.url} onChange={(e) => setLinks(links.map((x, j) => (j === i ? { ...x, url: e.target.value } : x)))} style={{ flex: 1.4 }} />
+          <button type="button" className="btn ghost small" onClick={() => setLinks(links.filter((_, j) => j !== i))}>Remove</button>
+        </div>
+      ))}
+      {links.length < 10 && <button type="button" className="btn ghost small" style={{ marginTop: 10 }} onClick={() => setLinks([...links, { title: '', url: '' }])}>+ Add a link</button>}
+      {error && <div className="alert error" style={{ marginTop: 10 }}>{error}</div>}
+      {note && <div className="alert success" style={{ marginTop: 10 }}>{note}</div>}
+      <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
+        <button type="button" className="btn primary" disabled={busy} onClick={save}>{busy ? 'Saving…' : 'Save page'}</button>
+        {enabled && pageUrl && <button type="button" className="btn ghost" onClick={() => copyText(pageUrl, setCopied)}>{copied ? 'Copied!' : 'Copy page link'}</button>}
+        {enabled && pageUrl && <a className="btn ghost" href={pageUrl} target="_blank" rel="noreferrer">Open page</a>}
+      </div>
+    </section>
+  )
+}
+
+// D8: preview / approval link — signed, read-only, revocable.
+function PreviewCard() {
+  const [url, setUrl] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [copied, setCopied] = useState(false)
+  useEffect(() => {
+    let alive = true
+    api.getPreviewLink().then((r) => { if (alive && r) setUrl(r.url || '') }).catch(() => {})
+    return () => { alive = false }
+  }, [])
+  const run = async (fn) => {
+    setBusy(true); setError('')
+    try { const r = await fn(); setUrl((r && r.url) || '') }
+    catch (e) { setError(e.message || 'Could not update the preview link.') }
+    finally { setBusy(false) }
+  }
+  return (
+    <section className="card" style={{ marginTop: 16 }}>
+      <h2>Client preview link</h2>
+      <p className="muted small" style={{ marginTop: 8 }}>Share a read-only page of your upcoming scheduled posts so a client can approve them — no login needed. Making a new link kills the old one.</p>
+      {url ? (
+        <>
+          <p className="small" style={{ marginTop: 10, wordBreak: 'break-all' }}>{url}</p>
+          <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
+            <button type="button" className="btn ghost" onClick={() => copyText(url, setCopied)}>{copied ? 'Copied!' : 'Copy link'}</button>
+            <button type="button" className="btn ghost" disabled={busy} onClick={() => run(() => api.regeneratePreviewLink())}>Make a new link (old one stops working)</button>
+          </div>
+        </>
+      ) : (
+        <button type="button" className="btn primary" style={{ marginTop: 12 }} disabled={busy} onClick={() => run(() => api.createPreviewLink())}>{busy ? 'Creating…' : 'Create preview link'}</button>
+      )}
+      {error && <div className="alert error" style={{ marginTop: 10 }}>{error}</div>}
+    </section>
+  )
+}
+
+// D11: referrals — code + link + joined count. No reward promises.
+function InviteCard() {
+  const [data, setData] = useState(null)
+  const [copied, setCopied] = useState(false)
+  useEffect(() => {
+    let alive = true
+    api.getReferral().then((r) => { if (alive && r && r.ok) setData(r) }).catch(() => {})
+    return () => { alive = false }
+  }, [])
+  return (
+    <section className="card" style={{ marginTop: 16 }}>
+      <h2>Invite friends</h2>
+      <p className="muted small" style={{ marginTop: 8 }}>Share your link — friends who sign up through it are counted here. Invites are tracked now; rewards arrive with Pro.</p>
+      {data ? (
+        <>
+          <p style={{ marginTop: 12 }}><b>Your invites: {data.count} friend{data.count === 1 ? '' : 's'} joined</b></p>
+          <p className="small" style={{ marginTop: 8, wordBreak: 'break-all' }}>{data.link}</p>
+          <button type="button" className="btn ghost" style={{ marginTop: 10 }} onClick={() => copyText(data.link, setCopied)}>{copied ? 'Copied!' : 'Copy invite link'}</button>
+        </>
+      ) : (
+        <p className="muted small" style={{ marginTop: 10 }}>Loading your invite link…</p>
+      )}
+    </section>
+  )
+}
+
+export default function Settings({ settings, dbStatus, onSave, saving, onInstagramChanged, user, onAccountDeleted, onNavigate, lang, onLangChange }) {
   const [handle, setHandle] = useState('')
   const [msg, setMsg] = useState('')
   const [err, setErr] = useState('')
@@ -145,7 +273,17 @@ export default function Settings({ settings, dbStatus, onSave, saving, onInstagr
               <span><b>Keep a server copy after publishing</b><br /><span className="muted small">Off by default. Turn it on if you want to reuse the same file for more posts later — it uses more storage.</span></span>
             </label>
             <p className="muted small" style={{ marginTop: 12 }}>Publish results — successes and failures with their reasons — appear under Notifications on the Home screen, and failures are also flagged on the post itself.</p>
+            <h3 style={{ marginTop: 18 }}>App language</h3>
+            <p className="muted small" style={{ marginTop: 6 }}>Switch the app&rsquo;s menus and headings between English and Hinglish. Your captions and posts are never changed.</p>
+            <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+              <button type="button" className={`btn small ${lang !== 'hi' ? 'primary' : 'ghost'}`} onClick={() => onLangChange && onLangChange('en')}>English</button>
+              <button type="button" className={`btn small ${lang === 'hi' ? 'primary' : 'ghost'}`} onClick={() => onLangChange && onLangChange('hi')}>Hinglish</button>
+            </div>
           </div>
+
+      <BioCard />
+      <PreviewCard />
+      <InviteCard />
 
       <section className="card" style={{ marginTop: 16 }}>
         <h2>Support</h2>

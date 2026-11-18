@@ -22,8 +22,11 @@ export default function Auth({ onAuth }) {
     if (mode === 'signup' && password.length < 8) { setError('Password must be at least 8 characters.'); return }
     setBusy(true)
     try {
+      // D11: a ?ref=CODE in the signup URL is passed through so the
+      // inviter gets credited (unknown codes are ignored server-side).
+      const refCode = (() => { try { return new URLSearchParams(window.location.search).get('ref') || undefined } catch { return undefined } })()
       const res = mode === 'signup'
-        ? await api.signup(email.trim(), password, name.trim() || undefined)
+        ? await api.signup(email.trim(), password, name.trim() || undefined, refCode)
         : await api.login(email.trim(), password)
       onAuth(res.user)
     } catch (err) {

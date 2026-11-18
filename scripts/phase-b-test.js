@@ -282,6 +282,33 @@ async function main() {
     r = await A.call('POST', '/api/posts', { mediaUrl: 'https://example.com/reel.mp4', mediaType: 'video', caption: 'x', format: 'REELS', scheduleTime: past(), youtube: { enabled: true, title: 'x'.repeat(101) } });
     check('B2: YouTube title over 100 chars rejected', r.status === 400, String(r.status));
 
+    // ---- platform picker revision: YouTube-only posts ----
+    const graphPublishes = () => (stub().match(/media_publish/g) || []).length;
+    const beforeYtOnly = graphPublishes();
+    r = await A.call('POST', '/api/posts', { mediaUrl: 'https://example.com/ytonly.mp4', mediaType: 'video', caption: 'YouTube only post', format: 'REELS', scheduleTime: past(), igEnabled: false, youtube: { enabled: true, title: 'YT Only Title' } });
+    check('B2: YouTube-only post saves with igEnabled false', r.status === 200 && r.data.post.igEnabled === false && r.data.post.youtube.enabled === true, JSON.stringify(r.data.post || {}).slice(0, 200));
+    const ytOnlyId = r.data.post.id;
+    r = await A.call('POST', '/api/publish-due', {});
+    check('B2: publish-due publishes the YouTube-only post', (r.data.published || []).some((p) => p.id === ytOnlyId), JSON.stringify(r.data).slice(0, 200));
+    r = await A.call('GET', '/api/posts');
+    const ytp = (r.data.posts || []).find((p) => p.id === ytOnlyId);
+    check('B2: YouTube-only post is published with a YouTube live URL', ytp.status === 'published' && ytp.youtubeVideoId === 'ytvid-123' && /youtube\.com\/watch/.test(ytp.liveUrl || ''), JSON.stringify({ s: ytp.status, yv: ytp.youtubeVideoId, lu: ytp.liveUrl }));
+    check('B2: no Instagram publish happened for the YouTube-only post', graphPublishes() === beforeYtOnly, `before ${beforeYtOnly} after ${graphPublishes()}`);
+
+    // both platforms unticked is rejected at create
+    r = await A.call('POST', '/api/posts', { mediaUrl: 'https://example.com/none.mp4', mediaType: 'video', caption: 'No platform', format: 'REELS', scheduleTime: past(), igEnabled: false, youtube: { enabled: false, title: '' } });
+    check('B2: post with no platform ticked is rejected', r.status === 400 && /Tick at least one platform/.test(r.data.error || ''), JSON.stringify(r.data).slice(0, 160));
+
+    // a user with NO Instagram at all can still publish YouTube-only
+    const C = makeClient(base);
+    await C.call('POST', '/api/auth/signup', { email: 'c@example.com', password: 'password123' });
+    const cc = await connectYouTube(C, base, 'yt-code-good');
+    check('B2: user C connects YouTube (no Instagram)', /YouTube connected/.test(cc.text), cc.text.slice(0, 120));
+    r = await C.call('POST', '/api/posts', { mediaUrl: 'https://example.com/conly.mp4', mediaType: 'video', caption: 'C yt only', format: 'REELS', scheduleTime: past(), igEnabled: false, youtube: { enabled: true, title: '' } });
+    const cPostId = r.data.post.id;
+    r = await C.call('POST', '/api/publish-due', {});
+    check('B2: publish-due works for a YouTube-only user with no Instagram', (r.data.published || []).some((p) => p.id === cPostId), JSON.stringify(r.data).slice(0, 200));
+
     // disconnect
     r = await A.call('POST', '/api/youtube/disconnect', {});
     check('B2: disconnect succeeds', r.status === 200);

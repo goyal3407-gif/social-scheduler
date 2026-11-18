@@ -4,10 +4,31 @@ import { PostRow, Skeleton, Empty, MediaVisual } from './shared.jsx'
 
 const DOW = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
-export default function CalendarView({ posts, loading, onEdit, onDelete, onPublish, publishingId, onGoQueue, onCreate, onReconnect }) {
+export default function CalendarView({ posts, loading, onEdit, onDelete, onPublish, publishingId, onGoQueue, onCreate, onReconnect, onReschedule }) {
   const today = new Date()
   const [cursor, setCursor] = useState(new Date(today.getFullYear(), today.getMonth(), 1))
   const [selected, setSelected] = useState(today.toDateString())
+  const [dragOverDay, setDragOverDay] = useState('')
+
+  // D4: drag a scheduled post's chip onto another day to move it
+  // (same time of day). Click-to-select-day is untouched; only
+  // scheduled posts are draggable.
+  const onChipDragStart = (e, p) => {
+    try { e.dataTransfer.setData('text/kiluaai-post', p.id); e.dataTransfer.effectAllowed = 'move' } catch { /* drag unavailable */ }
+  }
+  const onDayDrop = (e, dayDate) => {
+    e.preventDefault()
+    setDragOverDay('')
+    let id = ''
+    try { id = e.dataTransfer.getData('text/kiluaai-post') } catch { /* no payload */ }
+    if (!id || !onReschedule) return
+    const post = (posts || []).find((p) => p.id === id)
+    if (!post || post.status !== 'scheduled' || !post.scheduleTime) return
+    const t = new Date(post.scheduleTime)
+    const next = new Date(dayDate.getFullYear(), dayDate.getMonth(), dayDate.getDate(), t.getHours(), t.getMinutes(), 0, 0)
+    if (next.toDateString() === t.toDateString()) return
+    onReschedule(post, { scheduleTime: next.toISOString() })
+  }
 
   const cells = useMemo(() => {
     const y = cursor.getFullYear()
@@ -38,7 +59,7 @@ export default function CalendarView({ posts, loading, onEdit, onDelete, onPubli
   return (
     <div>
       <h2 className="section-title">Calendar</h2>
-      <p className="section-sub">Month view of everything scheduled. Tap a day to see its posts.</p>
+      <p className="section-sub">Month view of everything scheduled. Tap a day to see its posts — on desktop you can also drag a scheduled post to another day.</p>
       <div className="card">
         <div className="card-head">
           <div><h2>{monthLabel}</h2><p>{(posts || []).length} posts in total</p></div>
@@ -61,7 +82,11 @@ export default function CalendarView({ posts, loading, onEdit, onDelete, onPubli
                 const nPub = dayPosts.filter((p) => p.status === 'published').length
                 const nFail = dayPosts.filter((p) => p.status === 'failed').length
                 return (
-                  <button key={k + d.getDate()} type="button" className={`cal-day ${isOther ? 'other' : ''} ${isToday ? 'today' : ''} ${dayPosts.length ? 'has' : ''}`} onClick={() => setSelected(k)} aria-label={`${d.toDateString()}, ${dayPosts.length} posts`}>
+                  <button key={k + d.getDate()} type="button" className={`cal-day ${isOther ? 'other' : ''} ${isToday ? 'today' : ''} ${dayPosts.length ? 'has' : ''}`} onClick={() => setSelected(k)} aria-label={`${d.toDateString()}, ${dayPosts.length} posts`}
+                    onDragOver={(e) => { e.preventDefault(); if (dragOverDay !== k) setDragOverDay(k) }}
+                    onDragLeave={() => { if (dragOverDay === k) setDragOverDay('') }}
+                    onDrop={(e) => onDayDrop(e, d)}
+                    style={dragOverDay === k ? { outline: '2px solid var(--gold, #e8c268)', outlineOffset: -2 } : undefined}>
                     <b>{d.getDate()}</b>
                     {dayPosts.length > 0 && (
                       <span className="cal-thumbs" aria-hidden="true">
@@ -74,7 +99,11 @@ export default function CalendarView({ posts, loading, onEdit, onDelete, onPubli
                       <span className="cal-count">{dayPosts.length} post{dayPosts.length === 1 ? '' : 's'}{nSched ? ` · ${nSched} to go` : ''}{nPub ? ` · ${nPub} live` : ''}{nFail ? ` · ${nFail} failed` : ''}</span>
                     )}
                     {dayPosts.slice(0, 2).map((p) => (
-                      <span key={p.id} className={`cal-chip ${p.status}`}>{new Date(p.scheduleTime).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })} · {(p.caption || 'Post').slice(0, 18)}</span>
+                      <span key={p.id} className={`cal-chip ${p.status}`}
+                        draggable={p.status === 'scheduled' && Boolean(onReschedule)}
+                        onDragStart={p.status === 'scheduled' ? (e) => onChipDragStart(e, p) : undefined}
+                        title={p.status === 'scheduled' ? 'Drag to another day to reschedule' : undefined}
+                        style={p.status === 'scheduled' && onReschedule ? { cursor: 'grab' } : undefined}>{new Date(p.scheduleTime).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })} · {(p.caption || 'Post').slice(0, 18)}</span>
                     ))}
                     {dayPosts.length > 2 && <span className="cal-chip">+{dayPosts.length - 2} more</span>}
                   </button>

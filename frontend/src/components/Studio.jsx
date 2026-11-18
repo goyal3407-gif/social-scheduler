@@ -4,22 +4,26 @@ import { IconWarn, IconCheck, IconHeart, IconComment, IconSend, IconBookmark } f
 
 const PLATFORMS = ['Instagram', 'YouTube', 'Facebook', 'TikTok']
 const FORMATS = ['REELS', 'FEED', 'STORY']
-const EMPTY = { mediaUrl: '', mediaType: 'video', posterUrl: '', caption: '', hashtags: '', cta: '', platform: 'Instagram', scheduleTime: '', status: 'scheduled', format: 'REELS', igAccountId: '', igAccountUsername: '', youtubeEnabled: false, youtubeTitle: '', firstComment: '', repeatWeekly: false }
+const EMPTY = { mediaUrl: '', mediaType: 'video', posterUrl: '', caption: '', hashtags: '', cta: '', platform: 'Instagram', scheduleTime: '', status: 'scheduled', format: 'REELS', igAccountId: '', igAccountUsername: '', igTick: true, youtubeEnabled: false, youtubeTitle: '', firstComment: '', repeatWeekly: false }
 // A post's stored YouTube setting is an object ({ enabled, title }) and
 // its repeat is a string ('weekly'); the form keeps flat fields and
-// submit() folds them back.
+// submit() folds them back. The platform picker is two ticks:
+// igTick (stored as igEnabled) + youtubeEnabled.
 const withYouTubeFields = (base) => {
   const y = (base && base.youtube) || {}
-  const f = { ...EMPTY, ...base, youtubeEnabled: !!y.enabled, youtubeTitle: y.title || '', repeatWeekly: (base && base.repeat) === 'weekly' }
+  const f = { ...EMPTY, ...base, igTick: !base || base.igEnabled !== false, youtubeEnabled: !!y.enabled, youtubeTitle: y.title || '', repeatWeekly: (base && base.repeat) === 'weekly' }
   delete f.youtube
   delete f.repeat
+  delete f.igEnabled
   return f
 }
 // Built-in starter templates (server seeds) have ids tpl-1, tpl-2, … —
-// they are not stored per-user, so they cannot be deleted.
-const isSeedTemplate = (t) => /^tpl-\d+$/.test(String(t?.id || ''))
+// they are not stored per-user, so they cannot be deleted. The KiluaAI
+// caption pack (Phase D9) has ids pack-* and is likewise built in.
+const isSeedTemplate = (t) => /^tpl-\d+$/.test(String(t?.id || '')) || /^pack-/.test(String(t?.id || ''))
+const isPackTemplate = (t) => /^pack-/.test(String(t?.id || ''))
 
-export default function Studio({ editing, seed, media, templates, hashtagGroups, onCreateTemplate, onDeleteTemplate, onCreateHashtagGroup, onDeleteHashtagGroup, drafts, onSaveLibraryDraft, onDeleteLibraryDraft, onSave, onCancel, saving, posts, igAccounts, defaultIgUserId, settings }) {
+export default function Studio({ editing, seed, media, templates, hashtagGroups, onCreateTemplate, onDeleteTemplate, onCreateHashtagGroup, onDeleteHashtagGroup, drafts, onSaveLibraryDraft, onDeleteLibraryDraft, onSave, onCancel, saving, posts, igAccounts, defaultIgUserId, settings, onNavigate }) {
   const [form, setForm] = useState(EMPTY)
   const [step, setStep] = useState(1)
   const [width, setWidth] = useState('')
@@ -157,6 +161,8 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
     setError('')
     const status = statusOverride || form.status || 'scheduled'
     if (!form.mediaUrl.trim()) { setError('Add a media URL or pick one from your library first (Step 1).'); setStep(1); return }
+    // Platform picker: at least one platform must be ticked.
+    if (!form.igTick && !(form.youtubeEnabled && ytStatus?.connected)) { setError('Tick at least one platform in Step 3 — Instagram, YouTube, or both.'); setStep(3); return }
     // Drafts need no time; scheduled posts do.
     if (status !== 'draft' && !form.scheduleTime) { setError('Pick a date and time to schedule (Step 3).'); setStep(3); return }
     const payload = {
@@ -167,12 +173,14 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
       cta: form.cta.trim(),
       scheduleTime: form.scheduleTime ? (form.scheduleTime.includes('T') && !form.scheduleTime.endsWith('Z') && form.scheduleTime.length <= 16 ? fromLocalInputValue(form.scheduleTime) : form.scheduleTime) : '',
       status,
-      // Fold the flat YouTube fields back into the stored object. The
-      // toggle only counts when a channel is actually connected.
+      // Fold the flat platform-picker fields back into stored shape.
+      // The YouTube tick only counts when a channel is connected.
+      igEnabled: Boolean(form.igTick),
       youtube: { enabled: Boolean(form.youtubeEnabled && ytStatus?.connected), title: (form.youtubeTitle || '').trim() },
       firstComment: (form.firstComment || '').trim(),
       repeat: form.repeatWeekly ? 'weekly' : '',
     }
+    delete payload.igTick
     delete payload.youtubeEnabled
     delete payload.youtubeTitle
     delete payload.repeatWeekly
@@ -240,6 +248,7 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
         mediaUrl: form.mediaUrl, mediaType: form.mediaType, posterUrl: form.posterUrl,
         platform: form.platform, format: form.format,
         igAccountId: form.igAccountId, igAccountUsername: form.igAccountUsername,
+        igEnabled: Boolean(form.igTick),
         youtube: { enabled: Boolean(form.youtubeEnabled), title: form.youtubeTitle || '' },
         firstComment: form.firstComment || '',
         repeat: form.repeatWeekly ? 'weekly' : '',
@@ -372,7 +381,7 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
                   <label htmlFor="tpl">Start from a template</label>
                   <select id="tpl" value="" onChange={(e) => { const t = templates.find((x) => String(x.id) === e.target.value); if (t) applyTemplate(t) }}>
                     <option value="">Choose a template…</option>
-                    {templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                    {templates.map((t) => <option key={t.id} value={t.id}>{t.name}{isPackTemplate(t) ? ' · KiluaAI pack' : ''}</option>)}
                   </select>
                   <div style={{ marginTop: 8 }}>
                     {templates.filter((t) => !isSeedTemplate(t)).map((t) => (
@@ -477,27 +486,42 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
                   <p className="muted small" style={{ marginTop: 6 }}>This post publishes to the chosen account only.</p>
                 </div>
               )}
-              {ytStatus?.connected && (
-                <div style={{ marginTop: 16, borderTop: '1px solid var(--line)', paddingTop: 14 }}>
-                  <label style={{ display: 'flex', gap: 8, alignItems: 'center', cursor: 'pointer' }}>
-                    <input type="checkbox" checked={Boolean(form.youtubeEnabled)} onChange={(e) => set({ youtubeEnabled: e.target.checked })} style={{ width: 'auto' }} />
-                    <span><b>Also post to YouTube</b> <span className="muted small">({ytStatus.channelTitle || 'your channel'})</span></span>
+              <div style={{ marginTop: 16, borderTop: '1px solid var(--line)', paddingTop: 14 }}>
+                <label>Publish to <span className="muted">(tick one or both — the video goes to every ticked platform at the same time)</span></label>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
+                  <label style={{ display: 'inline-flex', gap: 8, alignItems: 'center', cursor: 'pointer', border: '1px solid var(--line)', borderRadius: 999, padding: '8px 14px' }}>
+                    <input type="checkbox" checked={Boolean(form.igTick)} onChange={(e) => set({ igTick: e.target.checked })} style={{ width: 'auto' }} />
+                    <b>Instagram</b>
                   </label>
-                  {form.youtubeEnabled && (
-                    <div style={{ marginTop: 10 }}>
-                      <label htmlFor="youtubeTitle">YouTube title <span className="muted">(blank = first line of the caption)</span></label>
-                      <input id="youtubeTitle" maxLength={100} placeholder="Title viewers will see on YouTube" value={form.youtubeTitle} onChange={(e) => set({ youtubeTitle: e.target.value })} />
-                      <p className="muted small" style={{ marginTop: 6 }}>The caption + hashtags become the YouTube description. Videos only — an image post skips YouTube. Until Google approves the app, YouTube posts land as Private/scheduled — one tap to make public.</p>
-                    </div>
-                  )}
-                  {!form.youtubeEnabled && (
-                    <p className="muted small" style={{ marginTop: 6 }}>The same video also goes to your YouTube channel at the same time.</p>
+                  {ytStatus?.connected ? (
+                    <label style={{ display: 'inline-flex', gap: 8, alignItems: 'center', cursor: 'pointer', border: '1px solid var(--line)', borderRadius: 999, padding: '8px 14px' }}>
+                      <input type="checkbox" checked={Boolean(form.youtubeEnabled)} onChange={(e) => set({ youtubeEnabled: e.target.checked })} style={{ width: 'auto' }} />
+                      <b>YouTube</b> <span className="muted small">{ytStatus.channelTitle || 'your channel'}</span>
+                    </label>
+                  ) : (
+                    <span style={{ display: 'inline-flex', gap: 8, alignItems: 'center', border: '1px solid var(--line)', borderRadius: 999, padding: '8px 14px', opacity: 0.75 }}>
+                      <input type="checkbox" checked={false} disabled readOnly style={{ width: 'auto' }} />
+                      <b>YouTube</b>
+                      {ytStatus && !ytStatus.configured
+                        ? <span className="muted small">not set up on the server yet</span>
+                        : <button type="button" className="btn ghost small" onClick={() => { if (onNavigate) onNavigate('connections') }}>Connect YouTube</button>}
+                    </span>
                   )}
                 </div>
-              )}
-              {ytStatus && !ytStatus.connected && ytStatus.configured && (
-                <p className="muted small" style={{ marginTop: 14 }}>Want this on YouTube too? Connect your channel on the <b>Connections</b> page, then tick “Also post to YouTube” here.</p>
-              )}
+                {form.youtubeEnabled && ytStatus?.connected && (
+                  <div style={{ marginTop: 12 }}>
+                    <label htmlFor="youtubeTitle">YouTube title <span className="muted">(blank = first line of the caption)</span></label>
+                    <input id="youtubeTitle" maxLength={100} placeholder="Title viewers will see on YouTube" value={form.youtubeTitle} onChange={(e) => set({ youtubeTitle: e.target.value })} />
+                    <p className="muted small" style={{ marginTop: 6 }}>The caption + hashtags become the YouTube description automatically. Videos only — an image post skips YouTube. Until Google approves the app, YouTube posts land as Private/scheduled — one tap to make public.</p>
+                  </div>
+                )}
+                {!form.igTick && form.youtubeEnabled && ytStatus?.connected && (
+                  <p className="muted small" style={{ marginTop: 8 }}>YouTube only — this post will not go to Instagram.</p>
+                )}
+                {!form.igTick && !form.youtubeEnabled && (
+                  <p className="small" style={{ marginTop: 8, color: 'var(--red)' }}>Tick at least one platform — Instagram, YouTube, or both.</p>
+                )}
+              </div>
               <label htmlFor="scheduleTime" style={{ marginTop: 14 }}>Schedule time</label>
               <input id="scheduleTime" type="datetime-local" value={form.scheduleTime && form.scheduleTime.length > 16 ? toLocalInputValue(form.scheduleTime) : form.scheduleTime} onChange={(e) => set({ scheduleTime: e.target.value })} />
               {suggestion && (

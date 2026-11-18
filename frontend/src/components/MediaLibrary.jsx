@@ -208,8 +208,12 @@ function DeviceLibrary({ onUploaded, onUpload }) {
   )
 }
 
-export default function MediaLibrary({ media, loading, error, onRetry, onAddLink, onUpload, onToggleFav, onDelete, onUse }) {
+export default function MediaLibrary({ media, loading, error, onRetry, onAddLink, onUpload, onToggleFav, onDelete, onUse, searchSeed, searchNonce }) {
   const [q, setQ] = useState('')
+  // D3: global search seed from the top nav / drawer.
+  useEffect(() => {
+    if (searchNonce) setQ(searchSeed || '')
+  }, [searchNonce]) // eslint-disable-line react-hooks/exhaustive-deps
   const [folder, setFolder] = useState('all')
   const [onlyFav, setOnlyFav] = useState(false)
   const [url, setUrl] = useState('')
