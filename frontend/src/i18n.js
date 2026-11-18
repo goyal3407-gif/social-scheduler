@@ -9,6 +9,7 @@ export const STRINGS = {
     settings: 'Settings', contact: 'Contact', logout: 'Log out', createPost: 'Create Post',
     scheduled: 'Scheduled', published: 'Published', totalPosts: 'Total posts', upNext: 'Up next',
     searchPlaceholder: 'Search posts & media…',
+    homeSearchPlaceholder: 'Search posts, media…',
     goodMorning: 'Good morning', goodAfternoon: 'Good afternoon', goodEvening: 'Good evening',
   },
   hi: {
@@ -17,6 +18,7 @@ export const STRINGS = {
     settings: 'Settings', contact: 'Contact', logout: 'Log out', createPost: 'Post Banayein',
     scheduled: 'Tay posts', published: 'Publish hue', totalPosts: 'Kul posts', upNext: 'Aane wale posts',
     searchPlaceholder: 'Posts aur media search karein…',
+    homeSearchPlaceholder: 'Posts, media search karein…',
     goodMorning: 'Suprabhat', goodAfternoon: 'Namaskar', goodEvening: 'Shubh sandhya',
   },
 }

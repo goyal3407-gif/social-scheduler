@@ -893,7 +893,7 @@ export default function App() {
         )}
 
         {tab === 'home' && (
-          <Dashboard tr={tr} posts={visiblePosts} media={media} user={user} stats={statsFallback} loading={loading} error={error} onRetry={loadAll}
+          <Dashboard tr={tr} onSearch={runGlobalSearch} posts={visiblePosts} media={media} user={user} stats={statsFallback} loading={loading} error={error} onRetry={loadAll}
             onCreate={() => goStudio(null)} onGoQueue={() => setTab('queue')} onNavigate={setTab}
             onEdit={goStudio} onDelete={requestDeletePost}
             onPublish={handlePublish} publishingId={publishingId} settings={settings}

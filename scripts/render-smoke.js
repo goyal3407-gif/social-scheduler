@@ -183,6 +183,15 @@ async function runScenario(scenario, bundleDir) {
       () => root.textContent.includes('Scheduled'),
       'dashboard to render'
     )
+    // Home search pill (D3 refinement): the pill with the app logo and
+    // the "Search posts, media…" placeholder must render on Home.
+    const pillInput = window.document.querySelector('.home-search input')
+    if (!pillInput || pillInput.getAttribute('placeholder') !== 'Search posts, media…') {
+      throw new Error('home search pill missing or wrong placeholder')
+    }
+    if (!window.document.querySelector('.home-search img')) {
+      throw new Error('home search pill logo missing')
+    }
     // Navigate to Queue (lazy chunk) and check ordering.
     const navBtn = await waitFor(() => {
       const els = [...window.document.querySelectorAll('button, a')]

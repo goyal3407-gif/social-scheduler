@@ -18,8 +18,11 @@ function useCountdown(targetIso) {
   return { label: formatCountdown(targetIso), parts: { d, h, m } }
 }
 
-export default function Dashboard({ posts, media, user, stats, loading, error, onRetry, onCreate, onGoQueue, onNavigate, onEdit, onDelete, onPublish, publishingId, settings, onDuplicate, onPostAgain, onReschedule, onRescheduleNextBest, onDismissChecklist, overdue, onPublishDue, notifications, onReconnect, tr }) {
+export default function Dashboard({ posts, media, user, stats, loading, error, onRetry, onCreate, onGoQueue, onNavigate, onEdit, onDelete, onPublish, publishingId, settings, onDuplicate, onPostAgain, onReschedule, onRescheduleNextBest, onDismissChecklist, overdue, onPublishDue, notifications, onReconnect, tr, onSearch }) {
   const t = tr || ((k) => k)
+  // Home search pill (D3 refinement): routes into the same global
+  // search as the top nav — Queue filtered by caption, Media by name.
+  const [homeQ, setHomeQ] = useState('')
   // Publishing streak (real data only): consecutive days with at least one
   // published post, ending today or yesterday.
   const streak = useMemo(() => {
@@ -107,6 +110,13 @@ export default function Dashboard({ posts, media, user, stats, loading, error, o
     <div>
       <section className="home-head" aria-label="Next scheduled post">
         <h1>{greeting}</h1>
+        {onSearch && (
+          <form className="home-search" role="search" onSubmit={(e) => { e.preventDefault(); onSearch(homeQ) }}>
+            <img src="/icon-192.png" alt="" width="26" height="26" aria-hidden="true" />
+            <input type="search" value={homeQ} onChange={(e) => setHomeQ(e.target.value)} placeholder={t('homeSearchPlaceholder')} aria-label="Search posts and media" />
+            <button type="submit" className="btn small">Search</button>
+          </form>
+        )}
         {loading ? (
           <div style={{ marginTop: 14 }}><div className="skel" style={{ height: 20, width: '55%' }} /><div className="skel" style={{ height: 16, width: '40%', marginTop: 10 }} /></div>
         ) : next ? (

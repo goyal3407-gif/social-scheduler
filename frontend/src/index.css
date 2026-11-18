@@ -371,6 +371,13 @@ button,.tab{touch-action:manipulation}
 /* --- Home header (replaces the gradient hero) --- */
 .home-head{margin-top:26px;padding-bottom:6px}
 .home-head h1{font-size:clamp(24px,4vw,32px);font-weight:700;letter-spacing:-.02em}
+.home-search{display:flex;align-items:center;gap:10px;background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:7px 8px 7px 12px;box-shadow:var(--shadow);margin-top:16px;max-width:560px;position:relative;z-index:2}
+.home-search img{width:26px;height:26px;border-radius:9px;flex:none}
+.home-search input{flex:1;border:none;background:transparent;padding:6px 0;font-size:15px;min-width:0}
+.home-search input:focus{outline:none}
+.home-search:focus-within{border-color:var(--gold)}
+.home-search button{flex:none;border-radius:999px;padding:8px 16px}
+@media(max-width:640px){.home-search{margin-top:10px;padding:4px 5px 4px 9px;gap:7px;box-shadow:var(--shadow-sm)}.home-search img{width:20px;height:20px;border-radius:7px}.home-search input{font-size:13.5px;padding:3px 0}.home-search button{padding:5px 12px;font-size:13px}}
 .stats-3{grid-template-columns:repeat(3,1fr)}
 @media(max-width:820px){.stats-3{grid-template-columns:repeat(3,1fr)}}
 @media(max-width:520px){.stats-3{grid-template-columns:1fr 1fr}.stats-3 .stat:last-child{grid-column:1/-1}}
