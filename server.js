@@ -1441,6 +1441,7 @@ app.get('/api/settings', ah(async (req, res) => {
     setupDone: s.setupDone === true,
     checklistDismissed: s.checklistDismissed === true,
     keepServerCopyAfterPublish: s.keepServerCopyAfterPublish === true,
+    ytDefaultVisibility: ytVisibilityOf(s.ytDefaultVisibility),
   };
   res.json(settingsResponse);
 }));
@@ -1450,6 +1451,11 @@ app.post('/api/settings', ah(async (req, res) => {
   // keys "0", "1", ….
   if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
     return res.status(400).json({ ok: false, error: 'Settings must be sent as a set of named values — please try again.' });
+  }
+  // Default YouTube visibility (Phase E) must be one of the three
+  // privacy states — anything else is rejected, never stored.
+  if (req.body.ytDefaultVisibility !== undefined && !YT_VISIBILITIES.includes(req.body.ytDefaultVisibility)) {
+    return res.status(400).json({ ok: false, error: 'That default YouTube visibility is not valid — use Public, Unlisted or Private.' });
   }
   const s = { ...(await getSettings(req)), ...(req.body || {}) };
   // Settings hold simple values only — objects/arrays are rejected so a
@@ -1467,7 +1473,7 @@ app.post('/api/settings', ah(async (req, res) => {
   const ig = await getInstagramCreds(req);
   const stored = await getInstagramStored(req);
   const summaries = await instagramAccountSummaries(req.userId);
-  res.json({ ok: true, instagramHandle: s.instagramHandle || ig.username || '', instagramConnected: !!(ig.token && ig.igUserId), tokenConfigured: !!(ig.token && ig.igUserId), instagramUsername: ig.username || '', maskedToken: maskToken(ig.token), tokenSource: ig.source, igUserIdSet: !!ig.igUserId, tokenEncrypted: stored.token ? !!stored.encrypted : null, instagramProfile: stored.profile || null, connectedAt: stored.connectedAt || '', instagramHealth: instagramHealth(stored), instagramAccounts: summaries.accounts, defaultIgUserId: summaries.defaultIgUserId, setupDone: s.setupDone === true, checklistDismissed: s.checklistDismissed === true, keepServerCopyAfterPublish: s.keepServerCopyAfterPublish === true });
+  res.json({ ok: true, instagramHandle: s.instagramHandle || ig.username || '', instagramConnected: !!(ig.token && ig.igUserId), tokenConfigured: !!(ig.token && ig.igUserId), instagramUsername: ig.username || '', maskedToken: maskToken(ig.token), tokenSource: ig.source, igUserIdSet: !!ig.igUserId, tokenEncrypted: stored.token ? !!stored.encrypted : null, instagramProfile: stored.profile || null, connectedAt: stored.connectedAt || '', instagramHealth: instagramHealth(stored), instagramAccounts: summaries.accounts, defaultIgUserId: summaries.defaultIgUserId, setupDone: s.setupDone === true, checklistDismissed: s.checklistDismissed === true, keepServerCopyAfterPublish: s.keepServerCopyAfterPublish === true, ytDefaultVisibility: ytVisibilityOf(s.ytDefaultVisibility) });
 }));
 
 // ---------- Instagram connect (Meta login only) ----------
@@ -2138,9 +2144,16 @@ async function fetchPostMediaBytes(post) {
   return null;
 }
 // Resumable upload of one video. Returns the YouTube video id.
-// Until Google approves the app (audit), uploads are locked to
-// Private — publishAt carries the scheduling intent for posts that
-// are published ahead of their scheduled time.
+// The upload status comes from the post (Phase E): privacyStatus is
+// the post's ytVisibility and selfDeclaredMadeForKids its
+// ytMadeForKids. A 'public' post published ahead of its scheduled
+// time uses YouTube's own scheduling instead — privacyStatus
+// 'private' + publishAt, and YouTube flips it public at that time.
+// 'unlisted'/'private' upload as-is, with no publishAt. Until Google
+// approves the app (audit), YouTube forces every upload to Private
+// regardless; the chosen visibility takes effect once it passes.
+// Posts saved before ytVisibility existed carry no value and keep
+// the historical behaviour (private + publishAt) untouched.
 async function uploadVideoToYouTube(userId, post, bytes) {
   const token = await youtubeAccessToken(userId);
   if (!token) throw new Error('the YouTube connection needs reconnecting (Connections page)');
@@ -2148,9 +2161,18 @@ async function uploadVideoToYouTube(userId, post, bytes) {
   const caption = String(post.caption || '');
   const title = String(yt.title || caption.split('\n')[0] || 'KiluaAI post').trim().slice(0, 100) || 'KiluaAI post';
   const description = [caption, String(post.hashtags || '')].filter((s) => s && s.trim()).join('\n\n').slice(0, 4900);
-  const status = { privacyStatus: 'private', selfDeclaredMadeForKids: false };
   const schedMs = new Date(post.scheduleTime || 0).getTime();
-  if (Number.isFinite(schedMs) && schedMs > Date.now() + 60000) status.publishAt = new Date(schedMs).toISOString();
+  const futurePublishAt = Number.isFinite(schedMs) && schedMs > Date.now() + 60000 ? new Date(schedMs).toISOString() : '';
+  const status = { privacyStatus: 'private', selfDeclaredMadeForKids: post.ytMadeForKids === true };
+  if (!YT_VISIBILITIES.includes(post.ytVisibility)) {
+    // Legacy post (no visibility stored): private + publishAt, as before.
+    if (futurePublishAt) status.publishAt = futurePublishAt;
+  } else if (post.ytVisibility === 'public') {
+    if (futurePublishAt) status.publishAt = futurePublishAt; // stays 'private' until publishAt
+    else status.privacyStatus = 'public';
+  } else {
+    status.privacyStatus = post.ytVisibility; // 'unlisted' | 'private', no publishAt
+  }
   const metadata = { snippet: { title, description }, status };
   const init = await fetch('https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status', {
     method: 'POST',
@@ -2342,6 +2364,10 @@ function validPostInput(b, { requireMedia = true } = {}) {
     if (b.youtube.title !== undefined && typeof b.youtube.title !== 'string') return 'That YouTube title is not valid.';
     if (b.youtube.title && b.youtube.title.length > 100) return 'YouTube titles can be at most 100 characters — shorten it and try again.';
   }
+  // YouTube visibility + Made for Kids (Phase E): visibility must be
+  // one of YouTube's three privacy states; madeForKids a real boolean.
+  if (b.ytVisibility !== undefined && !YT_VISIBILITIES.includes(b.ytVisibility)) return 'That YouTube visibility is not valid — use Public, Unlisted or Private.';
+  if (b.ytMadeForKids !== undefined && typeof b.ytMadeForKids !== 'boolean') return 'That Made for Kids choice is not valid — answer Yes or No.';
   // First comment (Phase C2): plain text, capped at Instagram's
   // comment length.
   if (b.firstComment && b.firstComment.length > 2200) return 'The first comment is too long — keep it under 2,200 characters.';
@@ -2358,6 +2384,14 @@ function normalizeYouTubeSetting(y) {
   if (!y || typeof y !== 'object' || Array.isArray(y)) return { enabled: false, title: '' };
   return { enabled: !!y.enabled, title: typeof y.title === 'string' ? y.title.slice(0, 100) : '' };
 }
+// YouTube visibility (Phase E): the three privacy states YouTube
+// accepts. A post carries ytVisibility + ytMadeForKids; the user's
+// settings carry ytDefaultVisibility, which pre-fills new posts.
+// Anything unrecognized falls back to 'public' (the user's chosen
+// default) — except in the publish leg, where a post saved before
+// this feature existed keeps the historical private upload.
+const YT_VISIBILITIES = ['public', 'unlisted', 'private'];
+function ytVisibilityOf(v) { return YT_VISIBILITIES.includes(v) ? v : 'public'; }
 // Which Instagram account a new/edited post targets. An explicitly
 // requested account must be one of the user's connected accounts —
 // scheduling to an account that is not connected is rejected here, at
@@ -2380,7 +2414,7 @@ async function postTargetResolver(userId) {
     },
   };
 }
-function buildPost(b, userId, target = {}) {
+function buildPost(b, userId, target = {}, ytDefaultVisibility = '') {
   // Status and liveUrl are server-owned: a post becomes "published"
   // only through the publish flow, which also sets the real liveUrl
   // from Instagram. A client-supplied status/liveUrl is ignored, so a
@@ -2412,6 +2446,13 @@ function buildPost(b, userId, target = {}) {
     // youtubeError start empty).
     youtube: normalizeYouTubeSetting(b.youtube),
     youtubeVideoId: '', youtubeStatus: '', youtubeError: '',
+    // YouTube visibility + Made for Kids (Phase E): an explicit choice
+    // on the post wins; otherwise the user's saved default applies
+    // (ytVisibilityOf falls back to 'public'). Made for Kids defaults
+    // to No — YouTube asks for every video, story videos are not
+    // made for kids.
+    ytVisibility: b.ytVisibility !== undefined ? ytVisibilityOf(b.ytVisibility) : ytVisibilityOf(ytDefaultVisibility),
+    ytMadeForKids: b.ytMadeForKids === true,
     // Platform picker (Phase B revision): Instagram is ticked unless
     // explicitly unticked; a YouTube-only post publishes straight to
     // YouTube with no Instagram leg.
@@ -2450,7 +2491,8 @@ app.post('/api/posts', ah(async (req, res) => {
   const resolver = await postTargetResolver(req.userId);
   const target = resolver.resolve(b.igAccountId);
   if (target.error) return res.status(400).json({ ok: false, error: target.error });
-  const post = buildPost(b, req.userId, target);
+  const settings = await db.getSettings(req.userId);
+  const post = buildPost(b, req.userId, target, settings && settings.ytDefaultVisibility);
   await db.savePost(post);
   res.json({ ok: true, post });
 }));
@@ -2463,12 +2505,13 @@ app.post('/api/posts/bulk', ah(async (req, res) => {
   const valid = [];
   const errors = [];
   const resolver = await postTargetResolver(req.userId);
+  const settings = await db.getSettings(req.userId);
   rows.forEach((b, i) => {
     const err = validPostInput(b || {});
     if (err) { errors.push(`Row ${i + 1}: ${err}`); return; }
     const target = resolver.resolve((b || {}).igAccountId);
     if (target.error) { errors.push(`Row ${i + 1}: ${target.error}`); return; }
-    valid.push(buildPost(b, req.userId, target));
+    valid.push(buildPost(b, req.userId, target, settings && settings.ytDefaultVisibility));
   });
   if (valid.length) await db.savePostsBulk(valid);
   res.json({ ok: true, imported: valid.length, failed: rows.length - valid.length, errors: errors.slice(0, 10) });
@@ -2485,6 +2528,8 @@ app.patch('/api/posts/:id', ah(async (req, res) => {
   const patch = {};
   for (const k of allowed) if (b[k] !== undefined) patch[k] = b[k];
   if (b.youtube !== undefined) patch.youtube = normalizeYouTubeSetting(b.youtube);
+  if (b.ytVisibility !== undefined) patch.ytVisibility = ytVisibilityOf(b.ytVisibility);
+  if (b.ytMadeForKids !== undefined) patch.ytMadeForKids = b.ytMadeForKids === true;
   if (b.repeat !== undefined) patch.repeat = b.repeat === 'weekly' ? 'weekly' : '';
   if (b.igEnabled !== undefined) patch.igEnabled = b.igEnabled === false ? false : true;
   // Retargeting a post to another connected account (multi-account):
@@ -2794,6 +2839,8 @@ async function spawnNextOccurrence(userId, post) {
       posterUrl: post.posterUrl || '',
       youtube: normalizeYouTubeSetting(post.youtube),
       youtubeVideoId: '', youtubeStatus: '', youtubeError: '',
+      ytVisibility: YT_VISIBILITIES.includes(post.ytVisibility) ? post.ytVisibility : 'public',
+      ytMadeForKids: post.ytMadeForKids === true,
       firstComment: post.firstComment || '', firstCommentPosted: false,
       repeat: 'weekly', seriesId, nextOccurrenceId: '',
       createdAt: new Date().toISOString(),
@@ -3527,6 +3574,8 @@ app.post('/api/drafts', ah(async (req, res) => {
   const STR = ['caption', 'hashtags', 'cta', 'mediaUrl', 'mediaType', 'posterUrl', 'platform', 'format', 'igAccountId', 'igAccountUsername', 'firstComment'];
   for (const k of STR) if (b[k] !== undefined && typeof b[k] !== 'string') return res.status(400).json({ ok: false, error: 'That draft is not valid — please try again.' });
   if (b.youtube !== undefined && (!b.youtube || typeof b.youtube !== 'object' || Array.isArray(b.youtube))) return res.status(400).json({ ok: false, error: 'That draft is not valid — please try again.' });
+  if (b.ytVisibility !== undefined && !YT_VISIBILITIES.includes(b.ytVisibility)) return res.status(400).json({ ok: false, error: 'That YouTube visibility is not valid — use Public, Unlisted or Private.' });
+  if (b.ytMadeForKids !== undefined && typeof b.ytMadeForKids !== 'boolean') return res.status(400).json({ ok: false, error: 'That draft is not valid — please try again.' });
   if (b.repeat !== undefined && b.repeat !== '' && b.repeat !== 'weekly') return res.status(400).json({ ok: false, error: 'That repeat setting is not valid.' });
   const existing = await db.listDrafts(req.userId);
   if (existing.length >= 100) return res.status(400).json({ ok: false, error: 'You have 100 saved drafts — delete some before saving more.' });
@@ -3538,6 +3587,8 @@ app.post('/api/drafts', ah(async (req, res) => {
     igAccountId: b.igAccountId || '', igAccountUsername: b.igAccountUsername || '',
     igEnabled: b.igEnabled === false ? false : true,
     youtube: normalizeYouTubeSetting(b.youtube),
+    ytVisibility: b.ytVisibility !== undefined ? ytVisibilityOf(b.ytVisibility) : 'public',
+    ytMadeForKids: b.ytMadeForKids === true,
     firstComment: (b.firstComment || '').slice(0, 2200),
     repeat: b.repeat === 'weekly' ? 'weekly' : '',
     createdAt: new Date().toISOString(),

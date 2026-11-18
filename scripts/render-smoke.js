@@ -21,7 +21,9 @@
 //                 (soonest at top), other statuses below, newest first, and
 //                 status trackers naming the platform(s) each post used
 //                 (YouTube-only / Instagram-only / both). B also asserts
-//                 the header structure (brand block / nav / actions as
+//                 the Studio YouTube visibility selector pre-filling
+//                 from the saved default + Made for Kids defaulting to
+//                 No (Phase E), and the header structure (brand block / nav / actions as
 //                 separate ordered children; mobile search icon button +
 //                 expandable row — the 2026-11-18 overlap fix).
 //   C update guard: like B, but /build-id.json + /api/version report a
@@ -157,7 +159,7 @@ async function runScenario(scenario, bundleDir) {
       case '/api/posts': return json(200, seeded)
       case '/api/media': return json(200, [])
       case '/api/templates': return json(200, [])
-      case '/api/settings': return json(200, { instagramAccounts: [], defaultIgUserId: '', checklistDismissed: true, setupDone: true })
+      case '/api/settings': return json(200, { instagramAccounts: [], defaultIgUserId: '', checklistDismissed: true, setupDone: true, ytDefaultVisibility: 'unlisted' })
       case '/api/stats': return json(200, { scheduled: 2, published: 1, failed: 1, drafts: 0, mediaCount: 0 })
       case '/api/db-status': return json(200, { ok: true, db: 'mongodb', instagram: { connected: false } })
       case '/api/notifications': return json(200, { notifications: [], unread: 0 })
@@ -324,7 +326,20 @@ async function runScenario(scenario, bundleDir) {
     const step3 = [...window.document.querySelectorAll('button')].find((el) => el.textContent.includes('Schedule & publish'))
     if (step3) step3.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }))
     await waitFor(() => root.textContent.includes('Publish to') && root.textContent.includes('Smoke Channel'), 'studio platform picker to render')
-    console.log('render-smoke scenario B: PASS (dashboard + queue + calendar + media + connections + studio render, scheduled-first order holds, tracker platform wording correct)')
+    // Phase E: ticking YouTube must reveal the visibility selector
+    // PRE-FILLED from the user's saved default (the settings stub
+    // returns ytDefaultVisibility 'unlisted'), the Made for Kids
+    // Yes/No control defaulting to No, and the honest audit note.
+    const ytTick = [...window.document.querySelectorAll('label')].find((el) => el.textContent.includes('YouTube') && el.querySelector('input[type="checkbox"]'))
+    if (!ytTick) fail('YouTube platform tick label missing in Studio Step 3')
+    ytTick.querySelector('input[type="checkbox"]').click()
+    const visSel = await waitFor(() => window.document.querySelector('#ytVisibility'), 'YouTube visibility selector to appear')
+    if (visSel.value !== 'unlisted') fail('visibility selector not pre-filled from the saved default (got "' + visSel.value + '", want "unlisted")')
+    const kidsRadios = [...window.document.querySelectorAll('input[name="ytMadeForKids"]')]
+    if (kidsRadios.length !== 2) fail('Made for Kids Yes/No radios missing')
+    if (!kidsRadios[0].checked || kidsRadios[1].checked) fail('Made for Kids does not default to No')
+    if (!root.textContent.includes('takes effect automatically once the approval passes')) fail('honest audit note missing next to the visibility selector')
+    console.log('render-smoke scenario B: PASS (dashboard + queue + calendar + media + connections + studio render, scheduled-first order holds, tracker platform wording correct, YouTube visibility pre-fills from the saved default)')
   } else if (scenario === 'C') {
     await waitFor(() => root.innerHTML.length > 0, 'app shell to render')
     const skip = [...window.document.querySelectorAll('button, a')].find((el) => el.textContent.trim() === 'Skip setup')

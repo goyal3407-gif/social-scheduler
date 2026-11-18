@@ -272,6 +272,15 @@ export default function Settings({ settings, dbStatus, onSave, saving, onInstagr
                 style={{ width: 18, height: 18, marginTop: 2, flex: 'none' }} />
               <span><b>Keep a server copy after publishing</b><br /><span className="muted small">Off by default. Turn it on if you want to reuse the same file for more posts later — it uses more storage.</span></span>
             </label>
+            <h3 style={{ marginTop: 18 }}>Default YouTube visibility</h3>
+            <p className="muted small" style={{ marginTop: 6 }}>New posts start with this YouTube visibility in the composer, so you don&apos;t have to choose it every time. You can still change it for any single post in Step 3.</p>
+            <select aria-label="Default YouTube visibility" value={settings?.ytDefaultVisibility || 'public'} disabled={saving} style={{ marginTop: 10, maxWidth: 320 }}
+              onChange={async (e) => { setErr(''); setMsg(''); try { await onSave({ ytDefaultVisibility: e.target.value }); setMsg('Default YouTube visibility saved.') } catch (e2) { setErr(e2.message || 'Could not save settings.') } }}>
+              <option value="public">Public — everyone can watch</option>
+              <option value="unlisted">Unlisted — only people with the link</option>
+              <option value="private">Private — only you</option>
+            </select>
+            <p className="muted small" style={{ marginTop: 6 }}>Until Google approves the app, YouTube keeps every upload Private — your choice takes effect automatically once the approval passes.</p>
             <p className="muted small" style={{ marginTop: 12 }}>Publish results — successes and failures with their reasons — appear under Notifications on the Home screen, and failures are also flagged on the post itself.</p>
             <h3 style={{ marginTop: 18 }}>App language</h3>
             <p className="muted small" style={{ marginTop: 6 }}>Switch the app&rsquo;s menus and headings between English and Hinglish. Your captions and posts are never changed.</p>

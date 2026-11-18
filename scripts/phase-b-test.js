@@ -246,7 +246,11 @@ async function main() {
     const pub = (r.data.posts || []).find((p) => p.id === postId);
     check('B2: IG published + YouTube uploaded with video id', pub.status === 'published' && pub.youtubeStatus === 'uploaded' && pub.youtubeVideoId === 'ytvid-123', JSON.stringify({ s: pub.status, ys: pub.youtubeStatus, yv: pub.youtubeVideoId }));
     const initLine = stub().split('\n').find((l) => l.startsWith('YT-UPLOAD-INIT') && l.includes('My YT Title')) || '';
-    check('B2: upload metadata has title + private + caption description', initLine.includes('"title":"My YT Title"') && initLine.includes('"privacyStatus":"private"') && initLine.includes('Hello world caption'), initLine.slice(0, 240));
+    // Phase E changed the default: a post with no explicit visibility
+    // now uploads with the user's default (Public) instead of the old
+    // always-Private — this post's time is in the past, so no
+    // publishAt applies and the status goes out as public.
+    check('B2: upload metadata has title + public default visibility + caption description', initLine.includes('"title":"My YT Title"') && initLine.includes('"privacyStatus":"public"') && initLine.includes('Hello world caption'), initLine.slice(0, 240));
     check('B2: refresh-token grant was used for the upload', stub().includes('grant_type=refresh_token'), '');
 
     // future post published early carries publishAt (YouTube-native scheduling)

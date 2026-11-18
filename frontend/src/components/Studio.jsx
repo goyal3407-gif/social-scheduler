@@ -4,14 +4,24 @@ import { IconWarn, IconCheck, IconHeart, IconComment, IconSend, IconBookmark } f
 
 const PLATFORMS = ['Instagram', 'YouTube', 'Facebook', 'TikTok']
 const FORMATS = ['REELS', 'FEED', 'STORY']
-const EMPTY = { mediaUrl: '', mediaType: 'video', posterUrl: '', caption: '', hashtags: '', cta: '', platform: 'Instagram', scheduleTime: '', status: 'scheduled', format: 'REELS', igAccountId: '', igAccountUsername: '', igTick: true, youtubeEnabled: false, youtubeTitle: '', firstComment: '', repeatWeekly: false }
+const YT_VISIBILITIES = ['public', 'unlisted', 'private']
+const EMPTY = { mediaUrl: '', mediaType: 'video', posterUrl: '', caption: '', hashtags: '', cta: '', platform: 'Instagram', scheduleTime: '', status: 'scheduled', format: 'REELS', igAccountId: '', igAccountUsername: '', igTick: true, youtubeEnabled: false, youtubeTitle: '', ytVisibility: 'public', ytMadeForKids: false, firstComment: '', repeatWeekly: false }
 // A post's stored YouTube setting is an object ({ enabled, title }) and
 // its repeat is a string ('weekly'); the form keeps flat fields and
 // submit() folds them back. The platform picker is two ticks:
-// igTick (stored as igEnabled) + youtubeEnabled.
-const withYouTubeFields = (base) => {
+// igTick (stored as igEnabled) + youtubeEnabled. Visibility and Made
+// for Kids are flat post fields (ytVisibility / ytMadeForKids): an
+// explicit value on the post/draft wins; a brand-new post pre-fills
+// from the user's saved default (ytDefault), falling back to Public.
+const withYouTubeFields = (base, ytDefault) => {
   const y = (base && base.youtube) || {}
-  const f = { ...EMPTY, ...base, igTick: !base || base.igEnabled !== false, youtubeEnabled: !!y.enabled, youtubeTitle: y.title || '', repeatWeekly: (base && base.repeat) === 'weekly' }
+  const f = {
+    ...EMPTY, ...base,
+    igTick: !base || base.igEnabled !== false, youtubeEnabled: !!y.enabled, youtubeTitle: y.title || '',
+    repeatWeekly: (base && base.repeat) === 'weekly',
+    ytVisibility: YT_VISIBILITIES.includes(base?.ytVisibility) ? base.ytVisibility : (YT_VISIBILITIES.includes(ytDefault) ? ytDefault : 'public'),
+    ytMadeForKids: !!(base && base.ytMadeForKids),
+  }
   delete f.youtube
   delete f.repeat
   delete f.igEnabled
@@ -61,11 +71,13 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
     } catch { /* storage unavailable */ }
   }
 
+  const ytVisTouchedRef = useRef(false)
   useEffect(() => {
+    ytVisTouchedRef.current = false
     if (editing?.id) {
-      setForm(withYouTubeFields({ ...editing, scheduleTime: editing.scheduleTime || '' }))
+      setForm(withYouTubeFields({ ...editing, scheduleTime: editing.scheduleTime || '' }, settings?.ytDefaultVisibility))
     } else if (seed) {
-      setForm(withYouTubeFields({ ...seed, scheduleTime: seed.scheduleTime || '' }))
+      setForm(withYouTubeFields({ ...seed, scheduleTime: seed.scheduleTime || '' }, settings?.ytDefaultVisibility))
     } else {
       // Restore the autosaved draft for the default account, if any.
       let initial = EMPTY
@@ -73,15 +85,30 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
         const raw = localStorage.getItem(draftKey(defaultIgUserId))
         if (raw) {
           const draft = JSON.parse(raw)
-          if (draft && (draft.caption || draft.mediaUrl || draft.hashtags)) initial = { ...EMPTY, ...draft, scheduleTime: draft.scheduleTime || '' }
+          if (draft && (draft.caption || draft.mediaUrl || draft.hashtags)) {
+            initial = { ...EMPTY, ...draft, scheduleTime: draft.scheduleTime || '' }
+            // A restored draft's own visibility counts as the user's
+            // choice — the late-default pre-fill must not stomp it.
+            if (YT_VISIBILITIES.includes(draft.ytVisibility)) ytVisTouchedRef.current = true
+          }
         }
       } catch { /* no usable draft */ }
-      setForm(withYouTubeFields(initial))
+      setForm(withYouTubeFields(initial, settings?.ytDefaultVisibility))
     }
     restoredDraftRef.current = true
     setStep(1); setError(''); setSavedNote(''); setBankMsg('')
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editing, seed])
+
+  // YouTube visibility pre-fill: settings can arrive after the
+  // composer mounts. When the user's saved default lands, apply it to
+  // a NEW post — never to an edit/seed, and never over a visibility
+  // the user (or their restored draft) already chose.
+  useEffect(() => {
+    const d = settings?.ytDefaultVisibility
+    if (!YT_VISIBILITIES.includes(d) || editing?.id || seed || ytVisTouchedRef.current) return
+    setForm((f) => (f.ytVisibility === d ? f : { ...f, ytVisibility: d }))
+  }, [settings?.ytDefaultVisibility, editing, seed])
 
   // Persist the draft as the user types (new posts only — edits write
   // to the saved post itself).
@@ -250,6 +277,7 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
         igAccountId: form.igAccountId, igAccountUsername: form.igAccountUsername,
         igEnabled: Boolean(form.igTick),
         youtube: { enabled: Boolean(form.youtubeEnabled), title: form.youtubeTitle || '' },
+        ytVisibility: form.ytVisibility, ytMadeForKids: Boolean(form.ytMadeForKids),
         firstComment: form.firstComment || '',
         repeat: form.repeatWeekly ? 'weekly' : '',
       })
@@ -260,7 +288,7 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
 
   const loadDraft = (d) => {
     if (!d) return
-    setForm(withYouTubeFields({ ...d, scheduleTime: '', status: 'scheduled' }))
+    setForm(withYouTubeFields({ ...d, scheduleTime: '', status: 'scheduled' }, settings?.ytDefaultVisibility))
     setStep(1); setError('')
     setDraftLibMsg(`Loaded “${d.name}” — pick a time in Step 3 when you're ready. Nothing is scheduled yet.`)
   }
@@ -512,7 +540,28 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
                   <div style={{ marginTop: 12 }}>
                     <label htmlFor="youtubeTitle">YouTube title <span className="muted">(blank = first line of the caption)</span></label>
                     <input id="youtubeTitle" maxLength={100} placeholder="Title viewers will see on YouTube" value={form.youtubeTitle} onChange={(e) => set({ youtubeTitle: e.target.value })} />
-                    <p className="muted small" style={{ marginTop: 6 }}>The caption + hashtags become the YouTube description automatically. Videos only — an image post skips YouTube. Until Google approves the app, YouTube posts land as Private/scheduled — one tap to make public.</p>
+                    <div className="two-col" style={{ marginTop: 12 }}>
+                      <div>
+                        <label htmlFor="ytVisibility">YouTube visibility</label>
+                        <select id="ytVisibility" value={form.ytVisibility} onChange={(e) => { ytVisTouchedRef.current = true; set({ ytVisibility: e.target.value }) }}>
+                          <option value="public">Public — everyone can watch</option>
+                          <option value="unlisted">Unlisted — only people with the link</option>
+                          <option value="private">Private — only you</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label>Made for Kids <span className="muted">(YouTube asks for every video)</span></label>
+                        <div style={{ display: 'flex', gap: 8, marginTop: 2 }}>
+                          {[{ v: false, label: 'No' }, { v: true, label: 'Yes' }].map((o) => (
+                            <label key={o.label} style={{ display: 'inline-flex', gap: 6, alignItems: 'center', cursor: 'pointer', border: '1px solid var(--line)', borderRadius: 999, padding: '7px 14px' }}>
+                              <input type="radio" name="ytMadeForKids" checked={Boolean(form.ytMadeForKids) === o.v} onChange={() => set({ ytMadeForKids: o.v })} style={{ width: 'auto' }} />
+                              <b>{o.label}</b>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                    <p className="muted small" style={{ marginTop: 6 }}>The caption + hashtags become the YouTube description automatically. Videos only — an image post skips YouTube. Until Google approves the app, YouTube keeps every upload Private — the visibility you choose here takes effect automatically once the approval passes.</p>
                   </div>
                 )}
                 {!form.igTick && form.youtubeEnabled && ytStatus?.connected && (
