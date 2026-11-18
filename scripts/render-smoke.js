@@ -143,6 +143,7 @@ async function runScenario(scenario, bundleDir) {
       case '/api/db-status': return json(200, { ok: true, db: 'mongodb', instagram: { connected: false } })
       case '/api/notifications': return json(200, { notifications: [], unread: 0 })
       case '/api/hashtag-groups': return json(200, [])
+      case '/api/youtube/status': return json(200, { ok: true, configured: true, connected: true, channelId: 'chan-smoke', channelTitle: 'Smoke Channel', channelThumb: '' })
       default: return json(200, {})
     }
   }
@@ -211,7 +212,29 @@ async function runScenario(scenario, bundleDir) {
       btn.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }))
       await waitFor(() => root.textContent.includes(marker), tab + ' view to render')
     }
-    console.log('render-smoke scenario B: PASS (dashboard + queue + calendar + media render, scheduled-first order holds)')
+    // Connections page (Phase B addition): Instagram + YouTube cards and
+    // the disabled Facebook/TikTok placeholders must all render.
+    const connBtn = await waitFor(() => {
+      const els = [...window.document.querySelectorAll('button, a')]
+      return els.find((el) => el.textContent.trim() === 'Connections')
+    }, 'Connections nav control')
+    connBtn.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }))
+    await waitFor(
+      () => root.textContent.includes('Link the accounts KiluaAI publishes to') && root.textContent.includes('Smoke Channel') && root.textContent.includes('Coming soon'),
+      'connections page to render (Instagram + YouTube + Coming soon cards)'
+    )
+    // Studio (Create): with a YouTube channel connected (stub), Step 3
+    // must offer the "Also post to YouTube" toggle.
+    const createBtn = await waitFor(() => {
+      const els = [...window.document.querySelectorAll('button, a')]
+      return els.find((el) => el.textContent.trim() === 'Create Post')
+    }, 'Create Post control')
+    createBtn.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }))
+    await waitFor(() => root.textContent.includes('Step 1'), 'studio to render')
+    const step3 = [...window.document.querySelectorAll('button')].find((el) => el.textContent.includes('Schedule & publish'))
+    if (step3) step3.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }))
+    await waitFor(() => root.textContent.includes('Also post to YouTube'), 'studio YouTube toggle to render')
+    console.log('render-smoke scenario B: PASS (dashboard + queue + calendar + media + connections + studio render, scheduled-first order holds)')
   } else if (scenario === 'C') {
     await waitFor(() => root.innerHTML.length > 0, 'app shell to render')
     const skip = [...window.document.querySelectorAll('button, a')].find((el) => el.textContent.trim() === 'Skip setup')

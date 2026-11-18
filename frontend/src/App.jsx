@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense } fro
 import { api, nextBestTime } from './api.js'
 import Auth, { ResetPassword } from './components/Auth.jsx'
 import Dashboard from './components/Dashboard.jsx'
-import { IconHome, IconCal, IconQueue, IconPlus, IconMedia, IconBulk, IconTools, IconSpark, IconSettings, IconSun, IconMoon, IconMenu, IconX, IconBell } from './components/icons.jsx'
+import { IconHome, IconCal, IconQueue, IconPlus, IconMedia, IconBulk, IconTools, IconSpark, IconSettings, IconSun, IconMoon, IconMenu, IconX, IconBell, IconLink } from './components/icons.jsx'
 import { Skeleton, isOwnMediaUrl } from './components/shared.jsx'
 // The build id baked in at build time (vite define). The update guard
 // below compares it with the id the server/static file reports for
@@ -43,6 +43,7 @@ const MediaLibrary = lazyRetry(() => import('./components/MediaLibrary.jsx'))
 const Tools = lazyRetry(() => import('./components/Tools.jsx'))
 const AIStudio = lazyRetry(() => import('./components/AIStudio.jsx'))
 const Settings = lazyRetry(() => import('./components/Settings.jsx'))
+const Connections = lazyRetry(() => import('./components/Connections.jsx'))
 
 function TabFallback() {
   return <div className="section"><div className="card"><Skeleton rows={4} /></div></div>
@@ -58,6 +59,7 @@ const NAV = [
   // Dock slots are ~41px wide on phones: the full "AI Studio" label
   // truncated to "AI Stud…", so the dock renders it on two lines.
   { id: 'ai', label: 'AI Studio', dockLabel: 'AI\nStudio', Icon: IconSpark },
+  { id: 'connections', label: 'Connections', Icon: IconLink },
   { id: 'settings', label: 'Settings', Icon: IconSettings }
 ]
 
@@ -626,6 +628,7 @@ export default function App() {
       caption: post.caption || '', hashtags: post.hashtags || '', cta: post.cta || '',
       platform: post.platform || 'Instagram', format: post.format || 'REELS',
       igAccountId: post.igAccountId || '', igAccountUsername: post.igAccountUsername || '',
+      youtube: post.youtube || null,
       scheduleTime: ''
     })
     setStudioKey((k) => k + 1)
@@ -724,6 +727,7 @@ export default function App() {
             <button type="button" className={tab === 'ai' ? 'active' : ''} onClick={() => setTab('ai')}>AI Studio</button>
             <button type="button" className={tab === 'bulk' ? 'active' : ''} onClick={() => setTab('bulk')}>Bulk</button>
             <button type="button" className={tab === 'tools' ? 'active' : ''} onClick={() => setTab('tools')}>Tools</button>
+            <button type="button" className={tab === 'connections' ? 'active' : ''} onClick={() => setTab('connections')}>Connections</button>
           </nav>
           <div className="top-actions">
             <span className="pill" title={!settings ? 'Checking Instagram connection' : settings.instagramConnected ? 'Instagram connected' : 'Instagram not connected'}>
@@ -828,7 +832,7 @@ export default function App() {
         )}
         {tab === 'studio' && (
           <div className="section">
-            <Studio key={`${studioKey}-${editing?.id || 'new'}`} editing={editing} seed={templateSeed ? { caption: templateSeed.text || templateSeed.caption || '', hashtags: templateSeed.hashtags || '', cta: templateSeed.cta || '', mediaUrl: templateSeed.mediaUrl || '', mediaType: templateSeed.mediaType || 'video', posterUrl: templateSeed.posterUrl || '', scheduleTime: templateSeed.scheduleTime || '', platform: templateSeed.platform || 'Instagram', format: templateSeed.format || 'REELS', igAccountId: templateSeed.igAccountId || '', igAccountUsername: templateSeed.igAccountUsername || '' } : null} media={media} templates={templates} hashtagGroups={hashtagGroups} onCreateTemplate={handleCreateTemplate} onDeleteTemplate={handleDeleteTemplate} onCreateHashtagGroup={handleCreateHashtagGroup} onDeleteHashtagGroup={handleDeleteHashtagGroup} onSave={handleSavePost} onCancel={() => setTab('queue')} saving={saving} posts={visiblePosts} igAccounts={settings?.instagramAccounts || []} defaultIgUserId={settings?.defaultIgUserId || ''} settings={settings} />
+            <Studio key={`${studioKey}-${editing?.id || 'new'}`} editing={editing} seed={templateSeed ? { caption: templateSeed.text || templateSeed.caption || '', hashtags: templateSeed.hashtags || '', cta: templateSeed.cta || '', mediaUrl: templateSeed.mediaUrl || '', mediaType: templateSeed.mediaType || 'video', posterUrl: templateSeed.posterUrl || '', scheduleTime: templateSeed.scheduleTime || '', platform: templateSeed.platform || 'Instagram', format: templateSeed.format || 'REELS', igAccountId: templateSeed.igAccountId || '', igAccountUsername: templateSeed.igAccountUsername || '', youtube: templateSeed.youtube || null } : null} media={media} templates={templates} hashtagGroups={hashtagGroups} onCreateTemplate={handleCreateTemplate} onDeleteTemplate={handleDeleteTemplate} onCreateHashtagGroup={handleCreateHashtagGroup} onDeleteHashtagGroup={handleDeleteHashtagGroup} onSave={handleSavePost} onCancel={() => setTab('queue')} saving={saving} posts={visiblePosts} igAccounts={settings?.instagramAccounts || []} defaultIgUserId={settings?.defaultIgUserId || ''} settings={settings} />
           </div>
         )}
         {tab === 'bulk' && <div className="section"><Bulk onImport={handleBulkImport} posts={visiblePosts} onUploadFile={handleUpload} igAccounts={settings?.instagramAccounts || []} defaultIgUserId={settings?.defaultIgUserId || ''} hashtagGroups={hashtagGroups} /></div>}
@@ -846,7 +850,10 @@ export default function App() {
           <div className="section"><AIStudio posts={visiblePosts} settings={settings} onSendToStudio={useInStudio} onSaveDraft={handleSaveDraft} onSaveDrafts={handleSaveDrafts} /></div>
         )}
         {tab === 'settings' && (
-          <div className="section"><Settings settings={settings} dbStatus={dbStatus} saving={saving} onSave={async (s) => { setSaving(true); try { const u = await api.saveSettings(s); setSettings(u || s) } finally { setSaving(false) } }} onInstagramChanged={refreshSettings} user={user} onAccountDeleted={handleLogout} /></div>
+          <div className="section"><Settings settings={settings} dbStatus={dbStatus} saving={saving} onSave={async (s) => { setSaving(true); try { const u = await api.saveSettings(s); setSettings(u || s) } finally { setSaving(false) } }} onInstagramChanged={refreshSettings} user={user} onAccountDeleted={handleLogout} onNavigate={setTab} /></div>
+        )}
+        {tab === 'connections' && (
+          <div className="section"><Connections settings={settings} onInstagramChanged={refreshSettings} /></div>
         )}
         </Suspense>
 

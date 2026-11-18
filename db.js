@@ -42,6 +42,7 @@ const JSON_FILES = {
   media: 'media.json', mediaFiles: 'media-files.json', templates: 'templates.json', settings: 'settings.json',
   hashtagGroups: 'hashtag-groups.json',
   passwordResets: 'password-resets.json',
+  youtube: 'youtube.json',
   instagram: 'instagram.json', importJobs: 'import-jobs.json',
   notifications: 'notifications.json', uploadSessions: 'upload-sessions.json',
 };
@@ -110,6 +111,15 @@ const passwordResetSchema = new mongoose.Schema({
   userId: { type: String, index: true },
   tokenHash: { type: String, index: true },
   expiresAt: String, createdAt: String,
+}, { strict: false });
+// YouTube connection (Phase B cross-post): one per user. The OAuth
+// refresh token is stored encrypted (refreshTokenEnc); access tokens
+// are minted server-side on demand and never stored.
+const youtubeSchema = new mongoose.Schema({
+  userId: { type: String, unique: true, index: true },
+  channelId: String, channelTitle: String, channelThumb: String,
+  refreshTokenEnc: String, refreshTokenEncrypted: { type: Boolean, default: false },
+  connectedAt: String, updatedAt: String,
 }, { strict: false });
 const settingsSchema = new mongoose.Schema({
   userId: { type: String, unique: true, index: true },
@@ -185,6 +195,7 @@ const MediaFile = mongoose.models.SsMediaFile || mongoose.model('SsMediaFile', m
 const Template = mongoose.models.SsTemplate || mongoose.model('SsTemplate', templateSchema, 'templates');
 const HashtagGroup = mongoose.models.SsHashtagGroup || mongoose.model('SsHashtagGroup', hashtagGroupSchema, 'hashtaggroups');
 const PasswordReset = mongoose.models.SsPasswordReset || mongoose.model('SsPasswordReset', passwordResetSchema, 'passwordresets');
+const YouTube = mongoose.models.SsYouTube || mongoose.model('SsYouTube', youtubeSchema, 'youtube');
 const SettingsDoc = mongoose.models.SsSettings || mongoose.model('SsSettings', settingsSchema, 'settings');
 const InstagramDoc = mongoose.models.SsInstagram || mongoose.model('SsInstagram', instagramSchema, 'instagram');
 const ImportJob = mongoose.models.SsImportJob || mongoose.model('SsImportJob', importJobSchema, 'importjobs');
@@ -385,6 +396,7 @@ async function deleteUserData(userId) {
       Template.deleteMany({ userId }),
       HashtagGroup.deleteMany({ userId }),
       PasswordReset.deleteMany({ userId }),
+      YouTube.deleteOne({ userId }),
       SettingsDoc.deleteOne({ userId }),
       InstagramDoc.deleteOne({ userId }),
       ImportJob.deleteMany({ userId }),
@@ -402,6 +414,8 @@ async function deleteUserData(userId) {
   jsonSave('templates', jsonList('templates').filter((x) => x.userId !== userId));
   jsonSave('hashtagGroups', jsonList('hashtagGroups').filter((x) => x.userId !== userId));
   jsonSave('passwordResets', jsonList('passwordResets').filter((x) => x.userId !== userId));
+  const yt = load(JSON_FILES.youtube, {});
+  if (yt && typeof yt === 'object') { delete yt[userId]; save(JSON_FILES.youtube, yt); }
   const settings = load(JSON_FILES.settings, {});
   if (settings && typeof settings === 'object') { delete settings[userId]; save(JSON_FILES.settings, settings); }
   const ig = load(JSON_FILES.instagram, {});
@@ -684,6 +698,36 @@ async function deletePasswordResetsForUser(userId) {
   await ensureMongo();
   if (isMongo()) { await PasswordReset.deleteMany({ userId }); return; }
   jsonSave('passwordResets', jsonList('passwordResets').filter((x) => x.userId !== userId));
+}
+
+// ---------- youtube connection (one doc per user; JSON = keyed map) ----------
+async function getYouTube(userId) {
+  await ensureMongo();
+  if (!userId) return null;
+  if (isMongo()) {
+    const d = await YouTube.findOne({ userId }).lean();
+    return d ? strip(d) : null;
+  }
+  const all = load(JSON_FILES.youtube, {});
+  return (all && typeof all === 'object' && all[userId]) || null;
+}
+async function saveYouTube(doc) {
+  await ensureMongo();
+  if (isMongo()) {
+    await YouTube.replaceOne({ userId: doc.userId }, { ...doc }, { upsert: true });
+    return doc;
+  }
+  const all = load(JSON_FILES.youtube, {});
+  const map = (all && typeof all === 'object') ? all : {};
+  map[doc.userId] = doc;
+  save(JSON_FILES.youtube, map);
+  return doc;
+}
+async function deleteYouTube(userId) {
+  await ensureMongo();
+  if (isMongo()) { await YouTube.deleteOne({ userId }); return; }
+  const all = load(JSON_FILES.youtube, {});
+  if (all && typeof all === 'object' && all[userId]) { delete all[userId]; save(JSON_FILES.youtube, all); }
 }
 
 // ---------- settings (one doc per user) ----------
@@ -1170,6 +1214,7 @@ module.exports = {
   listTemplates, saveTemplate, deleteTemplate,
   listHashtagGroups, saveHashtagGroup, deleteHashtagGroup,
   createPasswordReset, getPasswordResetByHash, listPasswordResetsForUser, deletePasswordResetsForUser,
+  getYouTube, saveYouTube, deleteYouTube,
   getSettings, saveSettings,
   getInstagram, listInstagram, saveInstagram, clearInstagram,
   getInstagramAccounts, getInstagramAccount, saveInstagramAccount, removeInstagramAccount, setDefaultInstagramAccount,

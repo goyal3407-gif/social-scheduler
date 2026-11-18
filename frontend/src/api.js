@@ -228,6 +228,9 @@ export const api = {
   instagramConnectLink: () => req('/api/instagram/connect-link', { method: 'POST', body: JSON.stringify({}) }),
   instagramIgConnectLink: () => req('/api/instagram/ig-connect-link', { method: 'POST', body: JSON.stringify({}) }),
   disconnectInstagram: (igUserId) => req('/api/instagram/disconnect', { method: 'POST', body: JSON.stringify(igUserId ? { igUserId } : {}) }),
+  youtubeStatus: () => req('/api/youtube/status'),
+  youtubeConnectLink: () => req('/api/youtube/connect-link', { method: 'POST', body: JSON.stringify({}) }),
+  disconnectYouTube: () => req('/api/youtube/disconnect', { method: 'POST', body: JSON.stringify({}) }),
   setDefaultInstagramAccount: (igUserId) => req('/api/instagram/default', { method: 'POST', body: JSON.stringify({ igUserId }) }),
   startInstagramImport: () => req('/api/instagram/import', { method: 'POST', body: JSON.stringify({}) }),
   getInstagramImport: (jobId) => req(`/api/instagram/import/${encodeURIComponent(jobId)}`)
@@ -268,6 +271,12 @@ export async function openInstagramDirectConnect() {
  *  accounts whose Instagram is linked to a Facebook Page. */
 export async function openInstagramConnect() {
   return openConnect(() => api.instagramConnectLink(), '/api/instagram/connect')
+}
+
+/** YouTube channel connect (Phase B) — Google OAuth for the channel,
+ *  NOT app sign-in. Same one-time-link handoff as Instagram. */
+export async function openYouTubeConnect() {
+  return openConnect(() => api.youtubeConnectLink(), '/api/youtube/connect')
 }
 
 /**

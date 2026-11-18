@@ -464,7 +464,7 @@ app.use('/api', ah(async (req, res, next) => {
   // login — e.g. the system browser the Android app hands off to — has
   // no session cookie, so these two GETs must not require one; without
   // valid self-authentication they answer with a friendly HTML page.
-  if (req.method === 'GET' && (req.path === '/instagram/connect' || req.path === '/instagram/callback' || req.path === '/instagram/ig-connect' || req.path === '/instagram/ig-callback')) return next();
+  if (req.method === 'GET' && (req.path === '/instagram/connect' || req.path === '/instagram/callback' || req.path === '/instagram/ig-connect' || req.path === '/instagram/ig-callback' || req.path === '/youtube/connect' || req.path === '/youtube/callback')) return next();
   return requireAuth(req, res, next);
 }));
 
@@ -1929,6 +1929,249 @@ app.get('/api/instagram/ig-callback', ah(async (req, res) => {
   });
 }));
 
+// ---------- YouTube cross-post (Phase B) ----------
+// A CHANNEL connection via Google OAuth — not app sign-in (the app's
+// login stays email/password). Env-gated on YOUTUBE_CLIENT_ID +
+// YOUTUBE_CLIENT_SECRET: with them absent everything below is inert —
+// the status endpoint reports configured:false, connect attempts get a
+// clear "not configured" answer, and the publish leg never runs.
+// The connect flow mirrors Instagram's: a signed one-time link minted
+// by the logged-in app, opened in the system browser (which has no
+// session cookie), with the user bound into the signed OAuth state.
+const YOUTUBE_CLIENT_ID = process.env.YOUTUBE_CLIENT_ID || '';
+const YOUTUBE_CLIENT_SECRET = process.env.YOUTUBE_CLIENT_SECRET || '';
+const YOUTUBE_REDIRECT_URI = process.env.YOUTUBE_REDIRECT_URI || 'https://social-scheduler-one-sandy.vercel.app/api/youtube/callback';
+const YOUTUBE_SCOPES = 'https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly';
+function youtubeConfigured() { return !!(YOUTUBE_CLIENT_ID && YOUTUBE_CLIENT_SECRET); }
+function signYouTubeConnectToken(userId) {
+  const exp = Date.now() + CONNECT_TOKEN_TTL_MS;
+  const payload = `ytconnect.${userId}.${crypto.randomBytes(16).toString('hex')}.${exp}`;
+  const sig = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('hex');
+  return Buffer.from(payload, 'utf8').toString('base64url') + '.' + sig;
+}
+function verifyYouTubeConnectToken(token) {
+  try {
+    if (!token || typeof token !== 'string') return '';
+    const dot = token.lastIndexOf('.');
+    if (dot < 0) return '';
+    const payload = Buffer.from(token.slice(0, dot), 'base64url').toString('utf8');
+    const sig = token.slice(dot + 1);
+    const expected = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('hex');
+    const a = Buffer.from(sig, 'utf8'); const b = Buffer.from(expected, 'utf8');
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return '';
+    const parts = payload.split('.');
+    if (parts.length !== 4 || parts[0] !== 'ytconnect' || !parts[1]) return '';
+    if (!parts[3] || Number(parts[3]) < Date.now()) return '';
+    return parts[1];
+  } catch { return ''; }
+}
+function consumeYouTubeConnectToken(token) {
+  const userId = verifyYouTubeConnectToken(token);
+  if (!userId) return '';
+  let nonce = '';
+  try {
+    const payload = Buffer.from(String(token).slice(0, String(token).lastIndexOf('.')), 'base64url').toString('utf8');
+    nonce = payload.split('.')[2] || '';
+  } catch { return ''; }
+  if (!nonce) return '';
+  const now = Date.now();
+  for (const [k, exp] of usedConnectNonces) if (exp <= now) usedConnectNonces.delete(k);
+  if (usedConnectNonces.has(nonce)) return '';
+  usedConnectNonces.set(nonce, now + CONNECT_TOKEN_TTL_MS);
+  return userId;
+}
+app.get('/api/youtube/status', ah(async (req, res) => {
+  const conn = await db.getYouTube(req.userId).catch(() => null);
+  res.json({
+    ok: true,
+    configured: youtubeConfigured(),
+    connected: !!conn,
+    channelId: (conn && conn.channelId) || '',
+    channelTitle: (conn && conn.channelTitle) || '',
+    channelThumb: (conn && conn.channelThumb) || '',
+    connectedAt: (conn && conn.connectedAt) || '',
+  });
+}));
+app.post('/api/youtube/connect-link', (req, res) => {
+  if (!youtubeConfigured()) return res.status(503).json({ ok: false, error: 'YouTube is not configured on the server yet — the app owner needs to finish the Google setup.' });
+  const proto = isSecureRequest(req) ? 'https' : 'http';
+  const host = req.get('host') || 'social-scheduler-one-sandy.vercel.app';
+  const url = `${proto}://${host}/api/youtube/connect?t=${encodeURIComponent(signYouTubeConnectToken(req.userId))}`;
+  res.json({ ok: true, url });
+});
+app.get('/api/youtube/connect', ah(async (req, res) => {
+  // Self-authenticating like the Instagram connect: session cookie OR
+  // a valid one-time connect link.
+  let userId = '';
+  const sessionUser = await getAuthUser(req).catch(() => null);
+  if (sessionUser) userId = sessionUser.id;
+  if (!userId && req.query && req.query.t) userId = consumeYouTubeConnectToken(String(req.query.t));
+  if (!userId) {
+    return igResultPage(res, 401, {
+      ok: false,
+      title: 'This connect link has expired',
+      message: 'Connect links work for 10 minutes. Go back to the KiluaAI app and tap “Connect YouTube” again — or open KiluaAI in this browser, log in, and connect from the Connections page here.',
+    });
+  }
+  if (!youtubeConfigured()) {
+    return igResultPage(res, 200, { ok: false, title: 'YouTube is not set up yet', message: 'YouTube connecting is not fully set up on the server yet. Let the app owner know to finish the Google setup.' });
+  }
+  const dialog = 'https://accounts.google.com/o/oauth2/v2/auth'
+    + '?client_id=' + encodeURIComponent(YOUTUBE_CLIENT_ID)
+    + '&redirect_uri=' + encodeURIComponent(YOUTUBE_REDIRECT_URI)
+    + '&response_type=code'
+    + '&scope=' + encodeURIComponent(YOUTUBE_SCOPES)
+    + '&access_type=offline'
+    + '&prompt=consent'
+    + '&state=' + encodeURIComponent(signOAuthState(userId));
+  return res.redirect(302, dialog);
+}));
+app.get('/api/youtube/callback', ah(async (req, res) => {
+  const fail = (message) => igResultPage(res, 200, { ok: false, title: 'YouTube was not connected', message });
+  const q = req.query || {};
+  if (q.error) return fail('Google login was cancelled or not approved, so nothing was connected. Go back to the KiluaAI app and tap “Connect YouTube” to try again.');
+  const code = String(q.code || '');
+  const userId = userIdFromOAuthState(String(q.state || ''));
+  if (!code || !userId) return fail('That login link expired or was already used. Go back to the KiluaAI app and tap “Connect YouTube” — then finish the login in one go.');
+  if (!youtubeConfigured()) return fail('YouTube connecting is not fully set up on the server yet. Let the app owner know to finish the Google setup.');
+  let tok = null;
+  try {
+    const r = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ code, client_id: YOUTUBE_CLIENT_ID, client_secret: YOUTUBE_CLIENT_SECRET, redirect_uri: YOUTUBE_REDIRECT_URI, grant_type: 'authorization_code' }).toString(),
+    });
+    tok = await r.json().catch(() => null);
+    if (!r.ok) tok = null;
+  } catch { tok = null; }
+  if (!tok || !tok.access_token || !tok.refresh_token) {
+    return fail('Google did not complete the connection — no lasting access was granted. Try again and approve all the requested permissions.');
+  }
+  let channel = null;
+  try {
+    const r = await fetch('https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true', { headers: { Authorization: 'Bearer ' + tok.access_token } });
+    const j = await r.json().catch(() => null);
+    if (j && Array.isArray(j.items) && j.items[0]) channel = j.items[0];
+  } catch { /* handled below */ }
+  if (!channel || !channel.id) {
+    return fail('No YouTube channel was found for that Google account. Create a YouTube channel for the account first (open YouTube once and create the channel), then connect again.');
+  }
+  const snippet = channel.snippet || {};
+  const thumb = (snippet.thumbnails && snippet.thumbnails.default && snippet.thumbnails.default.url) || '';
+  const existing = await db.getYouTube(userId).catch(() => null);
+  const enc = db.encryptToken(tok.refresh_token);
+  await db.saveYouTube({
+    userId,
+    channelId: String(channel.id),
+    channelTitle: String(snippet.title || ''),
+    channelThumb: String(thumb || ''),
+    refreshTokenEnc: enc.tokenEnc,
+    refreshTokenEncrypted: !!enc.encrypted,
+    connectedAt: (existing && existing.connectedAt) || new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  });
+  return igResultPage(res, 200, {
+    ok: true,
+    title: 'YouTube connected ✓',
+    message: `${snippet.title ? `“${snippet.title}”` : 'Your channel'} is connected — switch back to the KiluaAI app. In the Studio you can now tick “Also post to YouTube” when scheduling a video.`,
+  });
+}));
+app.post('/api/youtube/disconnect', ah(async (req, res) => {
+  await db.deleteYouTube(req.userId);
+  res.json({ ok: true });
+}));
+// Access tokens are minted from the stored refresh token on demand
+// and cached briefly in memory (per instance).
+const ytAccessCache = new Map(); // userId -> { token, exp }
+async function youtubeAccessToken(userId) {
+  const cached = ytAccessCache.get(userId);
+  if (cached && cached.exp > Date.now() + 30000) return cached.token;
+  const conn = await db.getYouTube(userId);
+  if (!conn || !conn.refreshTokenEnc) return '';
+  const refreshToken = db.decryptToken({ tokenEnc: conn.refreshTokenEnc, encrypted: conn.refreshTokenEncrypted });
+  if (!refreshToken) return '';
+  const r = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ client_id: YOUTUBE_CLIENT_ID, client_secret: YOUTUBE_CLIENT_SECRET, grant_type: 'refresh_token', refresh_token: refreshToken }).toString(),
+  });
+  const j = await r.json().catch(() => null);
+  if (!r.ok || !j || !j.access_token) return '';
+  ytAccessCache.set(userId, { token: j.access_token, exp: Date.now() + (Number(j.expires_in) || 3600) * 1000 });
+  return j.access_token;
+}
+// Read the bytes of a post's media for the YouTube upload: app-stored
+// files via /media/<id>, inline data: URLs, or any public https URL
+// (OCI bridge copies and link media included).
+async function fetchPostMediaBytes(post) {
+  const url = String((post && post.mediaUrl) || '');
+  const m = url.match(/\/media\/([A-Za-z0-9_-]{6,})/);
+  if (m) {
+    const f = await db.getMediaFile(m[1]).catch(() => null);
+    if (f && f.buffer && f.buffer.length) return { buffer: f.buffer, contentType: f.contentType || 'video/mp4' };
+  }
+  if (url.startsWith('data:')) {
+    const dm = url.match(/^data:([^;,]+)?(;base64)?,([\s\S]*)$/);
+    if (dm) {
+      const buffer = dm[2] ? Buffer.from(dm[3], 'base64') : Buffer.from(decodeURIComponent(dm[3]), 'utf8');
+      if (buffer.length) return { buffer, contentType: dm[1] || 'video/mp4' };
+    }
+    return null;
+  }
+  if (/^https?:\/\//i.test(url)) {
+    const r = await fetch(url);
+    if (r.ok) {
+      const buffer = Buffer.from(await r.arrayBuffer());
+      if (buffer.length) return { buffer, contentType: r.headers.get('content-type') || 'video/mp4' };
+    }
+  }
+  return null;
+}
+// Resumable upload of one video. Returns the YouTube video id.
+// Until Google approves the app (audit), uploads are locked to
+// Private — publishAt carries the scheduling intent for posts that
+// are published ahead of their scheduled time.
+async function uploadVideoToYouTube(userId, post, bytes) {
+  const token = await youtubeAccessToken(userId);
+  if (!token) throw new Error('the YouTube connection needs reconnecting (Connections page)');
+  const yt = (post && post.youtube) || {};
+  const caption = String(post.caption || '');
+  const title = String(yt.title || caption.split('\n')[0] || 'KiluaAI post').trim().slice(0, 100) || 'KiluaAI post';
+  const description = [caption, String(post.hashtags || '')].filter((s) => s && s.trim()).join('\n\n').slice(0, 4900);
+  const status = { privacyStatus: 'private', selfDeclaredMadeForKids: false };
+  const schedMs = new Date(post.scheduleTime || 0).getTime();
+  if (Number.isFinite(schedMs) && schedMs > Date.now() + 60000) status.publishAt = new Date(schedMs).toISOString();
+  const metadata = { snippet: { title, description }, status };
+  const init = await fetch('https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status', {
+    method: 'POST',
+    headers: {
+      Authorization: 'Bearer ' + token,
+      'Content-Type': 'application/json; charset=UTF-8',
+      'X-Upload-Content-Type': bytes.contentType || 'video/mp4',
+      'X-Upload-Content-Length': String(bytes.buffer.length),
+    },
+    body: JSON.stringify(metadata),
+  });
+  if (!init.ok) {
+    const j = await init.json().catch(() => null);
+    const reason = (j && j.error && j.error.message) || ('HTTP ' + init.status);
+    throw new Error('YouTube upload was refused: ' + String(reason).slice(0, 200));
+  }
+  const location = init.headers.get('location');
+  if (!location) throw new Error('YouTube did not start the upload session');
+  const put = await fetch(location, {
+    method: 'PUT',
+    headers: { 'Content-Type': bytes.contentType || 'video/mp4', 'Content-Length': String(bytes.buffer.length) },
+    body: bytes.buffer,
+  });
+  const pj = await put.json().catch(() => null);
+  if (!put.ok || !pj || !pj.id) {
+    const reason = (pj && pj.error && pj.error.message) || ('HTTP ' + put.status);
+    throw new Error('YouTube upload failed: ' + String(reason).slice(0, 200));
+  }
+  return String(pj.id);
+}
+
 // ---------- Instagram import (profile + existing media) ----------
 // Runs as a background job so the UI can poll progress. Fetches the profile
 // (username, picture, bio, media count) and pages through the account's
@@ -2082,7 +2325,19 @@ function validPostInput(b, { requireMedia = true } = {}) {
     if (Number.isNaN(d.getTime())) return 'That date/time is not valid — pick a date and time from the calendar picker.';
   }
   if (b.hashtags && b.hashtags.split(/[\s,]+/).filter((t) => t.replace(/^#/, '').trim()).length > 30) return 'Instagram allows at most 30 hashtags per post — remove some and try again.';
+  // YouTube cross-post setting (Phase B): a small object, never a
+  // string/array; the title is capped at YouTube's 100 characters.
+  if (b.youtube !== undefined) {
+    if (!b.youtube || typeof b.youtube !== 'object' || Array.isArray(b.youtube)) return 'That YouTube setting is not valid.';
+    if (b.youtube.title !== undefined && typeof b.youtube.title !== 'string') return 'That YouTube title is not valid.';
+    if (b.youtube.title && b.youtube.title.length > 100) return 'YouTube titles can be at most 100 characters — shorten it and try again.';
+  }
   return null;
+}
+// Normalized YouTube cross-post setting stored on a post.
+function normalizeYouTubeSetting(y) {
+  if (!y || typeof y !== 'object' || Array.isArray(y)) return { enabled: false, title: '' };
+  return { enabled: !!y.enabled, title: typeof y.title === 'string' ? y.title.slice(0, 100) : '' };
 }
 // Which Instagram account a new/edited post targets. An explicitly
 // requested account must be one of the user's connected accounts —
@@ -2133,6 +2388,11 @@ function buildPost(b, userId, target = {}) {
     // Poster frame for video posts (captured client-side at upload).
     // Only app-served or web URLs are kept — anything else is dropped.
     posterUrl: typeof b.posterUrl === 'string' && b.posterUrl.length <= 2000 && /^(\/|https?:\/\/)/i.test(b.posterUrl) ? b.posterUrl : '',
+    // YouTube cross-post (Phase B): { enabled, title } + outcome fields
+    // the publish leg fills in (youtubeVideoId / youtubeStatus /
+    // youtubeError start empty).
+    youtube: normalizeYouTubeSetting(b.youtube),
+    youtubeVideoId: '', youtubeStatus: '', youtubeError: '',
     createdAt: new Date().toISOString(),
   };
 }
@@ -2192,6 +2452,7 @@ app.patch('/api/posts/:id', ah(async (req, res) => {
   const allowed = ['mediaUrl', 'mediaType', 'caption', 'hashtags', 'cta', 'platform', 'scheduleTime', 'format', 'posterUrl'];
   const patch = {};
   for (const k of allowed) if (b[k] !== undefined) patch[k] = b[k];
+  if (b.youtube !== undefined) patch.youtube = normalizeYouTubeSetting(b.youtube);
   // Retargeting a post to another connected account (multi-account):
   // the account must be connected; an empty value clears the target
   // (the post then publishes via the default account).
@@ -2539,6 +2800,31 @@ async function attemptPublishLocked(userId, post, ig, publicBaseUrl) {
       if (item) await db.updateMedia(userId, item.id, { usedCount: (item.usedCount || 0) + 1 });
     } catch { /* usedCount is a nicety, never fail a publish over it */ }
     await notifyUser(userId, 'publish-success', post.id, `Published to Instagram: “${String(post.caption || 'Untitled post').slice(0, 80)}”`);
+    // YouTube cross-post (Phase B): upload the same video alongside —
+    // BEFORE the server-copy cleanup below, which may delete the very
+    // bytes the upload needs. A YouTube failure NEVER fails or
+    // duplicates the Instagram post: it is recorded on the post and
+    // reported through the normal notification path. A post that
+    // already has a youtubeVideoId is never uploaded twice.
+    if (post.youtube && post.youtube.enabled && !post.youtubeVideoId) {
+      const ytLabel = String(post.caption || 'Untitled post').slice(0, 80);
+      try {
+        if ((post.mediaType || 'video') === 'image') {
+          await db.updatePost(userId, post.id, { youtubeStatus: 'skipped', youtubeError: '' });
+          await notifyUser(userId, 'youtube-skipped', post.id, `YouTube cross-post skipped for “${ytLabel}” — YouTube accepts videos only, and this post is an image. The Instagram post is live.`);
+        } else {
+          const bytes = await fetchPostMediaBytes(post);
+          if (!bytes) throw new Error('the media file could not be read for the YouTube upload');
+          const videoId = await uploadVideoToYouTube(userId, post, bytes);
+          await db.updatePost(userId, post.id, { youtubeVideoId: videoId, youtubeStatus: 'uploaded', youtubeError: '' });
+          await notifyUser(userId, 'youtube-success', post.id, `Also posted to YouTube (private): “${ytLabel}”`);
+        }
+      } catch (e) {
+        const reason = String((e && e.message) || e || 'unknown error').slice(0, 300);
+        try { await db.updatePost(userId, post.id, { youtubeStatus: 'failed', youtubeError: reason }); } catch { /* post may be gone */ }
+        try { await notifyUser(userId, 'youtube-failed', post.id, `Instagram posted fine, but the YouTube upload failed for “${ytLabel}”: ${reason}. The Instagram post is live — nothing was duplicated.`); } catch { /* notifications never fail a publish */ }
+      }
+    }
     // The server was only a bridge for uploaded media: now that
     // Instagram has the post, drop the stored copy (unless the user
     // keeps copies, or another unpublished post still needs the file).

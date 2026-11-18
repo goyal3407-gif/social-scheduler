@@ -139,6 +139,17 @@ export function StatusTracker({ post, publishing }) {
       })}
       {post.status === 'failed' && post.retryPending && <span className="trk-note">auto-retry pending</span>}
       {published && post.liveUrl && <a className="trk-live" href={post.liveUrl} target="_blank" rel="noreferrer">View on Instagram</a>}
+      {post.youtube?.enabled && (
+        <span className="trk-note" title={post.youtubeError || undefined}>
+          {post.youtubeStatus === 'uploaded' && post.youtubeVideoId
+            ? <>· YouTube: <a className="trk-live" href={`https://www.youtube.com/watch?v=${post.youtubeVideoId}`} target="_blank" rel="noreferrer">uploaded (private)</a></>
+            : post.youtubeStatus === 'failed'
+              ? '· YouTube: upload failed — Instagram is live'
+              : post.youtubeStatus === 'skipped'
+                ? '· YouTube: skipped (videos only)'
+                : '· YouTube: also posting'}
+        </span>
+      )}
     </div>
   )
 }

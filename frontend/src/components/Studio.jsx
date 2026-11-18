@@ -1,10 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { captionScore, countHashtags, fromLocalInputValue, nextBestTime, toLocalInputValue } from '../api.js'
+import { api, captionScore, countHashtags, fromLocalInputValue, nextBestTime, toLocalInputValue } from '../api.js'
 import { IconWarn, IconCheck, IconHeart, IconComment, IconSend, IconBookmark } from './icons.jsx'
 
 const PLATFORMS = ['Instagram', 'YouTube', 'Facebook', 'TikTok']
 const FORMATS = ['REELS', 'FEED', 'STORY']
-const EMPTY = { mediaUrl: '', mediaType: 'video', posterUrl: '', caption: '', hashtags: '', cta: '', platform: 'Instagram', scheduleTime: '', status: 'scheduled', format: 'REELS', igAccountId: '', igAccountUsername: '' }
+const EMPTY = { mediaUrl: '', mediaType: 'video', posterUrl: '', caption: '', hashtags: '', cta: '', platform: 'Instagram', scheduleTime: '', status: 'scheduled', format: 'REELS', igAccountId: '', igAccountUsername: '', youtubeEnabled: false, youtubeTitle: '' }
+// A post's stored YouTube setting is an object ({ enabled, title });
+// the form keeps it as two flat fields and submit() folds them back.
+const withYouTubeFields = (base) => {
+  const y = (base && base.youtube) || {}
+  const f = { ...EMPTY, ...base, youtubeEnabled: !!y.enabled, youtubeTitle: y.title || '' }
+  delete f.youtube
+  return f
+}
 // Built-in starter templates (server seeds) have ids tpl-1, tpl-2, … —
 // they are not stored per-user, so they cannot be deleted.
 const isSeedTemplate = (t) => /^tpl-\d+$/.test(String(t?.id || ''))
@@ -21,7 +29,17 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
   const [tagName, setTagName] = useState('')
   const [showTagSave, setShowTagSave] = useState(false)
   const [bankMsg, setBankMsg] = useState('')
+  const [ytStatus, setYtStatus] = useState(null)
   const restoredDraftRef = useRef(false)
+
+  // YouTube cross-post availability (Phase B): the toggle renders only
+  // when a channel is connected; a configured-but-unconnected server
+  // shows a hint pointing at the Connections page.
+  useEffect(() => {
+    let alive = true
+    api.youtubeStatus().then((s) => { if (alive) setYtStatus(s) }).catch(() => { if (alive) setYtStatus({ configured: false, connected: false }) })
+    return () => { alive = false }
+  }, [])
 
   // Caption draft autosave (new posts only): the in-progress composer
   // is kept in localStorage per Instagram account and restored when
@@ -37,9 +55,9 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
 
   useEffect(() => {
     if (editing?.id) {
-      setForm({ ...EMPTY, ...editing, scheduleTime: editing.scheduleTime || '' })
+      setForm(withYouTubeFields({ ...editing, scheduleTime: editing.scheduleTime || '' }))
     } else if (seed) {
-      setForm({ ...EMPTY, ...seed, scheduleTime: seed.scheduleTime || '' })
+      setForm(withYouTubeFields({ ...seed, scheduleTime: seed.scheduleTime || '' }))
     } else {
       // Restore the autosaved draft for the default account, if any.
       let initial = EMPTY
@@ -50,7 +68,7 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
           if (draft && (draft.caption || draft.mediaUrl || draft.hashtags)) initial = { ...EMPTY, ...draft, scheduleTime: draft.scheduleTime || '' }
         }
       } catch { /* no usable draft */ }
-      setForm(initial)
+      setForm(withYouTubeFields(initial))
     }
     restoredDraftRef.current = true
     setStep(1); setError(''); setSavedNote(''); setBankMsg('')
@@ -144,8 +162,13 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
       hashtags: form.hashtags.trim(),
       cta: form.cta.trim(),
       scheduleTime: form.scheduleTime ? (form.scheduleTime.includes('T') && !form.scheduleTime.endsWith('Z') && form.scheduleTime.length <= 16 ? fromLocalInputValue(form.scheduleTime) : form.scheduleTime) : '',
-      status
+      status,
+      // Fold the flat YouTube fields back into the stored object. The
+      // toggle only counts when a channel is actually connected.
+      youtube: { enabled: Boolean(form.youtubeEnabled && ytStatus?.connected), title: (form.youtubeTitle || '').trim() },
     }
+    delete payload.youtubeEnabled
+    delete payload.youtubeTitle
     try {
       await onSave(payload, Boolean(editing?.id))
       if (!editing?.id) clearDrafts()
@@ -383,6 +406,27 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
                   </select>
                   <p className="muted small" style={{ marginTop: 6 }}>This post publishes to the chosen account only.</p>
                 </div>
+              )}
+              {ytStatus?.connected && (
+                <div style={{ marginTop: 16, borderTop: '1px solid var(--line)', paddingTop: 14 }}>
+                  <label style={{ display: 'flex', gap: 8, alignItems: 'center', cursor: 'pointer' }}>
+                    <input type="checkbox" checked={Boolean(form.youtubeEnabled)} onChange={(e) => set({ youtubeEnabled: e.target.checked })} style={{ width: 'auto' }} />
+                    <span><b>Also post to YouTube</b> <span className="muted small">({ytStatus.channelTitle || 'your channel'})</span></span>
+                  </label>
+                  {form.youtubeEnabled && (
+                    <div style={{ marginTop: 10 }}>
+                      <label htmlFor="youtubeTitle">YouTube title <span className="muted">(blank = first line of the caption)</span></label>
+                      <input id="youtubeTitle" maxLength={100} placeholder="Title viewers will see on YouTube" value={form.youtubeTitle} onChange={(e) => set({ youtubeTitle: e.target.value })} />
+                      <p className="muted small" style={{ marginTop: 6 }}>The caption + hashtags become the YouTube description. Videos only — an image post skips YouTube. Until Google approves the app, YouTube posts land as Private/scheduled — one tap to make public.</p>
+                    </div>
+                  )}
+                  {!form.youtubeEnabled && (
+                    <p className="muted small" style={{ marginTop: 6 }}>The same video also goes to your YouTube channel at the same time.</p>
+                  )}
+                </div>
+              )}
+              {ytStatus && !ytStatus.connected && ytStatus.configured && (
+                <p className="muted small" style={{ marginTop: 14 }}>Want this on YouTube too? Connect your channel on the <b>Connections</b> page, then tick “Also post to YouTube” here.</p>
               )}
               <label htmlFor="scheduleTime" style={{ marginTop: 14 }}>Schedule time</label>
               <input id="scheduleTime" type="datetime-local" value={form.scheduleTime && form.scheduleTime.length > 16 ? toLocalInputValue(form.scheduleTime) : form.scheduleTime} onChange={(e) => set({ scheduleTime: e.target.value })} />
