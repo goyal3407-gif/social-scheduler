@@ -73,7 +73,7 @@ export function Empty({ title, body, action }) {
   )
 }
 
-export function PostRow({ post, onEdit, onDelete, onPublish, publishing, onDuplicate, onReschedule, onRescheduleNextBest }) {
+export function PostRow({ post, onEdit, onDelete, onPublish, publishing, onDuplicate, onPostAgain, onReschedule, onRescheduleNextBest }) {
   const [menuOpen, setMenuOpen] = useState(false)
   const menuRef = useRef(null)
   useEffect(() => {
@@ -88,7 +88,7 @@ export function PostRow({ post, onEdit, onDelete, onPublish, publishing, onDupli
     }
   }, [menuOpen])
   const act = (fn, arg) => () => { setMenuOpen(false); if (fn) fn(post, arg) }
-  const hasMenu = Boolean(onDuplicate || onReschedule || onRescheduleNextBest || onEdit || onDelete)
+  const hasMenu = Boolean(onDuplicate || onPostAgain || onReschedule || onRescheduleNextBest || onEdit || onDelete)
   return (
     <div className="post-row">
       <Thumb post={post} />
@@ -116,6 +116,7 @@ export function PostRow({ post, onEdit, onDelete, onPublish, publishing, onDupli
               <button type="button" className="btn ghost small post-menu-btn" aria-label="More actions" aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => setMenuOpen((o) => !o)}>⋯</button>
               {menuOpen && (
                 <div className="post-menu" role="menu">
+                  {onPostAgain && <button type="button" role="menuitem" onClick={act(onPostAgain)}>Post again</button>}
                   {onDuplicate && <button type="button" role="menuitem" onClick={act(onDuplicate)}>Duplicate</button>}
                   {onReschedule && post.status !== 'published' && <button type="button" role="menuitem" onClick={act(onReschedule, { addDays: 1 })}>+1 day</button>}
                   {onRescheduleNextBest && post.status !== 'published' && <button type="button" role="menuitem" onClick={act(onRescheduleNextBest)}>Next best time</button>}

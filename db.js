@@ -40,6 +40,7 @@ function save(name, data) {
 const JSON_FILES = {
   users: 'users.json', sessions: 'sessions.json', posts: 'posts.json',
   media: 'media.json', mediaFiles: 'media-files.json', templates: 'templates.json', settings: 'settings.json',
+  hashtagGroups: 'hashtag-groups.json',
   instagram: 'instagram.json', importJobs: 'import-jobs.json',
   notifications: 'notifications.json', uploadSessions: 'upload-sessions.json',
 };
@@ -91,6 +92,14 @@ const mediaFileSchema = new mongoose.Schema({
 const templateSchema = new mongoose.Schema({
   id: { type: String, unique: true, index: true },
   userId: { type: String, index: true }, name: String, text: String,
+});
+// Hashtag groups (the composer's hashtag bank): a named bundle of
+// hashtags the user appends to a caption in one tap. Per-user, like
+// templates.
+const hashtagGroupSchema = new mongoose.Schema({
+  id: { type: String, unique: true, index: true },
+  userId: { type: String, index: true }, name: String, tags: String,
+  createdAt: String,
 });
 const settingsSchema = new mongoose.Schema({
   userId: { type: String, unique: true, index: true },
@@ -164,6 +173,7 @@ const Post = mongoose.models.SsPost || mongoose.model('SsPost', postSchema, 'pos
 const Media = mongoose.models.SsMedia || mongoose.model('SsMedia', mediaSchema, 'media');
 const MediaFile = mongoose.models.SsMediaFile || mongoose.model('SsMediaFile', mediaFileSchema, 'mediafiles');
 const Template = mongoose.models.SsTemplate || mongoose.model('SsTemplate', templateSchema, 'templates');
+const HashtagGroup = mongoose.models.SsHashtagGroup || mongoose.model('SsHashtagGroup', hashtagGroupSchema, 'hashtaggroups');
 const SettingsDoc = mongoose.models.SsSettings || mongoose.model('SsSettings', settingsSchema, 'settings');
 const InstagramDoc = mongoose.models.SsInstagram || mongoose.model('SsInstagram', instagramSchema, 'instagram');
 const ImportJob = mongoose.models.SsImportJob || mongoose.model('SsImportJob', importJobSchema, 'importjobs');
@@ -362,6 +372,7 @@ async function deleteUserData(userId) {
       Media.deleteMany({ userId }),
       MediaFile.deleteMany({ userId }),
       Template.deleteMany({ userId }),
+      HashtagGroup.deleteMany({ userId }),
       SettingsDoc.deleteOne({ userId }),
       InstagramDoc.deleteOne({ userId }),
       ImportJob.deleteMany({ userId }),
@@ -377,6 +388,7 @@ async function deleteUserData(userId) {
   jsonSave('media', jsonList('media').filter((x) => x.userId !== userId));
   jsonSave('mediaFiles', jsonList('mediaFiles').filter((x) => x.userId !== userId));
   jsonSave('templates', jsonList('templates').filter((x) => x.userId !== userId));
+  jsonSave('hashtagGroups', jsonList('hashtagGroups').filter((x) => x.userId !== userId));
   const settings = load(JSON_FILES.settings, {});
   if (settings && typeof settings === 'object') { delete settings[userId]; save(JSON_FILES.settings, settings); }
   const ig = load(JSON_FILES.instagram, {});
@@ -597,6 +609,45 @@ async function saveTemplate(tpl) {
   await ensureMongo();
   if (isMongo()) { await Template.create(tpl); return tpl; }
   const list = jsonList('templates'); list.push(tpl); jsonSave('templates', list); return tpl;
+}
+async function deleteTemplate(userId, id) {
+  await ensureMongo();
+  const owner = await ownerId();
+  if (isMongo()) {
+    const r = await Template.deleteOne({ id, ...scopeFilter(userId, owner) });
+    return r.deletedCount > 0;
+  }
+  const list = jsonList('templates');
+  const kept = list.filter((x) => !(x.id === id && visibleTo([x], userId, owner).length));
+  if (kept.length === list.length) return false;
+  jsonSave('templates', kept);
+  return true;
+}
+
+// ---------- hashtag groups (composer hashtag bank) ----------
+async function listHashtagGroups(userId) {
+  await ensureMongo();
+  const owner = await ownerId();
+  if (isMongo()) return stripAll(await HashtagGroup.find(scopeFilter(userId, owner)).lean());
+  return visibleTo(jsonList('hashtagGroups'), userId, owner);
+}
+async function saveHashtagGroup(group) {
+  await ensureMongo();
+  if (isMongo()) { await HashtagGroup.create(group); return group; }
+  const list = jsonList('hashtagGroups'); list.push(group); jsonSave('hashtagGroups', list); return group;
+}
+async function deleteHashtagGroup(userId, id) {
+  await ensureMongo();
+  const owner = await ownerId();
+  if (isMongo()) {
+    const r = await HashtagGroup.deleteOne({ id, ...scopeFilter(userId, owner) });
+    return r.deletedCount > 0;
+  }
+  const list = jsonList('hashtagGroups');
+  const kept = list.filter((x) => !(x.id === id && visibleTo([x], userId, owner).length));
+  if (kept.length === list.length) return false;
+  jsonSave('hashtagGroups', kept);
+  return true;
 }
 
 // ---------- settings (one doc per user) ----------
@@ -1080,7 +1131,8 @@ module.exports = {
   listPosts, getPost, savePost, savePostsBulk, updatePost, deletePost,
   listMedia, saveMedia, saveMediaBulk, updateMedia, deleteMedia,
   saveMediaFile, getMediaFile, deleteMediaFile,
-  listTemplates, saveTemplate,
+  listTemplates, saveTemplate, deleteTemplate,
+  listHashtagGroups, saveHashtagGroup, deleteHashtagGroup,
   getSettings, saveSettings,
   getInstagram, listInstagram, saveInstagram, clearInstagram,
   getInstagramAccounts, getInstagramAccount, saveInstagramAccount, removeInstagramAccount, setDefaultInstagramAccount,

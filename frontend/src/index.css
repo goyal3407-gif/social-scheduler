@@ -2,6 +2,7 @@
   --bg:#f4f2ee; --surface:#ffffff; --surface-2:#faf9f7; --ink:#14141f; --ink-2:#55565f;
   --muted:#6f7080; --line:#e7e4de; --line-2:#efede8;
   --brand:#6d5cff; --brand-2:#a855f7; --brand-soft:#efedff;
+  --gold:#c9a227; --gold-soft:#f7efce;
   --green:#0e9f6e; --green-soft:#dcf5ea; --amber:#b45309; --amber-soft:#fef0d6;
   --red:#dc2626; --red-soft:#fde8e8; --blue:#2563eb; --blue-soft:#dbeafe;
   --shadow:0 10px 30px rgba(20,20,31,.08); --shadow-sm:0 2px 10px rgba(20,20,31,.06);
@@ -12,6 +13,7 @@
   --bg:#0f0f1a; --surface:#181826; --surface-2:#1f1f31; --ink:#f2f1fa; --ink-2:#b9b9c9;
   --muted:#9a9ab0; --line:#2a2a3d; --line-2:#262636;
   --brand:#8b7cff; --brand-2:#c084fc; --brand-soft:#26264d;
+  --gold:#d4af37; --gold-soft:#38300f;
   --green:#34d399; --green-soft:#0d2b21; --amber:#fbbf24; --amber-soft:#33270a;
   --red:#f87171; --red-soft:#3a1717; --blue:#60a5fa; --blue-soft:#17233d;
   --shadow:0 10px 30px rgba(0,0,0,.45); --shadow-sm:0 2px 10px rgba(0,0,0,.35);
@@ -37,7 +39,7 @@ label{font-size:12.5px;font-weight:600;color:var(--ink-2);display:block;margin-b
 textarea{resize:vertical;min-height:90px}
 ::placeholder{color:var(--muted)}
 
-.app{min-height:100vh;padding-bottom:calc(130px + env(safe-area-inset-bottom, 0px))}
+.app{min-height:100vh;padding-bottom:40px}
 .preview-card{position:sticky;top:76px}
 @media(max-width:820px){.preview-card{position:static}}
 .wrap{max-width:1120px;margin:0 auto;padding:0 18px}
@@ -128,10 +130,6 @@ textarea{resize:vertical;min-height:90px}
 .small{font-size:12.5px}
 .mt{margin-top:14px}.mt2{margin-top:22px}.mb{margin-bottom:12px}
 
-.dock{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(18px + env(safe-area-inset-bottom, 0px));z-index:50;display:flex;align-items:center;gap:4px;background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:6px;box-shadow:0 14px 40px rgba(0,0,0,.22);max-width:calc(100vw - 20px);overflow-x:auto}
-.dock-btn{display:flex;flex-direction:column;align-items:center;gap:2px;border:none;background:transparent;color:var(--muted);padding:7px 11px;border-radius:999px;font-size:10.5px;font-weight:600;white-space:nowrap}
-.dock-btn.active{color:var(--brand);background:var(--brand-soft)}
-.dock-create{width:48px;height:48px;border-radius:50%;border:none;background:linear-gradient(135deg,var(--brand),var(--brand-2));color:#fff;display:grid;place-items:center;flex:none;box-shadow:0 6px 16px rgba(109,92,255,.4);margin:0 4px}
 
 .cal-head{display:grid;grid-template-columns:repeat(7,1fr);gap:6px;margin-bottom:6px}
 .cal-head span{font-size:11.5px;font-weight:700;color:var(--muted);text-align:center;text-transform:uppercase;letter-spacing:.05em}
@@ -171,7 +169,7 @@ textarea{resize:vertical;min-height:90px}
 .step.active{border-color:var(--brand);background:var(--brand-soft)}
 .step-num{width:22px;height:22px;border-radius:50%;background:var(--ink);color:var(--bg);display:inline-grid;place-items:center;font-size:11px;font-weight:700;margin-right:6px}
 .step.active .step-num{background:var(--brand);color:#fff}
-.sticky-bar{position:sticky;bottom:92px;z-index:30;background:var(--surface);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:12px 14px;display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-top:18px}
+.sticky-bar{position:sticky;bottom:16px;z-index:30;background:var(--surface);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:12px 14px;display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-top:18px}
 .score-wrap{display:flex;align-items:center;gap:10px}
 .score-ring{width:46px;height:46px;border-radius:50%;display:grid;place-items:center;font-weight:800;font-size:13px;font-family:var(--font-head);background:conic-gradient(var(--brand) var(--p,0%),var(--line-2) 0)}
 .score-ring i{width:36px;height:36px;border-radius:50%;background:var(--surface);display:grid;place-items:center;font-style:normal}
@@ -226,17 +224,6 @@ td{max-width:220px;overflow:hidden;text-overflow:ellipsis}
 .modal-bg{position:fixed;inset:0;background:rgba(10,10,20,.55);z-index:80;display:grid;place-items:center;padding:18px}
 .modal{background:var(--surface);border-radius:20px;padding:22px;max-width:520px;width:100%;max-height:88vh;overflow:auto;box-shadow:var(--shadow)}
 
-/* Mobile dock (must come AFTER the base .dock rules above, or the cascade
-   puts the base padding/font back): icons only, so all 8 tabs + create fit
-   in 390px without scrolling — otherwise the last tabs (AI Studio,
-   Settings) sit off-screen and cannot be tapped. Labels stay on desktop;
-   screen readers still get the text. */
-@media(max-width:520px){
-  .dock{gap:2px;padding:5px}
-  .dock .dock-btn{font-size:0;gap:0;padding:8px 9px}
-  .dock .dock-create{width:44px;height:44px;margin:0 2px}
-}
-
 /* Mobile top bar: the full "Social Scheduler" wordmark + IG pill + buttons
    do not fit in 390px — the wordmark was cut mid-word. Shrink the mark
    and show only the IG status dot on phones (full status still shows on
@@ -259,28 +246,15 @@ td{max-width:220px;overflow:hidden;text-overflow:ellipsis}
    Desktop layout is unchanged.
    ============================================================ */
 *{-webkit-tap-highlight-color:transparent}
-button,.dock-btn,.tab{touch-action:manipulation}
-.dock{user-select:none;-webkit-user-select:none}
+button,.tab{touch-action:manipulation}
 .device-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-top:1px solid var(--line-2)}
 .device-row:first-child{border-top:none;padding-top:2px}
 .device-row b{display:block;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:46vw}
 .device-row .muted{display:block}
 
 @media(max-width:640px){
-  /* Tab bar: edge-to-edge, labels back on, active tab gets a pill +
-     a small bar above it — like a native app tab bar. */
-  .dock{left:0;right:0;transform:none;bottom:0;width:100%;max-width:none;
-    border-radius:0;border-left:none;border-right:none;border-bottom:none;
-    justify-content:space-between;gap:0;padding:6px 4px calc(6px + env(safe-area-inset-bottom, 0px));
-    box-shadow:0 -8px 30px rgba(0,0,0,.14);overflow-x:visible}
-  .dock .dock-btn{font-size:9.5px;gap:3px;padding:7px 2px;min-width:0;flex:1;position:relative;border-radius:12px;min-height:50px;justify-content:center}
-  .dock .dock-btn.active{background:transparent;color:var(--brand)}
-  .dock .dock-btn.active::before{content:"";position:absolute;top:-6px;left:50%;transform:translateX(-50%);width:22px;height:3px;border-radius:99px;background:linear-gradient(90deg,var(--brand),var(--brand-2))}
-  .dock .dock-btn.active svg{background:var(--brand-soft);border-radius:10px;padding:3px;box-sizing:content-box}
-  .dock .dock-create{width:46px;height:46px;margin:0 2px;align-self:center}
-  .dock-label.dock-label-wrap{white-space:pre-line;overflow:visible;text-overflow:clip}
-  .app{padding-bottom:calc(96px + env(safe-area-inset-bottom, 0px))}
-  .sticky-bar{bottom:84px}
+  .app{padding-bottom:calc(28px + env(safe-area-inset-bottom, 0px))}
+  .sticky-bar{bottom:12px}
 
   /* Touch targets + no iOS zoom on focus (inputs need >=16px). */
   input,select,textarea{font-size:16px}
@@ -304,7 +278,7 @@ button,.dock-btn,.tab{touch-action:manipulation}
   .post-row{gap:9px;padding:8px 0}
   .post-foot .btn.small{min-height:32px;padding-top:6px;padding-bottom:6px}
   .post-foot{margin-top:4px}
-  .post-menu{position:fixed;left:12px;right:12px;top:auto;bottom:calc(84px + env(safe-area-inset-bottom, 0px));min-width:0}
+  .post-menu{position:fixed;left:12px;right:12px;top:auto;bottom:calc(12px + env(safe-area-inset-bottom, 0px));min-width:0}
   .post-menu button{padding:12px}
 
   /* Media grid: two comfortable columns on phones. */
@@ -321,7 +295,6 @@ button,.dock-btn,.tab{touch-action:manipulation}
 }
 
 @media(max-width:380px){
-  .dock .dock-btn{font-size:8.5px}
   .media-grid{grid-template-columns:repeat(2,1fr);gap:8px}
 }
 
@@ -356,11 +329,67 @@ button,.dock-btn,.tab{touch-action:manipulation}
 .drawer-create{color:var(--brand)}
 .drawer-create svg{color:var(--brand)}
 .drawer-foot{border-top:1px solid var(--line-2);padding-top:12px}
-/* Dock labels can never push a tab off-screen: they shrink + ellipsis. */
-.dock-btn{min-width:0}
-.dock-btn svg{flex:none}
-.dock-label{display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-/* …except labels marked for wrapping (AI Studio): on phone-width
-   docks they render on two short lines that fit the narrow slot in
-   full, with no ellipsis at all (see the max-width:640px block). */
-.dock-label-wrap{line-height:1.15;text-align:center}
+
+/* ============================================================
+   REDESIGN — minimal "Muse-style" shell (2026-11-18):
+   light off-white surfaces, thin borders, no heavy cards,
+   gold accents. Desktop gets a TOP navigation bar; phones and
+   the app get the slim top bar + burger drawer. There is NO
+   bottom tab bar anywhere.
+   ============================================================ */
+
+/* --- Auth (login / sign-up): narrow column, no card --- */
+.auth-wrap{max-width:400px;margin:0 auto;padding:9vh 18px 40px}
+.auth-head{text-align:center;margin-bottom:26px}
+.auth-logo{width:52px;height:52px;border-radius:14px;margin:0 auto 14px}
+.auth-wordmark{font-size:27px;letter-spacing:-.02em}
+.auth-head p{margin-top:6px;font-size:14px}
+.auth-wrap label{margin-top:0}
+.auth-switch{border:none;background:transparent;color:var(--gold);font-weight:700;padding:0;font-size:12.5px;cursor:pointer}
+.auth-switch:hover{text-decoration:underline}
+
+/* --- Desktop top navigation --- */
+.topnav{display:flex;align-items:center;gap:2px;margin:0 auto}
+.topnav button{border:none;background:transparent;color:var(--ink-2);font-size:13.5px;font-weight:600;padding:8px 11px;border-radius:999px;white-space:nowrap}
+.topnav button:hover{color:var(--ink);background:var(--surface-2)}
+.topnav button.active{color:var(--ink);background:var(--surface);box-shadow:inset 0 0 0 1px var(--line)}
+.topnav-create{flex:none}
+@media(max-width:900px){
+  .topnav{display:none}
+  .topnav-create{display:none}
+}
+
+/* --- Avatar / account menu --- */
+.avatar-wrap{position:relative;flex:none}
+.avatar-btn{width:38px;height:38px;border-radius:50%;border:2px solid var(--gold);background:#0e1325;color:#f5d67b;font-weight:800;font-size:15px;display:grid;place-items:center;cursor:pointer;padding:0}
+.avatar-backdrop{position:fixed;inset:0;z-index:60;background:transparent}
+.avatar-menu{position:absolute;right:0;top:calc(100% + 8px);z-index:61;min-width:210px;background:var(--surface);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:6px;display:flex;flex-direction:column}
+.avatar-email{padding:8px 10px 2px;font-weight:700;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.avatar-menu button,.avatar-menu a{display:block;width:100%;text-align:left;padding:9px 10px;border:none;background:transparent;border-radius:8px;font-size:13.5px;font-weight:600;color:var(--ink);cursor:pointer;font-family:inherit;text-decoration:none}
+.avatar-menu button:hover,.avatar-menu a:hover{background:var(--surface-2)}
+
+/* --- Home header (replaces the gradient hero) --- */
+.home-head{margin-top:26px;padding-bottom:6px}
+.home-head h1{font-size:clamp(24px,4vw,32px);font-weight:700;letter-spacing:-.02em}
+.stats-3{grid-template-columns:repeat(3,1fr)}
+@media(max-width:820px){.stats-3{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:520px){.stats-3{grid-template-columns:1fr 1fr}.stats-3 .stat:last-child{grid-column:1/-1}}
+
+/* --- Settings: one narrow column --- */
+.settings-col{max-width:720px;margin:0 auto}
+
+/* --- Instagram preview (Studio) --- */
+.ig-preview{width:300px;max-width:100%;margin:0 auto;background:var(--surface);border:1px solid var(--line);border-radius:18px;overflow:hidden;box-shadow:var(--shadow-sm)}
+.ig-head{display:flex;align-items:center;gap:9px;padding:10px 12px;font-size:13.5px}
+.ig-avatar{width:32px;height:32px;border-radius:50%;object-fit:cover;flex:none;border:2px solid var(--gold)}
+.ig-avatar-fallback{display:grid;place-items:center;background:#0e1325;color:#f5d67b;font-weight:800;font-size:14px}
+.ig-format{margin-left:auto;font-size:10.5px;font-weight:700;letter-spacing:.06em;color:var(--muted);text-transform:uppercase}
+.ig-media{background:#111;display:grid;place-items:center;overflow:hidden}
+.ig-media img,.ig-media video{width:100%;height:100%;object-fit:cover;display:block}
+.ig-empty{color:#999;font-size:13px;padding:20px;text-align:center}
+.ig-actions{display:flex;align-items:center;justify-content:space-between;padding:10px 12px 2px;color:var(--ink)}
+.ig-actions-left{display:flex;gap:14px}
+.ig-caption{padding:6px 12px 14px;font-size:13px;line-height:1.45}
+.ig-caption p{word-break:break-word}
+.ig-tags{color:var(--blue);margin-top:4px}
+.ig-cta{font-weight:700;margin-top:4px}

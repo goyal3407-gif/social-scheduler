@@ -132,7 +132,7 @@ export const api = {
   dbStatus: () => req('/api/db-status'),
 
   // Auth (session cookie is httpOnly; the frontend never sees a token)
-  signup: (email, password) => req('/api/auth/signup', { method: 'POST', body: JSON.stringify({ email, password }) }),
+  signup: (email, password, name) => req('/api/auth/signup', { method: 'POST', body: JSON.stringify(name ? { email, password, name } : { email, password }) }),
   login: (email, password) => req('/api/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
   me: () => req('/api/auth/me'),
   logout: () => req('/api/auth/logout', { method: 'POST', body: JSON.stringify({}) }),
@@ -214,6 +214,11 @@ export const api = {
 
   getTemplates: async () => asArray(await req('/api/templates'), 'templates'),
   createTemplate: async (tpl) => (await req('/api/templates', { method: 'POST', body: JSON.stringify(tpl) })).template,
+  deleteTemplate: (id) => req(`/api/templates/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  getHashtagGroups: async () => asArray(await req('/api/hashtag-groups'), 'hashtagGroups'),
+  createHashtagGroup: async (group) => (await req('/api/hashtag-groups', { method: 'POST', body: JSON.stringify(group) })).hashtagGroup,
+  deleteHashtagGroup: (id) => req(`/api/hashtag-groups/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
   getSettings: () => req('/api/settings'),
   saveSettings: (settings) => req('/api/settings', { method: 'POST', body: JSON.stringify(settings) }),

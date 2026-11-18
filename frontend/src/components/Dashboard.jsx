@@ -18,9 +18,7 @@ function useCountdown(targetIso) {
   return { label: formatCountdown(targetIso), parts: { d, h, m } }
 }
 
-export default function Dashboard({ posts, stats, loading, error, onRetry, onCreate, onGoQueue, onEdit, onDelete, onPublish, publishingId, settings, onDuplicate, onReschedule, onRescheduleNextBest, overdue, onPublishDue, notifications }) {
-  const [checklistDismissed, setChecklistDismissed] = useState(() => { try { return localStorage.getItem('ss-checklist-dismissed') === '1' } catch { return false } })
-  const dismissChecklist = () => { setChecklistDismissed(true); try { localStorage.setItem('ss-checklist-dismissed', '1') } catch { /* ignore */ } }
+export default function Dashboard({ posts, media, user, stats, loading, error, onRetry, onCreate, onGoQueue, onNavigate, onEdit, onDelete, onPublish, publishingId, settings, onDuplicate, onPostAgain, onReschedule, onRescheduleNextBest, onDismissChecklist, overdue, onPublishDue, notifications }) {
   // Publishing streak (real data only): consecutive days with at least one
   // published post, ending today or yesterday.
   const streak = useMemo(() => {
@@ -32,13 +30,27 @@ export default function Dashboard({ posts, stats, loading, error, onRetry, onCre
     while (days.has(d.toDateString())) { n++; d.setDate(d.getDate() - 1) }
     return n
   }, [posts])
+  // Getting started: three steps, each done-state derived from the
+  // user's real data. Dismissal is stored server-side (settings), so
+  // it follows the account; the card hides for good once all three
+  // steps are done.
   const checklist = useMemo(() => [
-    { done: Boolean(settings?.instagramConnected), label: 'Connect Instagram', hint: 'Settings → Connect Instagram' },
-    { done: (posts || []).some((p) => p.mediaUrl), label: 'Add media to your library', hint: 'Media → Upload or Add by link' },
-    { done: (posts || []).some((p) => p.status === 'scheduled'), label: 'Schedule your first post', hint: 'Studio → Schedule post' },
-    { done: (posts || []).some((p) => p.status === 'published'), label: 'Publish your first post', hint: 'Queue → Publish now, or Publish due' },
-  ], [settings, posts])
+    { done: Boolean(settings?.instagramConnected), label: 'Connect Instagram', hint: 'So your posts can publish live', tab: 'settings', cta: 'Connect' },
+    { done: (media || []).length > 0, label: 'Add your first media', hint: 'Upload a video or image, or add one by link', tab: 'media', cta: 'Add media' },
+    { done: (posts || []).length > 0, label: 'Schedule your first post', hint: 'Pick a time in the Studio', tab: 'studio', cta: 'Create a post' },
+  ], [settings, media, posts])
   const checklistDone = checklist.every((c) => c.done)
+  const checklistDismissed = settings?.checklistDismissed === true
+  const greeting = useMemo(() => {
+    const h = new Date().getHours()
+    const word = h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening'
+    const first = user?.name ? String(user.name).trim().split(/\s+/)[0] : ''
+    return first ? `${word}, ${first}` : word
+  }, [user])
+  const postedThisWeek = useMemo(() => {
+    const now = Date.now()
+    return (posts || []).filter((p) => p.status === 'published' && p.scheduleTime && new Date(p.scheduleTime).getTime() <= now && new Date(p.scheduleTime).getTime() >= now - 7 * 86400000).length
+  }, [posts])
   const upcoming = useMemo(() => {
     const now = Date.now()
     return [...(posts || [])]
@@ -60,32 +72,26 @@ export default function Dashboard({ posts, stats, loading, error, onRetry, onCre
 
   return (
     <div>
-      <section className="hero" aria-label="Next scheduled post">
-        <p style={{ fontSize: 12, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', opacity: .85 }}>Next up</p>
+      <section className="home-head" aria-label="Next scheduled post">
+        <h1>{greeting}</h1>
         {loading ? (
-          <div style={{ marginTop: 14 }}><div className="skel" style={{ height: 34, width: '60%', background: 'rgba(255,255,255,.25)' }} /><div className="skel" style={{ height: 16, width: '45%', marginTop: 10, background: 'rgba(255,255,255,.22)' }} /></div>
+          <div style={{ marginTop: 14 }}><div className="skel" style={{ height: 20, width: '55%' }} /><div className="skel" style={{ height: 16, width: '40%', marginTop: 10 }} /></div>
         ) : next ? (
           <>
-            <h1>{next.caption ? (next.caption.length > 90 ? `${next.caption.slice(0, 90)}…` : next.caption) : 'Untitled post'}</h1>
-            <p>{next.platform || 'Instagram'} · {next.format || 'REELS'} · {fmtDateTime(next.scheduleTime)}{next.hashtags ? ` · ${next.hashtags}` : ''}</p>
-            <div className="hero-row">
-              <div className="countdown" aria-label={`Publishes in ${cd.label}`}>
-                <div className="cd"><b>{cd.parts?.d ?? 0}</b><span>days</span></div>
-                <div className="cd"><b>{cd.parts?.h ?? 0}</b><span>hours</span></div>
-                <div className="cd"><b>{cd.parts?.m ?? 0}</b><span>mins</span></div>
-              </div>
-              <div className="hero-cta">
-                <button type="button" className="btn light" onClick={() => onPublish && onPublish(next)} disabled={publishingId === next.id}>Publish now</button>
-                <button type="button" className="btn outline-light" onClick={onGoQueue}>View queue</button>
-              </div>
+            <p className="muted" style={{ marginTop: 6 }}>Next up: <b style={{ color: 'var(--ink)' }}>{next.caption ? (next.caption.length > 90 ? `${next.caption.slice(0, 90)}…` : next.caption) : 'Untitled post'}</b></p>
+            <p className="muted small" style={{ marginTop: 4 }}>{next.platform || 'Instagram'} · {next.format || 'REELS'} · {fmtDateTime(next.scheduleTime)} · in {cd.label}{next.hashtags ? ` · ${next.hashtags}` : ''}</p>
+            <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
+              <button type="button" className="btn" onClick={onCreate}>Create Post</button>
+              <button type="button" className="btn ghost" onClick={() => onPublish && onPublish(next)} disabled={publishingId === next.id}>Publish next now</button>
+              <button type="button" className="btn ghost" onClick={onGoQueue}>View queue</button>
             </div>
           </>
         ) : (
           <>
-            <h1>Nothing scheduled yet — let&apos;s fix that.</h1>
-            <p>Create your first post in Studio, or import a whole week at once with Bulk scheduling. It&apos;s free, forever.</p>
-            <div className="hero-row">
-              <div className="hero-cta"><button type="button" className="btn light" onClick={onCreate}>Create your first post</button></div>
+            <p className="muted" style={{ marginTop: 6 }}>Nothing scheduled yet — create your first post, or import a whole week at once with Bulk scheduling. It&apos;s free, forever.</p>
+            <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
+              <button type="button" className="btn" onClick={onCreate}>Create Post</button>
+              <button type="button" className="btn ghost" onClick={onGoQueue}>View queue</button>
             </div>
           </>
         )}
@@ -136,27 +142,35 @@ export default function Dashboard({ posts, stats, loading, error, onRetry, onCre
       {!loading && !checklistDismissed && !checklistDone && (
         <section className="card section" aria-label="Getting started checklist">
           <div className="card-head">
-            <div><h2>Getting started</h2><p>{checklist.filter((c) => c.done).length} of {checklist.length} done — your next step is highlighted.</p></div>
-            <button type="button" className="btn ghost small" onClick={dismissChecklist}>Dismiss</button>
+            <div><h2>Getting started</h2><p>{checklist.filter((c) => c.done).length} of {checklist.length} done</p></div>
+            <button type="button" className="btn ghost small" onClick={onDismissChecklist}>Dismiss</button>
           </div>
+          <div className="pbar" style={{ marginBottom: 12 }} aria-hidden="true"><span style={{ width: `${(checklist.filter((c) => c.done).length / checklist.length) * 100}%`, background: 'var(--gold)' }} /></div>
           <div>
-            {checklist.map((c) => (
-              <p key={c.label} className="small" style={{ padding: '6px 0', color: c.done ? 'var(--muted)' : 'var(--ink)' }}>
-                {c.done ? '✓ ' : '○ '}<b>{c.label}</b>{!c.done && <span className="muted"> — {c.hint}</span>}
-              </p>
+            {checklist.map((c, i) => (
+              <div key={c.label} style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '8px 0', borderTop: i ? '1px solid var(--line-2)' : 'none' }}>
+                <span aria-hidden="true" style={{ flex: 'none', width: 22, height: 22, borderRadius: '50%', display: 'grid', placeItems: 'center', fontSize: 12, fontWeight: 700, background: c.done ? 'var(--green-soft)' : 'var(--surface-2)', color: c.done ? 'var(--green)' : 'var(--muted)', border: '1px solid var(--line)' }}>{c.done ? '✓' : i + 1}</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <b style={{ color: c.done ? 'var(--muted)' : 'var(--ink)', textDecoration: c.done ? 'line-through' : 'none' }}>{c.label}</b>
+                  {!c.done && <span className="muted small" style={{ display: 'block' }}>{c.hint}</span>}
+                </div>
+                {!c.done && (
+                  c.tab === 'studio'
+                    ? <button type="button" className="btn small" onClick={onCreate}>{c.cta}</button>
+                    : <button type="button" className="btn ghost small" onClick={() => onNavigate && onNavigate(c.tab)}>{c.cta}</button>
+                )}
+              </div>
             ))}
           </div>
         </section>
       )}
 
-      <div className="stats" aria-label="Overview">
-        {loading ? Array.from({ length: 5 }).map((_, i) => <div key={i} className="skel" style={{ height: 92 }} />) : (
+      <div className="stats stats-3" aria-label="Overview">
+        {loading ? Array.from({ length: 3 }).map((_, i) => <div key={i} className="skel" style={{ height: 92 }} />) : (
           <>
             <div className="stat"><b>{s.scheduled ?? upcoming.length}</b><span>Scheduled</span><small>{weekCount} in the next 7 days</small></div>
-            <div className="stat"><b>{s.published ?? 0}</b><span>Published</span><small>{streak > 0 ? `${streak}-day publishing streak` : 'All time'}</small></div>
-            <div className="stat"><b>{s.drafts ?? 0}</b><span>Drafts</span><small>Waiting for a time</small></div>
-            <div className="stat"><b>{s.failed ?? 0}</b><span>Failed</span><small>Needs a retry</small></div>
-            <div className="stat"><b>{s.mediaCount ?? 0}</b><span>Media files</span><small>In your library</small></div>
+            <div className="stat"><b>{postedThisWeek}</b><span>Posted this week</span><small>{streak > 0 ? `${streak}-day publishing streak` : 'Last 7 days'}</small></div>
+            <div className="stat"><b>{s.total ?? (posts || []).length}</b><span>Posts total</span><small>{s.published ?? 0} published all time</small></div>
           </>
         )}
       </div>
@@ -192,13 +206,13 @@ export default function Dashboard({ posts, stats, loading, error, onRetry, onCre
       <div className="two-col section">
         <section className="card">
           <div className="card-head">
-            <div><h2>Coming up</h2><p>Your next scheduled posts, in order.</p></div>
+            <div><h2>Up next</h2><p>Your next scheduled posts, in order.</p></div>
             <button type="button" className="btn ghost small" onClick={onGoQueue}>Queue →</button>
           </div>
           {loading ? <Skeleton rows={3} /> : upcoming.length === 0 ? (
             <Empty title="Queue is clear" body="No posts are scheduled. Schedule one from Studio or Bulk and it will show up here with a countdown." action={<button type="button" className="btn primary small" onClick={onCreate}>Create a post</button>} />
           ) : upcoming.slice(0, 4).map((p) => (
-            <PostRow key={p.id} post={p} onEdit={onEdit} onDelete={onDelete} onPublish={onPublish} publishing={publishingId === p.id} onDuplicate={onDuplicate} onReschedule={onReschedule} onRescheduleNextBest={onRescheduleNextBest} />
+            <PostRow key={p.id} post={p} onEdit={onEdit} onDelete={onDelete} onPublish={onPublish} publishing={publishingId === p.id} onDuplicate={onDuplicate} onPostAgain={onPostAgain} onReschedule={onReschedule} onRescheduleNextBest={onRescheduleNextBest} />
           ))}
         </section>
 
@@ -207,7 +221,7 @@ export default function Dashboard({ posts, stats, loading, error, onRetry, onCre
           {loading ? <Skeleton rows={3} /> : recent.length === 0 ? (
             <Empty title="No posts yet" body="Your recent posts will appear here once you create one." />
           ) : recent.map((p) => (
-            <PostRow key={p.id} post={p} onEdit={onEdit} onDelete={onDelete} onPublish={onPublish} publishing={publishingId === p.id} />
+            <PostRow key={p.id} post={p} onEdit={onEdit} onDelete={onDelete} onPublish={onPublish} publishing={publishingId === p.id} onPostAgain={onPostAgain} />
           ))}
           <div className="warn blue" style={{ marginTop: 14 }}>
             <IconClock size={17} />

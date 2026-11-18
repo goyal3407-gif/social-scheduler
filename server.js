@@ -376,7 +376,9 @@ function verifyPassword(password, user) {
 }
 function publicUser(u) {
   if (!u) return null;
-  return { id: u.id, email: u.email, role: u.role || 'member', createdAt: u.createdAt };
+  const out = { id: u.id, email: u.email, role: u.role || 'member', createdAt: u.createdAt };
+  if (u.name) out.name = u.name;
+  return out;
 }
 function signSession(sessionId, userId) {
   const exp = Date.now() + SESSION_MAX_AGE_MS;
@@ -484,6 +486,9 @@ function recordFailedLogin(email) {
 app.post('/api/auth/signup', ah(async (req, res) => {
   const email = String(req.body?.email || '').trim().toLowerCase();
   const password = String(req.body?.password || '');
+  // Optional display name from the sign-up form (used only for the
+  // greeting). Plain text, length-capped; never required.
+  const name = typeof req.body?.name === 'string' ? req.body.name.trim().slice(0, 80) : '';
   if (email.length > 254) return res.status(400).json({ ok: false, error: 'That email address is too long — enter a valid email address.' });
   if (!validEmail(email)) return res.status(400).json({ ok: false, error: 'Enter a valid email address, like you@example.com.' });
   if (password.length < 8) return res.status(400).json({ ok: false, error: 'Password must be at least 8 characters long.' });
@@ -498,6 +503,7 @@ app.post('/api/auth/signup', ah(async (req, res) => {
     passwordHash: hashPassword(password, salt),
     role: users.length === 0 ? 'owner' : 'member',
     createdAt: new Date().toISOString(),
+    ...(name ? { name } : {}),
   };
   await db.saveUser(user);
   await setSessionCookie(req, res, user.id);
@@ -1203,6 +1209,7 @@ app.get('/api/settings', ah(async (req, res) => {
     instagramAccounts: summaries.accounts,
     defaultIgUserId: summaries.defaultIgUserId,
     setupDone: s.setupDone === true,
+    checklistDismissed: s.checklistDismissed === true,
     keepServerCopyAfterPublish: s.keepServerCopyAfterPublish === true,
   };
   res.json(settingsResponse);
@@ -1230,7 +1237,7 @@ app.post('/api/settings', ah(async (req, res) => {
   const ig = await getInstagramCreds(req);
   const stored = await getInstagramStored(req);
   const summaries = await instagramAccountSummaries(req.userId);
-  res.json({ ok: true, instagramHandle: s.instagramHandle || ig.username || '', instagramConnected: !!(ig.token && ig.igUserId), tokenConfigured: !!(ig.token && ig.igUserId), instagramUsername: ig.username || '', maskedToken: maskToken(ig.token), tokenSource: ig.source, igUserIdSet: !!ig.igUserId, tokenEncrypted: stored.token ? !!stored.encrypted : null, instagramProfile: stored.profile || null, connectedAt: stored.connectedAt || '', instagramHealth: instagramHealth(stored), instagramAccounts: summaries.accounts, defaultIgUserId: summaries.defaultIgUserId, setupDone: s.setupDone === true, keepServerCopyAfterPublish: s.keepServerCopyAfterPublish === true });
+  res.json({ ok: true, instagramHandle: s.instagramHandle || ig.username || '', instagramConnected: !!(ig.token && ig.igUserId), tokenConfigured: !!(ig.token && ig.igUserId), instagramUsername: ig.username || '', maskedToken: maskToken(ig.token), tokenSource: ig.source, igUserIdSet: !!ig.igUserId, tokenEncrypted: stored.token ? !!stored.encrypted : null, instagramProfile: stored.profile || null, connectedAt: stored.connectedAt || '', instagramHealth: instagramHealth(stored), instagramAccounts: summaries.accounts, defaultIgUserId: summaries.defaultIgUserId, setupDone: s.setupDone === true, checklistDismissed: s.checklistDismissed === true, keepServerCopyAfterPublish: s.keepServerCopyAfterPublish === true });
 }));
 
 // ---------- Instagram connect (Meta login only) ----------
@@ -2816,9 +2823,40 @@ app.post('/api/templates', ah(async (req, res) => {
   const b = req.body || {};
   if (!b.name || !b.text) return res.status(400).json({ ok: false, error: 'Give the template a name and some text first.' });
   if (typeof b.name !== 'string' || typeof b.text !== 'string') return res.status(400).json({ ok: false, error: 'That template is not valid — please try again.' });
-  const t = { id: uid('tpl'), userId: req.userId, name: b.name, text: b.text };
+  if (b.name.trim().length > 80) return res.status(400).json({ ok: false, error: 'Template names can be at most 80 characters.' });
+  if (b.text.length > 2200) return res.status(400).json({ ok: false, error: 'Template text can be at most 2,200 characters (the Instagram caption limit).' });
+  const t = { id: uid('tpl'), userId: req.userId, name: b.name.trim(), text: b.text };
   await db.saveTemplate(t);
   res.json({ ok: true, template: t });
+}));
+app.delete('/api/templates/:id', ah(async (req, res) => {
+  const removed = await db.deleteTemplate(req.userId, String(req.params.id || ''));
+  if (!removed) return res.status(404).json({ ok: false, error: 'That template does not exist.' });
+  res.json({ ok: true });
+}));
+
+// ---------- hashtag groups (composer hashtag bank) ----------
+app.get('/api/hashtag-groups', ah(async (req, res) => {
+  const groups = await db.listHashtagGroups(req.userId);
+  res.json({ ok: true, hashtagGroups: groups });
+}));
+app.post('/api/hashtag-groups', ah(async (req, res) => {
+  const b = req.body || {};
+  if (typeof b.name !== 'string' || typeof b.tags !== 'string' || !b.name.trim() || !b.tags.trim()) {
+    return res.status(400).json({ ok: false, error: 'Give the group a name and at least one hashtag.' });
+  }
+  if (b.name.trim().length > 60) return res.status(400).json({ ok: false, error: 'Group names can be at most 60 characters.' });
+  if (b.tags.length > 2000) return res.status(400).json({ ok: false, error: 'A hashtag group can be at most 2,000 characters.' });
+  const existing = await db.listHashtagGroups(req.userId);
+  if (existing.length >= 50) return res.status(400).json({ ok: false, error: 'You can save at most 50 hashtag groups — delete one first.' });
+  const g = { id: uid('tag'), userId: req.userId, name: b.name.trim(), tags: b.tags.trim(), createdAt: new Date().toISOString() };
+  await db.saveHashtagGroup(g);
+  res.json({ ok: true, hashtagGroup: g });
+}));
+app.delete('/api/hashtag-groups/:id', ah(async (req, res) => {
+  const removed = await db.deleteHashtagGroup(req.userId, String(req.params.id || ''));
+  if (!removed) return res.status(404).json({ ok: false, error: 'That hashtag group does not exist.' });
+  res.json({ ok: true });
 }));
 
 // Unknown /api routes — and method mismatches on known ones — answer

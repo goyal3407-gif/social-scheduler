@@ -148,9 +148,9 @@ export default function Settings({ settings, dbStatus, onSave, saving, onInstagr
   const igAccounts = Array.isArray(settings?.instagramAccounts) ? settings.instagramAccounts : []
 
   return (
-    <div>
+    <div className="settings-col">
       <h2 className="section-title">Settings</h2>
-      <p className="section-sub">Connect Instagram so “Publish now” can go live. One login with Instagram — the connection is kept on the server and renews itself automatically.</p>
+      <p className="section-sub">Your account, Instagram connection and preferences — all in one place.</p>
       {dbStatus && (dbStatus.db !== 'mongodb' || !dbStatus.sessionSecretFromEnv) && (
         <div className="alert error" role="alert" style={{ marginBottom: 16 }}>
           <b>Server setup needs attention.</b>{' '}
@@ -168,9 +168,23 @@ export default function Settings({ settings, dbStatus, onSave, saving, onInstagr
           Database connected (MongoDB) and logins survive redeploys.
         </div>
       )}
-      <div className="two-col" style={{ alignItems: 'start' }}>
-        <div>
-          <form className="card" onSubmit={submitHandle} style={{ marginBottom: 16 }}>
+      <section className="card" style={{ marginBottom: 16 }}>
+        <h2>Account</h2>
+        <p className="muted small" style={{ marginTop: 8 }}>Signed in as <b style={{ color: 'var(--ink)' }}>{user?.email || '—'}</b>{user?.name ? ` · ${user.name}` : ''}{user?.role ? ` · ${user.role}` : ''}</p>
+        <form onSubmit={changePassword}>
+          <h3 style={{ marginTop: 18 }}>Change password</h3>
+          <p className="muted small" style={{ marginTop: 6 }}>Changing your password logs out your other devices.</p>
+          <label htmlFor="currentPw" style={{ marginTop: 12 }}>Current password</label>
+          <input id="currentPw" type="password" autoComplete="current-password" value={currentPw} onChange={(e) => setCurrentPw(e.target.value)} />
+          <label htmlFor="newPw" style={{ marginTop: 12 }}>New password</label>
+          <input id="newPw" type="password" autoComplete="new-password" placeholder="At least 8 characters" value={newPw} onChange={(e) => setNewPw(e.target.value)} />
+          {pwErr && <div className="alert error">{pwErr}</div>}
+          {pwMsg && <div className="alert success">{pwMsg}</div>}
+          <button type="submit" className="btn primary mt" disabled={pwBusy || !currentPw || newPw.length < 8}>{pwBusy ? 'Changing…' : 'Change password'}</button>
+        </form>
+      </section>
+
+      <form className="card" onSubmit={submitHandle} style={{ marginBottom: 16 }}>
             <h2>Instagram handle</h2>
             <label htmlFor="igHandle" style={{ marginTop: 12 }}>Instagram handle</label>
             <input id="igHandle" placeholder="@yourhandle" value={handle} onChange={(e) => setHandle(e.target.value)} />
@@ -237,7 +251,7 @@ export default function Settings({ settings, dbStatus, onSave, saving, onInstagr
           </div>
 
           <div className="card" style={{ marginTop: 16 }}>
-            <h2>Storage</h2>
+            <h2>Preferences</h2>
             <p className="muted small" style={{ marginTop: 8 }}>
               The server only holds an uploaded file until Instagram publishes it — after a successful post, the server copy is deleted automatically to save space (the post stays live on Instagram, and the library entry is marked “Published — server copy removed”). Files still needed by scheduled posts are never deleted, and media added by link is never touched.
             </p>
@@ -247,36 +261,17 @@ export default function Settings({ settings, dbStatus, onSave, saving, onInstagr
                 style={{ width: 18, height: 18, marginTop: 2, flex: 'none' }} />
               <span><b>Keep a server copy after publishing</b><br /><span className="muted small">Off by default. Turn it on if you want to reuse the same file for more posts later — it uses more storage.</span></span>
             </label>
+            <p className="muted small" style={{ marginTop: 12 }}>Publish results — successes and failures with their reasons — appear under Notifications on the Home screen, and failures are also flagged on the post itself.</p>
           </div>
-        </div>
-        <section className="card">
-          <h2>About this app</h2>
-          <p className="muted small" style={{ marginTop: 8 }}>KiluaAI is free forever. Schedule Reels, Feed posts and Stories for Instagram, YouTube, Facebook and TikTok from one calm place.</p>
-          <ul className="muted small" style={{ marginTop: 12, paddingLeft: 18, lineHeight: 1.9 }}>
-            <li>Free forever — no trial, no card</li>
-            <li>Your media, queue and templates are yours</li>
-            <li>Publish live via the Instagram Graph API</li>
-            <li>Works on phone and desktop</li>
-          </ul>
-        </section>
-      </div>
 
-      <div className="two-col section" style={{ alignItems: 'start' }}>
-        <form className="card" onSubmit={changePassword}>
-          <h2>Change password</h2>
-          <p className="muted small" style={{ marginTop: 8 }}>Changing your password logs out your other devices.</p>
-          <label htmlFor="currentPw" style={{ marginTop: 12 }}>Current password</label>
-          <input id="currentPw" type="password" autoComplete="current-password" value={currentPw} onChange={(e) => setCurrentPw(e.target.value)} />
-          <label htmlFor="newPw" style={{ marginTop: 12 }}>New password</label>
-          <input id="newPw" type="password" autoComplete="new-password" placeholder="At least 8 characters" value={newPw} onChange={(e) => setNewPw(e.target.value)} />
-          {pwErr && <div className="alert error">{pwErr}</div>}
-          {pwMsg && <div className="alert success">{pwMsg}</div>}
-          <button type="submit" className="btn primary mt" disabled={pwBusy || !currentPw || newPw.length < 8}>{pwBusy ? 'Changing…' : 'Change password'}</button>
-        </form>
+      <section className="card" style={{ marginTop: 16 }}>
+        <h2>Support</h2>
+        <p className="muted small" style={{ marginTop: 8 }}>Questions, feedback or a problem with your account?</p>
+        <p style={{ marginTop: 10 }}><a href="/contact.html">Contact us →</a></p>
+      </section>
 
-        <section className="card">
+        <section className="card" style={{ marginTop: 16 }}>
           <h2>Your data &amp; account</h2>
-          <p className="muted small" style={{ marginTop: 8 }}>Signed in as <b style={{ color: 'var(--ink)' }}>{user?.email || '—'}</b>{user?.role ? ` · ${user.role}` : ''}.</p>
           <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
             <button type="button" className="btn ghost" disabled={exporting} onClick={exportData}>{exporting ? 'Exporting…' : 'Download my data (JSON)'}</button>
           </div>
@@ -293,7 +288,17 @@ export default function Settings({ settings, dbStatus, onSave, saving, onInstagr
             </div>
           )}
         </section>
-      </div>
+
+        <section className="card" style={{ marginTop: 16 }}>
+          <h2>About this app</h2>
+          <p className="muted small" style={{ marginTop: 8 }}>KiluaAI is free forever. Schedule Reels, Feed posts and Stories for Instagram, YouTube, Facebook and TikTok from one calm place.</p>
+          <ul className="muted small" style={{ marginTop: 12, paddingLeft: 18, lineHeight: 1.9 }}>
+            <li>Free forever — no trial, no card</li>
+            <li>Your media, queue and templates are yours</li>
+            <li>Publish live via the Instagram Graph API</li>
+            <li>Works on phone and desktop</li>
+          </ul>
+        </section>
     </div>
   )
 }

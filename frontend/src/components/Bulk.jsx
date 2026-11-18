@@ -42,7 +42,7 @@ function normaliseRows(rows) {
   })
 }
 
-export default function Bulk({ onImport, posts, onUploadFile, igAccounts, defaultIgUserId }) {
+export default function Bulk({ onImport, posts, onUploadFile, igAccounts, defaultIgUserId, hashtagGroups }) {
   const [tab, setTab] = useState('csv')
   // "Upload videos" tab: many files at once, one shared caption, and
   // the queue is spread automatically over the chosen times per day.
@@ -192,6 +192,16 @@ export default function Bulk({ onImport, posts, onUploadFile, igAccounts, defaul
             <div>
               <label htmlFor="fHashtags">Hashtags <span className="muted">(shared)</span></label>
               <input id="fHashtags" value={fHashtags} onChange={(e) => setFHashtags(e.target.value)} placeholder="#reels #creator" />
+              {Array.isArray(hashtagGroups) && hashtagGroups.length > 0 && (
+                <div style={{ marginTop: 6 }}>
+                  {hashtagGroups.map((g) => (
+                    <button key={g.id} type="button" className="chip" style={{ marginRight: 6, marginBottom: 6, cursor: 'pointer' }} title={g.tags}
+                      onClick={() => setFHashtags((prev) => [prev.trim(), String(g.tags || '').trim()].filter(Boolean).join(' '))}>
+                      {g.name} +
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
             <div>
               <label htmlFor="fCta">Call to action <span className="muted">(shared, optional)</span></label>

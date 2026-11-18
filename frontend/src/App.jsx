@@ -3,7 +3,7 @@ import { api, nextBestTime } from './api.js'
 import Auth from './components/Auth.jsx'
 import Dashboard from './components/Dashboard.jsx'
 import { IconHome, IconCal, IconQueue, IconPlus, IconMedia, IconBulk, IconTools, IconSpark, IconSettings, IconSun, IconMoon, IconMenu, IconX, IconBell } from './components/icons.jsx'
-import { Skeleton } from './components/shared.jsx'
+import { Skeleton, isOwnMediaUrl } from './components/shared.jsx'
 // Heavy tabs load on demand so the first paint is only Dashboard + shell.
 const SetupWizard = lazy(() => import('./components/SetupWizard.jsx'))
 const CalendarView = lazy(() => import('./components/CalendarView.jsx'))
@@ -67,6 +67,8 @@ export default function App() {
   const [unread, setUnread] = useState(0)
   const [confirmDelete, setConfirmDelete] = useState(null) // {type:'post'|'media'|'posts', item|items}
   const [templateSeed, setTemplateSeed] = useState(null)
+  const [hashtagGroups, setHashtagGroups] = useState([])
+  const [avatarMenuOpen, setAvatarMenuOpen] = useState(false)
   const toastTimer = useRef(null)
   const refreshSettingsRef = useRef(null)
 
@@ -164,7 +166,8 @@ export default function App() {
         api.getSettings(),
         api.getStats(),
         api.dbStatus().catch(() => null),
-        api.getNotifications().catch(() => null)
+        api.getNotifications().catch(() => null),
+        api.getHashtagGroups().catch(() => [])
       ])
       for (const r of results) {
         if (r.status === 'rejected' && r.reason && r.reason.status === 401) { setUser(null); return }
@@ -174,6 +177,7 @@ export default function App() {
       setPosts(value(0, [])); setMedia(value(1, [])); setTemplates(value(2, [])); setSettings(value(3, null)); setStats(value(4, null)); setDbStatus(value(5, null))
       const notif = value(6, null)
       if (notif) { setNotifications(notif.notifications || []); setUnread(notif.unread || 0) }
+      setHashtagGroups(value(7, []))
       if (firstError) setError(firstError.reason)
     } catch (e) {
       if (e && e.status === 401) { setUser(null); return }
@@ -260,7 +264,7 @@ export default function App() {
 
   const handleLogout = useCallback(async () => {
     try { await api.logout() } catch { /* cookie cleared server-side anyway */ }
-    setUser(null); setPosts([]); setMedia([]); setTemplates([]); setSettings(null); setStats(null); setTab('home')
+    setUser(null); setPosts([]); setMedia([]); setTemplates([]); setHashtagGroups([]); setSettings(null); setStats(null); setTab('home')
   }, [])
 
   const goStudio = (post = null) => {
@@ -458,6 +462,66 @@ export default function App() {
     const item = created?.template || created
     if (item && item.id) setTemplates((prev) => [...prev, item])
     else { const fresh = await api.getTemplates().catch(() => null); if (fresh) setTemplates(fresh) }
+    return item
+  }, [])
+
+  const handleDeleteTemplate = useCallback(async (tpl) => {
+    try {
+      await api.deleteTemplate(tpl.id)
+      setTemplates((prev) => prev.filter((t) => t.id !== tpl.id))
+      showToast('Template deleted.')
+    } catch (e) { setError(e) }
+  }, [])
+
+  const handleCreateHashtagGroup = useCallback(async (group) => {
+    const item = await api.createHashtagGroup(group)
+    if (item && item.id) setHashtagGroups((prev) => [...prev, item])
+    else { const fresh = await api.getHashtagGroups().catch(() => null); if (fresh) setHashtagGroups(fresh) }
+    return item
+  }, [])
+
+  const handleDeleteHashtagGroup = useCallback(async (group) => {
+    try {
+      await api.deleteHashtagGroup(group.id)
+      setHashtagGroups((prev) => prev.filter((g) => g.id !== group.id))
+      showToast('Hashtag group deleted.')
+    } catch (e) { setError(e) }
+  }, [])
+
+  // "Post again": reopen the composer with the original post's content
+  // so the user picks a fresh time — nothing is scheduled or published
+  // automatically. If the original's media was a server copy that has
+  // been removed since (auto-deleted after publish, or deleted from
+  // the library), open the composer without media and say why — in the
+  // app the phone original is where it can be picked again.
+  const handlePostAgain = useCallback((post) => {
+    let mediaGone = false
+    if (post.mediaUrl) {
+      const item = (media || []).find((m) => m.url === post.mediaUrl)
+      if (item && item.serverCopyRemoved) mediaGone = true
+      else if (!item && isOwnMediaUrl(post.mediaUrl)) mediaGone = true
+    }
+    setEditing(null)
+    setTemplateSeed({
+      mediaUrl: mediaGone ? '' : (post.mediaUrl || ''),
+      mediaType: post.mediaType || 'video',
+      posterUrl: mediaGone ? '' : (post.posterUrl || ''),
+      caption: post.caption || '', hashtags: post.hashtags || '', cta: post.cta || '',
+      platform: post.platform || 'Instagram', format: post.format || 'REELS',
+      igAccountId: post.igAccountId || '', igAccountUsername: post.igAccountUsername || '',
+      scheduleTime: ''
+    })
+    setStudioKey((k) => k + 1)
+    setTab('studio')
+    window.scrollTo({ top: 0 })
+    if (mediaGone) showToast('That post’s media file is no longer in your library — pick the media again to post it again.')
+  }, [media])
+
+  // Getting-started checklist dismissal lives in the user's settings
+  // on the server, so it follows the account across devices.
+  const handleDismissChecklist = useCallback(async () => {
+    setSettings((prev) => (prev ? { ...prev, checklistDismissed: true } : prev))
+    try { await api.saveSettings({ checklistDismissed: true }) } catch { /* hidden locally either way */ }
   }, [])
 
   const useInStudio = useCallback((seed) => {
@@ -515,19 +579,44 @@ export default function App() {
               <span>Free forever</span>
             </div>
           </div>
+          <nav className="topnav" aria-label="Main navigation">
+            <button type="button" className={tab === 'home' ? 'active' : ''} onClick={() => setTab('home')}>Home</button>
+            <button type="button" onClick={() => goStudio(null)}>Create</button>
+            <button type="button" className={tab === 'queue' ? 'active' : ''} onClick={() => setTab('queue')}>Queue</button>
+            <button type="button" className={tab === 'calendar' ? 'active' : ''} onClick={() => setTab('calendar')}>Calendar</button>
+            <button type="button" className={tab === 'media' ? 'active' : ''} onClick={() => setTab('media')}>Media</button>
+            <button type="button" className={tab === 'ai' ? 'active' : ''} onClick={() => setTab('ai')}>AI Studio</button>
+            <button type="button" className={tab === 'bulk' ? 'active' : ''} onClick={() => setTab('bulk')}>Bulk</button>
+            <button type="button" className={tab === 'tools' ? 'active' : ''} onClick={() => setTab('tools')}>Tools</button>
+          </nav>
           <div className="top-actions">
             <span className="pill" title={!settings ? 'Checking Instagram connection' : settings.instagramConnected ? 'Instagram connected' : 'Instagram not connected'}>
               <span className={`dot ${!settings ? 'amber' : settings.instagramConnected ? '' : 'off'}`} />
               {!settings ? 'IG checking…' : settings.instagramConnected ? `IG ${settings.instagramHandle || 'connected'}` : 'IG not connected'}
             </span>
+            <button type="button" className="btn topnav-create" onClick={() => goStudio(null)}>Create Post</button>
             <button type="button" className="icon-btn bell-btn" onClick={openNotifications} aria-label={unread ? `Notifications — ${unread} unread` : 'Notifications'}>
               <IconBell size={18} />
               {unread > 0 && <span className="bell-badge">{unread > 9 ? '9+' : unread}</span>}
             </button>
-            <button type="button" className="icon-btn" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}>
-              {theme === 'dark' ? <IconSun size={18} /> : <IconMoon size={18} />}
-            </button>
-            <button type="button" className="btn ghost small" onClick={handleLogout} title={`Log out ${user.email || ''}`}>Log out</button>
+            <div className="avatar-wrap">
+              <button type="button" className="avatar-btn" onClick={() => setAvatarMenuOpen((o) => !o)} aria-haspopup="menu" aria-expanded={avatarMenuOpen} aria-label="Account menu" title={user.email || ''}>
+                {(user.name || user.email || 'K').trim().charAt(0).toUpperCase()}
+              </button>
+              {avatarMenuOpen && (
+                <>
+                  <div className="avatar-backdrop" onClick={() => setAvatarMenuOpen(false)} />
+                  <div className="avatar-menu" role="menu">
+                    <p className="avatar-email">{user.name || user.email}</p>
+                    {user.name && <p className="muted small" style={{ padding: '0 10px 6px' }}>{user.email}</p>}
+                    <button type="button" role="menuitem" onClick={() => { setAvatarMenuOpen(false); setTab('settings') }}>Settings</button>
+                    <a role="menuitem" href="/contact.html" onClick={() => setAvatarMenuOpen(false)}>Contact</a>
+                    <button type="button" role="menuitem" onClick={() => { setAvatarMenuOpen(false); setTheme(theme === 'dark' ? 'light' : 'dark') }}>{theme === 'dark' ? 'Light theme' : 'Dark theme'}</button>
+                    <button type="button" role="menuitem" onClick={() => { setAvatarMenuOpen(false); handleLogout() }}>Log out</button>
+                  </div>
+                </>
+              )}
+            </div>
           </div>
         </div>
       </header>
@@ -564,6 +653,7 @@ export default function App() {
                 {!settings ? 'IG checking…' : settings.instagramConnected ? `IG ${settings.instagramHandle || 'connected'}` : 'IG not connected'}
               </span>
               <p className="muted small" style={{ marginTop: 10 }}>{user.email}</p>
+              <p style={{ marginTop: 8 }}><a href="/contact.html" className="small">Contact</a></p>
               <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
                 <button type="button" className="btn ghost small" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
                   {theme === 'dark' ? 'Light theme' : 'Dark theme'}
@@ -586,11 +676,12 @@ export default function App() {
         )}
 
         {tab === 'home' && (
-          <Dashboard posts={posts} stats={statsFallback} loading={loading} error={error} onRetry={loadAll}
-            onCreate={() => goStudio(null)} onGoQueue={() => setTab('queue')}
+          <Dashboard posts={posts} media={media} user={user} stats={statsFallback} loading={loading} error={error} onRetry={loadAll}
+            onCreate={() => goStudio(null)} onGoQueue={() => setTab('queue')} onNavigate={setTab}
             onEdit={goStudio} onDelete={(p) => setConfirmDelete({ type: 'post', item: p })}
             onPublish={handlePublish} publishingId={publishingId} settings={settings}
-            onDuplicate={handleDuplicate} onReschedule={handleReschedule} onRescheduleNextBest={handleRescheduleNextBest}
+            onDuplicate={handleDuplicate} onPostAgain={handlePostAgain} onReschedule={handleReschedule} onRescheduleNextBest={handleRescheduleNextBest}
+            onDismissChecklist={handleDismissChecklist}
             overdue={overdue} onPublishDue={handlePublishDue} notifications={notifications} />
         )}
         <Suspense fallback={<TabFallback />}>
@@ -598,14 +689,14 @@ export default function App() {
           <div className="section"><CalendarView posts={posts} loading={loading} onEdit={goStudio} onDelete={(p) => setConfirmDelete({ type: 'post', item: p })} onPublish={handlePublish} publishingId={publishingId} onGoQueue={() => setTab('queue')} /></div>
         )}
         {tab === 'queue' && (
-          <div className="section"><Queue posts={posts} loading={loading} onEdit={goStudio} onDelete={(p) => setConfirmDelete({ type: 'post', item: p })} onPublish={handlePublish} publishingId={publishingId} onCreate={() => goStudio(null)} onDuplicate={handleDuplicate} onReschedule={handleReschedule} onRescheduleNextBest={handleRescheduleNextBest} overdue={overdue} onPublishDue={handlePublishDue} onDeleteMany={(items) => setConfirmDelete({ type: 'posts', items })} /></div>
+          <div className="section"><Queue posts={posts} loading={loading} onEdit={goStudio} onDelete={(p) => setConfirmDelete({ type: 'post', item: p })} onPublish={handlePublish} publishingId={publishingId} onCreate={() => goStudio(null)} onDuplicate={handleDuplicate} onPostAgain={handlePostAgain} onReschedule={handleReschedule} onRescheduleNextBest={handleRescheduleNextBest} overdue={overdue} onPublishDue={handlePublishDue} onDeleteMany={(items) => setConfirmDelete({ type: 'posts', items })} /></div>
         )}
         {tab === 'studio' && (
           <div className="section">
-            <Studio key={`${studioKey}-${editing?.id || 'new'}`} editing={editing} seed={templateSeed ? { caption: templateSeed.text || templateSeed.caption || '', hashtags: templateSeed.hashtags || '', cta: templateSeed.cta || '', mediaUrl: templateSeed.mediaUrl || '', mediaType: templateSeed.mediaType || 'video', posterUrl: templateSeed.posterUrl || '', scheduleTime: templateSeed.scheduleTime || '' } : null} media={media} templates={templates} onSave={handleSavePost} onCancel={() => setTab('queue')} saving={saving} posts={posts} igAccounts={settings?.instagramAccounts || []} defaultIgUserId={settings?.defaultIgUserId || ''} />
+            <Studio key={`${studioKey}-${editing?.id || 'new'}`} editing={editing} seed={templateSeed ? { caption: templateSeed.text || templateSeed.caption || '', hashtags: templateSeed.hashtags || '', cta: templateSeed.cta || '', mediaUrl: templateSeed.mediaUrl || '', mediaType: templateSeed.mediaType || 'video', posterUrl: templateSeed.posterUrl || '', scheduleTime: templateSeed.scheduleTime || '', platform: templateSeed.platform || 'Instagram', format: templateSeed.format || 'REELS', igAccountId: templateSeed.igAccountId || '', igAccountUsername: templateSeed.igAccountUsername || '' } : null} media={media} templates={templates} hashtagGroups={hashtagGroups} onCreateTemplate={handleCreateTemplate} onDeleteTemplate={handleDeleteTemplate} onCreateHashtagGroup={handleCreateHashtagGroup} onDeleteHashtagGroup={handleDeleteHashtagGroup} onSave={handleSavePost} onCancel={() => setTab('queue')} saving={saving} posts={posts} igAccounts={settings?.instagramAccounts || []} defaultIgUserId={settings?.defaultIgUserId || ''} settings={settings} />
           </div>
         )}
-        {tab === 'bulk' && <div className="section"><Bulk onImport={handleBulkImport} posts={posts} onUploadFile={handleUpload} igAccounts={settings?.instagramAccounts || []} defaultIgUserId={settings?.defaultIgUserId || ''} /></div>}
+        {tab === 'bulk' && <div className="section"><Bulk onImport={handleBulkImport} posts={posts} onUploadFile={handleUpload} igAccounts={settings?.instagramAccounts || []} defaultIgUserId={settings?.defaultIgUserId || ''} hashtagGroups={hashtagGroups} /></div>}
         {tab === 'media' && (
           <div className="section"><MediaLibrary media={media} loading={loading} error={error} onRetry={loadAll}
             onAddLink={handleAddLink} onUpload={handleUpload}
@@ -630,20 +721,6 @@ export default function App() {
           <span className="muted small">v1.1.0{dbStatus?.db ? ` · storage: ${dbStatus.db}` : ''} · <a href="/contact.html">Contact</a></span>
         </footer>
       </main>
-
-      <nav className="dock" aria-label="Main navigation">
-        {NAV.slice(0, 3).map(({ id, label, dockLabel, Icon }) => (
-          <button key={id} type="button" className={`dock-btn ${tab === id ? 'active' : ''}`} onClick={() => setTab(id)} aria-current={tab === id ? 'page' : undefined}>
-            <Icon size={20} /><span className={`dock-label${dockLabel ? ' dock-label-wrap' : ''}`}>{dockLabel || label}</span>
-          </button>
-        ))}
-        <button type="button" className="dock-create" onClick={() => goStudio(null)} aria-label="Create a post"><IconPlus size={24} /></button>
-        {NAV.slice(3).map(({ id, label, dockLabel, Icon }) => (
-          <button key={id} type="button" className={`dock-btn ${tab === id ? 'active' : ''}`} onClick={() => setTab(id)} aria-current={tab === id ? 'page' : undefined}>
-            <Icon size={20} /><span className={`dock-label${dockLabel ? ' dock-label-wrap' : ''}`}>{dockLabel || label}</span>
-          </button>
-        ))}
-      </nav>
 
       {confirmDelete && (
         <div className="modal-bg" role="dialog" aria-modal="true" aria-label="Confirm delete" onClick={() => setConfirmDelete(null)}>

@@ -1,18 +1,39 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { captionScore, countHashtags, fromLocalInputValue, nextBestTime, toLocalInputValue } from '../api.js'
-import { IconWarn, IconCheck } from './icons.jsx'
+import { IconWarn, IconCheck, IconHeart, IconComment, IconSend, IconBookmark } from './icons.jsx'
 
 const PLATFORMS = ['Instagram', 'YouTube', 'Facebook', 'TikTok']
 const FORMATS = ['REELS', 'FEED', 'STORY']
 const EMPTY = { mediaUrl: '', mediaType: 'video', posterUrl: '', caption: '', hashtags: '', cta: '', platform: 'Instagram', scheduleTime: '', status: 'scheduled', format: 'REELS', igAccountId: '', igAccountUsername: '' }
+// Built-in starter templates (server seeds) have ids tpl-1, tpl-2, … —
+// they are not stored per-user, so they cannot be deleted.
+const isSeedTemplate = (t) => /^tpl-\d+$/.test(String(t?.id || ''))
 
-export default function Studio({ editing, seed, media, templates, onSave, onCancel, saving, posts, igAccounts, defaultIgUserId }) {
+export default function Studio({ editing, seed, media, templates, hashtagGroups, onCreateTemplate, onDeleteTemplate, onCreateHashtagGroup, onDeleteHashtagGroup, onSave, onCancel, saving, posts, igAccounts, defaultIgUserId, settings }) {
   const [form, setForm] = useState(EMPTY)
   const [step, setStep] = useState(1)
   const [width, setWidth] = useState('')
   const [height, setHeight] = useState('')
   const [error, setError] = useState('')
   const [savedNote, setSavedNote] = useState('')
+  const [tplName, setTplName] = useState('')
+  const [showTplSave, setShowTplSave] = useState(false)
+  const [tagName, setTagName] = useState('')
+  const [showTagSave, setShowTagSave] = useState(false)
+  const [bankMsg, setBankMsg] = useState('')
+  const restoredDraftRef = useRef(false)
+
+  // Caption draft autosave (new posts only): the in-progress composer
+  // is kept in localStorage per Instagram account and restored when
+  // the user comes back, so a closed tab never loses a half-written
+  // caption. Cleared on a successful save.
+  const draftKey = (accountId) => `ss-studio-draft:${accountId || 'default'}`
+  const clearDrafts = () => {
+    try {
+      localStorage.removeItem(draftKey(form.igAccountId || defaultIgUserId))
+      localStorage.removeItem(draftKey(defaultIgUserId))
+    } catch { /* storage unavailable */ }
+  }
 
   useEffect(() => {
     if (editing?.id) {
@@ -20,10 +41,36 @@ export default function Studio({ editing, seed, media, templates, onSave, onCanc
     } else if (seed) {
       setForm({ ...EMPTY, ...seed, scheduleTime: seed.scheduleTime || '' })
     } else {
-      setForm(EMPTY)
+      // Restore the autosaved draft for the default account, if any.
+      let initial = EMPTY
+      try {
+        const raw = localStorage.getItem(draftKey(defaultIgUserId))
+        if (raw) {
+          const draft = JSON.parse(raw)
+          if (draft && (draft.caption || draft.mediaUrl || draft.hashtags)) initial = { ...EMPTY, ...draft, scheduleTime: draft.scheduleTime || '' }
+        }
+      } catch { /* no usable draft */ }
+      setForm(initial)
     }
-    setStep(1); setError(''); setSavedNote('')
+    restoredDraftRef.current = true
+    setStep(1); setError(''); setSavedNote(''); setBankMsg('')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editing, seed])
+
+  // Persist the draft as the user types (new posts only — edits write
+  // to the saved post itself).
+  useEffect(() => {
+    if (editing?.id || seed || !restoredDraftRef.current) return undefined
+    const t = setTimeout(() => {
+      try {
+        if (form.caption || form.mediaUrl || form.hashtags || form.cta) {
+          localStorage.setItem(draftKey(form.igAccountId || defaultIgUserId), JSON.stringify(form))
+        }
+      } catch { /* storage unavailable */ }
+    }, 400)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form, editing, seed])
 
   const set = (patch) => setForm((f) => ({ ...f, ...patch }))
   const nTags = countHashtags(form.hashtags)
@@ -101,6 +148,7 @@ export default function Studio({ editing, seed, media, templates, onSave, onCanc
     }
     try {
       await onSave(payload, Boolean(editing?.id))
+      if (!editing?.id) clearDrafts()
       setSavedNote(statusOverride === 'draft' ? 'Saved as draft.' : 'Scheduled — it is now in your queue.')
     } catch (e) {
       setError(e.message || 'Could not save this post.')
@@ -113,14 +161,52 @@ export default function Studio({ editing, seed, media, templates, onSave, onCanc
     setStep(2)
   }
 
+  const saveAsTemplate = async () => {
+    setBankMsg('')
+    if (!form.caption.trim()) { setBankMsg('Write a caption first, then save it as a template.'); return }
+    if (!tplName.trim()) { setBankMsg('Give the template a name first.'); return }
+    try {
+      await onCreateTemplate({ name: tplName.trim(), text: form.caption.trim() })
+      setTplName(''); setShowTplSave(false)
+      setBankMsg('Template saved — find it in the list above.')
+    } catch (e) { setBankMsg(e.message || 'Could not save the template.') }
+  }
+
+  const appendHashtagGroup = (g) => {
+    if (!g) return
+    setForm((f) => ({ ...f, hashtags: [f.hashtags.trim(), String(g.tags || '').trim()].filter(Boolean).join(' ') }))
+  }
+
+  const saveAsHashtagGroup = async () => {
+    setBankMsg('')
+    if (!form.hashtags.trim()) { setBankMsg('Add some hashtags first, then save them as a group.'); return }
+    if (!tagName.trim()) { setBankMsg('Give the hashtag group a name first.'); return }
+    try {
+      await onCreateHashtagGroup({ name: tagName.trim(), tags: form.hashtags.trim() })
+      setTagName(''); setShowTagSave(false)
+      setBankMsg('Hashtag group saved.')
+    } catch (e) { setBankMsg(e.message || 'Could not save the hashtag group.') }
+  }
+
   const pickMedia = (m) => {
     setForm((f) => ({ ...f, mediaUrl: m.url, mediaType: m.kind === 'image' ? 'image' : 'video', posterUrl: m.posterUrl || '', title: m.title }))
   }
 
+  // Instagram preview identity: the account this post will publish to
+  // (the composer's selected account, else the default connection).
+  const previewAccount = useMemo(() => {
+    const wanted = form.igAccountId || defaultIgUserId || ''
+    const found = (igAccounts || []).find((a) => String(a.igUserId) === String(wanted))
+    const username = found?.username || form.igAccountUsername || settings?.instagramUsername || settings?.instagramHandle || ''
+    const pic = found?.profile?.profile_picture_url || found?.profile?.profilePictureUrl || settings?.instagramProfile?.profile_picture_url || settings?.instagramProfile?.profilePictureUrl || ''
+    return { username: String(username || '').replace(/^@/, ''), pic }
+  }, [form.igAccountId, form.igAccountUsername, igAccounts, defaultIgUserId, settings])
+  const previewAspect = form.format === 'FEED' ? '4 / 5' : '9 / 16'
+
   return (
     <div>
       <h2 className="section-title">{editing ? 'Edit post' : 'Studio — create a post'}</h2>
-      <p className="section-sub">Three steps: media, caption, schedule. The phone on the right updates live as you type.</p>
+      <p className="section-sub">Three steps: media, caption, schedule. The preview updates live as you type.</p>
 
       <div className="steps" aria-label="Composer steps">
         {['Media', 'Caption & hashtags', 'Schedule & publish'].map((label, i) => (
@@ -199,15 +285,63 @@ export default function Studio({ editing, seed, media, templates, onSave, onCanc
                     <option value="">Choose a template…</option>
                     {templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
                   </select>
+                  <div style={{ marginTop: 8 }}>
+                    {templates.filter((t) => !isSeedTemplate(t)).map((t) => (
+                      <span key={t.id} className="chip" style={{ marginRight: 6, marginBottom: 6 }}>
+                        {t.name}
+                        {onDeleteTemplate && <button type="button" aria-label={`Delete template ${t.name}`} onClick={() => onDeleteTemplate(t)} style={{ border: 'none', background: 'transparent', color: 'var(--red)', fontWeight: 700, padding: 0, marginLeft: 2 }}>✕</button>}
+                      </span>
+                    ))}
+                  </div>
                 </div>
               )}
               <label htmlFor="caption">Caption</label>
               <textarea id="caption" rows={5} placeholder="Write your caption…" value={form.caption} onChange={(e) => set({ caption: e.target.value })} />
               <p className="muted small" style={{ textAlign: 'right' }}>{form.caption.length} characters</p>
+              {onCreateTemplate && (
+                <div className="mb">
+                  {!showTplSave ? (
+                    <button type="button" className="btn ghost small" onClick={() => setShowTplSave(true)}>Save caption as template</button>
+                  ) : (
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      <input placeholder="Template name, e.g. Product launch" value={tplName} onChange={(e) => setTplName(e.target.value)} style={{ flex: 1, minWidth: 180 }} aria-label="Template name" />
+                      <button type="button" className="btn small" onClick={saveAsTemplate}>Save template</button>
+                      <button type="button" className="btn ghost small" onClick={() => setShowTplSave(false)}>Cancel</button>
+                    </div>
+                  )}
+                </div>
+              )}
               <label htmlFor="hashtags">Hashtags <span className="muted">(space or comma separated)</span></label>
               <input id="hashtags" placeholder="#social #creator #reels" value={form.hashtags} onChange={(e) => set({ hashtags: e.target.value })} />
               <p className="small mt" style={{ color: nTags > 30 ? 'var(--red)' : 'var(--muted)' }}>{nTags} / 30 hashtags{nTags > 30 ? ' — over the Instagram limit of 30. Remove some before publishing.' : ''}</p>
               {nTags > 30 && <div className="warn red"><IconWarn size={17} /><div><b>30-hashtag limit:</b> Instagram allows at most 30 hashtags per post. This post has {nTags}.</div></div>}
+              <div className="mt">
+                <label>Hashtag bank <span className="muted">(tap a group to add its tags)</span></label>
+                {(!hashtagGroups || hashtagGroups.length === 0) ? (
+                  <p className="muted small">No saved groups yet — save the hashtags above as a group and reuse them in one tap.</p>
+                ) : (
+                  <div>
+                    {hashtagGroups.map((g) => (
+                      <span key={g.id} className="chip" style={{ marginRight: 6, marginBottom: 6 }}>
+                        <button type="button" onClick={() => appendHashtagGroup(g)} style={{ border: 'none', background: 'transparent', fontWeight: 700, padding: 0, color: 'var(--ink)' }} title={g.tags}>{g.name} +</button>
+                        {onDeleteHashtagGroup && <button type="button" aria-label={`Delete hashtag group ${g.name}`} onClick={() => onDeleteHashtagGroup(g)} style={{ border: 'none', background: 'transparent', color: 'var(--red)', fontWeight: 700, padding: 0, marginLeft: 2 }}>✕</button>}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {onCreateHashtagGroup && (
+                  !showTagSave ? (
+                    <button type="button" className="btn ghost small" onClick={() => setShowTagSave(true)}>Save hashtags as group</button>
+                  ) : (
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      <input placeholder="Group name, e.g. Reels basics" value={tagName} onChange={(e) => setTagName(e.target.value)} style={{ flex: 1, minWidth: 180 }} aria-label="Hashtag group name" />
+                      <button type="button" className="btn small" onClick={saveAsHashtagGroup}>Save group</button>
+                      <button type="button" className="btn ghost small" onClick={() => setShowTagSave(false)}>Cancel</button>
+                    </div>
+                  )
+                )}
+                {bankMsg && <p className="small mt" role="status">{bankMsg}</p>}
+              </div>
               <label htmlFor="cta" style={{ marginTop: 14 }}>Call to action</label>
               <input id="cta" placeholder="e.g. Comment GUIDE and I'll send it" value={form.cta} onChange={(e) => set({ cta: e.target.value })} />
               <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
@@ -263,7 +397,7 @@ export default function Studio({ editing, seed, media, templates, onSave, onCanc
                   </div>
                 </div>
               )}
-              <p className="muted small mt">Best times are usually 7–9pm in your audience&apos;s timezone — check the heatmap in Tools.</p>
+              <p className="muted small mt">Evenings 7–9 PM usually perform best — a general guide, not your audience data. Your own suggested slot above comes from your schedule.</p>
               {duplicateOf && <div className="warn amber"><IconWarn size={17} /><div>This same media is already in your queue ({duplicateOf.status}, {duplicateOf.scheduleTime ? new Date(duplicateOf.scheduleTime).toLocaleString() : 'no time'}). Scheduling it again will post the same video twice.</div></div>}
               {collision && <div className="warn amber"><IconWarn size={17} /><div>Another post is scheduled within 30 minutes of this time ({collision.caption ? collision.caption.slice(0, 60) : 'untitled'}). Consider spacing posts at least an hour apart.</div></div>}
               {feedVerticalWarn && <div className="warn red"><IconWarn size={17} /><div>Vertical video (ratio {ratio?.toFixed(2)}) with FEED format — this is likely to fail or crop. Switch to REELS above.</div></div>}
@@ -281,16 +415,32 @@ export default function Studio({ editing, seed, media, templates, onSave, onCanc
 
         <div>
           <div className="card preview-card">
-            <div className="card-head"><div><h2>Live preview</h2><p>How it will look on a phone.</p></div><span className="badge brand">{form.platform}</span></div>
-            <div className="phone" aria-label="Phone preview">
-              <div className="phone-head"><span>KiluaAI</span><span>{form.format}</span></div>
-              <div className="phone-media">
-                {form.mediaUrl ? (form.mediaType === 'image' ? <img src={form.mediaUrl} alt="Preview" /> : <video src={form.mediaUrl} muted playsInline controls preload="metadata" />) : <span style={{ color: '#888', fontSize: 13, padding: 20, textAlign: 'center' }}>Add media in Step 1 to see it here</span>}
-                <div className="phone-overlay">
-                  <p>{form.caption || 'Your caption will appear here…'}</p>
-                  {form.hashtags && <div className="tags">{form.hashtags}</div>}
-                  {form.cta && <div style={{ marginTop: 6, fontSize: 12, fontWeight: 700 }}>{form.cta}</div>}
-                </div>
+            <div className="card-head"><div><h2>{form.platform === 'Instagram' ? 'Instagram preview' : 'Live preview'}</h2><p>How it will look on {form.platform}.</p></div><span className="badge brand">{form.platform}</span></div>
+            <div className="ig-preview" aria-label="Instagram post preview">
+              <div className="ig-head">
+                {previewAccount.pic
+                  ? <img className="ig-avatar" src={previewAccount.pic} alt="" />
+                  : <span className="ig-avatar ig-avatar-fallback" aria-hidden="true">{(previewAccount.username || 'k').charAt(0).toUpperCase()}</span>}
+                <b>{previewAccount.username || 'youraccount'}</b>
+                <span className="ig-format">{form.format}</span>
+              </div>
+              <div className="ig-media" style={{ aspectRatio: previewAspect }}>
+                {form.mediaUrl
+                  ? (form.posterUrl
+                    ? <img src={form.posterUrl} alt="Preview" />
+                    : form.mediaType === 'image'
+                      ? <img src={form.mediaUrl} alt="Preview" />
+                      : <video src={form.mediaUrl} muted playsInline preload="metadata" />)
+                  : <span className="ig-empty">Add media in Step 1 to see it here</span>}
+              </div>
+              <div className="ig-actions" aria-hidden="true">
+                <span className="ig-actions-left"><IconHeart size={21} /><IconComment size={21} /><IconSend size={21} /></span>
+                <IconBookmark size={21} />
+              </div>
+              <div className="ig-caption">
+                <p><b>{previewAccount.username || 'youraccount'}</b> {form.caption || <span className="muted">Your caption will appear here…</span>}</p>
+                {form.hashtags && <p className="ig-tags">{form.hashtags}</p>}
+                {form.cta && <p className="ig-cta">{form.cta}</p>}
               </div>
             </div>
             <div className="score-wrap mt">
