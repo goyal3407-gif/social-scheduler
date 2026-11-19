@@ -103,6 +103,7 @@ textarea{resize:vertical;min-height:90px}
 .badge.published{background:var(--green-soft);color:var(--green)}
 .badge.failed{background:var(--red-soft);color:var(--red)}
 .badge.draft{background:var(--amber-soft);color:var(--amber)}
+.badge.partial{background:var(--amber-soft);color:var(--amber)}
 .badge.neutral{background:var(--surface-2);color:var(--ink-2);border:1px solid var(--line)}
 .badge.brand{background:var(--brand-soft);color:var(--brand)}
 

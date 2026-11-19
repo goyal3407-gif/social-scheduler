@@ -456,6 +456,14 @@ export default function App() {
       const res = await api.publishPost(post.id)
       if (res && res.ok === false) throw new Error(res.error || 'Publish failed.')
       const liveUrl = res?.liveUrl || res?.live_url
+      if (res?.partial) {
+        // Live on some ticked accounts, failed on others: refetch so
+        // the row shows the real per-account state, and say so.
+        try { const fresh = await api.posts(); if (fresh?.posts) setPosts(fresh.posts) } catch { /* the toast still explains */ }
+        showToast('Published to some accounts — the rest are still in the queue.')
+        refreshStats()
+        return
+      }
       setPosts((prev) => prev.map((p) => (p.id === post.id ? { ...p, status: 'published', ...(liveUrl ? { liveUrl } : {}) } : p)))
       if (liveUrl) pushToast({ message: 'Published live', actionLabel: 'View on Instagram', onAction: () => window.open(liveUrl, '_blank', 'noopener') })
       else showToast('Published.')
@@ -465,7 +473,7 @@ export default function App() {
       // Surface the server's message plainly so the user knows what to fix
       // (e.g. "Instagram not connected — connect Instagram in Settings").
       setError(e)
-      if (/not connected/i.test(e.message || '')) setTab('settings')
+      if (/no longer connected|not connected/i.test(e.message || '')) setTab('settings')
     } finally { setPublishingId(null) }
   }, [refreshStats, pushToast])
 
@@ -700,7 +708,9 @@ export default function App() {
       posterUrl: mediaGone ? '' : (post.posterUrl || ''),
       caption: post.caption || '', hashtags: post.hashtags || '', cta: post.cta || '',
       platform: post.platform || 'Instagram', format: post.format || 'REELS',
-      igAccountId: post.igAccountId || '', igAccountUsername: post.igAccountUsername || '',
+      igTargets: Array.isArray(post.igTargets) && post.igTargets.length
+        ? post.igTargets.map((t) => String(typeof t === 'string' ? t : (t?.igUserId || ''))).filter(Boolean)
+        : (post.igAccountId ? [String(post.igAccountId)] : []),
       youtube: post.youtube || null,
       igEnabled: post.igEnabled,
       firstComment: post.firstComment || '', repeat: post.repeat || '',
@@ -938,7 +948,7 @@ export default function App() {
         )}
         {tab === 'studio' && (
           <div className="section">
-            <Studio key={`${studioKey}-${editing?.id || 'new'}`} editing={editing} seed={templateSeed ? { caption: templateSeed.text || templateSeed.caption || '', hashtags: templateSeed.hashtags || '', cta: templateSeed.cta || '', mediaUrl: templateSeed.mediaUrl || '', mediaType: templateSeed.mediaType || 'video', posterUrl: templateSeed.posterUrl || '', scheduleTime: templateSeed.scheduleTime || '', platform: templateSeed.platform || 'Instagram', format: templateSeed.format || 'REELS', igAccountId: templateSeed.igAccountId || '', igAccountUsername: templateSeed.igAccountUsername || '', youtube: templateSeed.youtube || null, igEnabled: templateSeed.igEnabled, firstComment: templateSeed.firstComment || '', repeat: templateSeed.repeat || '' } : null} media={media} templates={templates} hashtagGroups={hashtagGroups} onCreateTemplate={handleCreateTemplate} onDeleteTemplate={handleDeleteTemplate} onCreateHashtagGroup={handleCreateHashtagGroup} onDeleteHashtagGroup={handleDeleteHashtagGroup} drafts={drafts} onSaveLibraryDraft={handleCreateDraft} onDeleteLibraryDraft={handleDeleteDraft} onSave={handleSavePost} onCancel={() => setTab('queue')} saving={saving} posts={visiblePosts} igAccounts={settings?.instagramAccounts || []} defaultIgUserId={settings?.defaultIgUserId || ''} settings={settings} onNavigate={setTab} />
+            <Studio key={`${studioKey}-${editing?.id || 'new'}`} editing={editing} seed={templateSeed ? { caption: templateSeed.text || templateSeed.caption || '', hashtags: templateSeed.hashtags || '', cta: templateSeed.cta || '', mediaUrl: templateSeed.mediaUrl || '', mediaType: templateSeed.mediaType || 'video', posterUrl: templateSeed.posterUrl || '', scheduleTime: templateSeed.scheduleTime || '', platform: templateSeed.platform || 'Instagram', format: templateSeed.format || 'REELS', igTargets: Array.isArray(templateSeed.igTargets) ? templateSeed.igTargets : (templateSeed.igAccountId ? [templateSeed.igAccountId] : []), youtube: templateSeed.youtube || null, igEnabled: templateSeed.igEnabled, firstComment: templateSeed.firstComment || '', repeat: templateSeed.repeat || '' } : null} media={media} templates={templates} hashtagGroups={hashtagGroups} onCreateTemplate={handleCreateTemplate} onDeleteTemplate={handleDeleteTemplate} onCreateHashtagGroup={handleCreateHashtagGroup} onDeleteHashtagGroup={handleDeleteHashtagGroup} drafts={drafts} onSaveLibraryDraft={handleCreateDraft} onDeleteLibraryDraft={handleDeleteDraft} onSave={handleSavePost} onCancel={() => setTab('queue')} saving={saving} posts={visiblePosts} igAccounts={settings?.instagramAccounts || []} defaultIgUserId={settings?.defaultIgUserId || ''} settings={settings} onNavigate={setTab} />
           </div>
         )}
         {tab === 'bulk' && <div className="section"><Bulk onImport={handleBulkImport} posts={visiblePosts} onUploadFile={handleUpload} igAccounts={settings?.instagramAccounts || []} defaultIgUserId={settings?.defaultIgUserId || ''} hashtagGroups={hashtagGroups} /></div>}

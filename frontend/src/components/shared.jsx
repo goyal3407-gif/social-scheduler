@@ -126,6 +126,21 @@ export function friendlyFailure(error) {
   return { text: '', fix: '' }
 }
 
+/**
+ * A post's Instagram targets as the UI reads them: the stored
+ * igTargets list when present, else a one-element list synthesized
+ * from the legacy single-account fields (older posts).
+ */
+export function targetsOfPost(post) {
+  if (!post) return []
+  if (Array.isArray(post.igTargets) && post.igTargets.length) return post.igTargets
+  return [{
+    igUserId: post.igAccountId || '', username: post.igAccountUsername || '',
+    status: post.status === 'published' ? 'published' : post.status === 'failed' ? 'failed' : 'pending',
+    liveUrl: post.liveUrl || '', retryPending: !!post.retryPending,
+  }]
+}
+
 export function StatusTracker({ post, publishing, onReconnect }) {
   if (!post) return null
   if (post.status === 'failed' && !post.retryPending) {
@@ -159,6 +174,37 @@ export function StatusTracker({ post, publishing, onReconnect }) {
   // stays Instagram and YouTube rides along as the side note.
   const ytOnly = post.igEnabled === false
   const ytOn = Boolean(post.youtube && post.youtube.enabled)
+  const ytNote = ytOn && !ytOnly ? (
+    <span className="trk-note" title={post.youtubeError || undefined}>
+      {post.youtubeStatus === 'uploaded' && post.youtubeVideoId
+        ? <>· also on YouTube: <a className="trk-live" href={`https://www.youtube.com/watch?v=${post.youtubeVideoId}`} target="_blank" rel="noreferrer">watch (private)</a></>
+        : post.youtubeStatus === 'failed'
+          ? '· YouTube: upload failed — Instagram is live'
+          : post.youtubeStatus === 'skipped'
+            ? '· YouTube: skipped (videos only)'
+            : '· also on YouTube: posting'}
+    </span>
+  ) : null
+  // Partial (multi-target): live on some ticked accounts, failed on
+  // others. Name both sides so the owner sees exactly what happened;
+  // single-account posts never take this branch.
+  const targets = targetsOfPost(post)
+  if (post.status === 'partial' && targets.length > 1) {
+    const live = targets.filter((t) => t.status === 'published')
+    const failedT = targets.filter((t) => t.status === 'failed')
+    const retrying = failedT.some((t) => t.retryPending)
+    const names = (list) => list.map((t) => `@${t.username || t.igUserId || 'account'}`).join(', ')
+    return (
+      <div className="post-tracker" aria-label="Status: live on some accounts">
+        <span className="trk done"><span className="trk-dot" aria-hidden="true" />Live</span>
+        <span className="trk-note">
+          Partial — live on {names(live)}; failed on {names(failedT)}{retrying ? ' — auto-retry pending for the failed account.' : ''}
+        </span>
+        {live[0]?.liveUrl && <a className="trk-live" href={live[0].liveUrl} target="_blank" rel="noreferrer">View on Instagram</a>}
+        {ytNote}
+      </div>
+    )
+  }
   return (
     <div className="post-tracker" aria-label={`Status: ${published ? (ytOnly ? 'live on YouTube' : 'live on Instagram') : inFlight ? 'publishing' : 'scheduled'}`}>
       {steps.map((label, i) => {
@@ -173,17 +219,7 @@ export function StatusTracker({ post, publishing, onReconnect }) {
       })}
       {post.status === 'failed' && post.retryPending && <span className="trk-note">auto-retry pending</span>}
       {published && post.liveUrl && <a className="trk-live" href={post.liveUrl} target="_blank" rel="noreferrer">{ytOnly ? 'View on YouTube' : 'View on Instagram'}</a>}
-      {ytOn && !ytOnly && (
-        <span className="trk-note" title={post.youtubeError || undefined}>
-          {post.youtubeStatus === 'uploaded' && post.youtubeVideoId
-            ? <>· also on YouTube: <a className="trk-live" href={`https://www.youtube.com/watch?v=${post.youtubeVideoId}`} target="_blank" rel="noreferrer">watch (private)</a></>
-            : post.youtubeStatus === 'failed'
-              ? '· YouTube: upload failed — Instagram is live'
-              : post.youtubeStatus === 'skipped'
-                ? '· YouTube: skipped (videos only)'
-                : '· also on YouTube: posting'}
-        </span>
-      )}
+      {ytNote}
     </div>
   )
 }
@@ -204,6 +240,9 @@ export function PostRow({ post, onEdit, onDelete, onPublish, publishing, onDupli
   }, [menuOpen])
   const act = (fn, arg) => () => { setMenuOpen(false); if (fn) fn(post, arg) }
   const hasMenu = Boolean(onDuplicate || onPostAgain || onReschedule || onRescheduleNextBest || onEdit || onDelete)
+  // One chip per ticked Instagram account (multi-target posts only):
+  // @name ✓ live / ✗ failed / … publishing / • waiting.
+  const targets = targetsOfPost(post)
   return (
     <div className="post-row">
       <Thumb post={post} />
@@ -214,6 +253,13 @@ export function PostRow({ post, onEdit, onDelete, onPublish, publishing, onDupli
           <span className="badge brand">{post.format || 'REELS'}</span>
           {post.repeat === 'weekly' && <span className="badge neutral" title="This post repeats weekly — publishing it schedules the next one automatically">Repeats weekly</span>}
           {post.liveUrl && <a className="badge neutral" href={post.liveUrl} target="_blank" rel="noreferrer">Live ↗</a>}
+          {targets.length > 1 && targets.map((t) => {
+            const mark = t.status === 'published' ? '✓' : t.status === 'failed' ? '✗' : t.status === 'publishing' ? '…' : '•'
+            const label = `@${t.username || t.igUserId || 'account'} ${mark}`
+            return t.status === 'published' && t.liveUrl
+              ? <a key={t.igUserId || label} className="badge neutral" href={t.liveUrl} target="_blank" rel="noreferrer">{label}</a>
+              : <span key={t.igUserId || label} className="badge neutral">{label}</span>
+          })}
         </div>
         <p>{post.caption || <span className="muted">No caption</span>}</p>
         <div className="post-meta">

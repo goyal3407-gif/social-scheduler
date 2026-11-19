@@ -3,8 +3,8 @@ import { fmtDateTime } from '../api.js'
 import { queueOrder } from '../queueOrder.js'
 import { PostRow, Skeleton, Empty, StatusBadge, PlatformBadge, Thumb } from './shared.jsx'
 
-const STATUSES = ['scheduled', 'draft', 'published', 'failed']
-const LABELS = { scheduled: 'Scheduled', draft: 'Drafts', published: 'Published', failed: 'Failed' }
+const STATUSES = ['scheduled', 'draft', 'published', 'partial', 'failed']
+const LABELS = { scheduled: 'Scheduled', draft: 'Drafts', published: 'Published', partial: 'Partial', failed: 'Failed' }
 
 export default function Queue({ posts, loading, onEdit, onDelete, onPublish, publishingId, onCreate, onDuplicate, onPostAgain, onReschedule, onRescheduleNextBest, overdue, onPublishDue, onDeleteMany, onReconnect, tr, searchSeed, searchNonce }) {
   const t = tr || ((k) => k)

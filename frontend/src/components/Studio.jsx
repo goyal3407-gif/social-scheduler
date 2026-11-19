@@ -5,7 +5,18 @@ import { IconWarn, IconCheck, IconHeart, IconComment, IconSend, IconBookmark } f
 const PLATFORMS = ['Instagram', 'YouTube', 'Facebook', 'TikTok']
 const FORMATS = ['REELS', 'FEED', 'STORY']
 const YT_VISIBILITIES = ['public', 'unlisted', 'private']
-const EMPTY = { mediaUrl: '', mediaType: 'video', posterUrl: '', caption: '', hashtags: '', cta: '', platform: 'Instagram', scheduleTime: '', status: 'scheduled', format: 'REELS', igAccountId: '', igAccountUsername: '', igTick: true, youtubeEnabled: false, youtubeTitle: '', ytVisibility: 'public', ytMadeForKids: false, firstComment: '', repeatWeekly: false }
+const EMPTY = { mediaUrl: '', mediaType: 'video', posterUrl: '', caption: '', hashtags: '', cta: '', platform: 'Instagram', scheduleTime: '', status: 'scheduled', format: 'REELS', igTargets: [], igTick: true, youtubeEnabled: false, youtubeTitle: '', ytVisibility: 'public', ytMadeForKids: false, firstComment: '', repeatWeekly: false }
+// The Instagram accounts a post/draft targets, as a list of account
+// ids. New posts store igTargets (objects on a saved post, plain ids
+// on a library draft); a legacy post carries only igAccountId, which
+// reads as a one-element list.
+const targetIdsOf = (base) => {
+  if (!base) return []
+  if (Array.isArray(base.igTargets) && base.igTargets.length) {
+    return base.igTargets.map((t) => String(typeof t === 'string' ? t : (t?.igUserId || t?.id || ''))).filter(Boolean)
+  }
+  return base.igAccountId ? [String(base.igAccountId)] : []
+}
 // A post's stored YouTube setting is an object ({ enabled, title }) and
 // its repeat is a string ('weekly'); the form keeps flat fields and
 // submit() folds them back. The platform picker is two ticks:
@@ -17,6 +28,7 @@ const withYouTubeFields = (base, ytDefault) => {
   const y = (base && base.youtube) || {}
   const f = {
     ...EMPTY, ...base,
+    igTargets: targetIdsOf(base),
     igTick: !base || base.igEnabled !== false, youtubeEnabled: !!y.enabled, youtubeTitle: y.title || '',
     repeatWeekly: (base && base.repeat) === 'weekly',
     ytVisibility: YT_VISIBILITIES.includes(base?.ytVisibility) ? base.ytVisibility : (YT_VISIBILITIES.includes(ytDefault) ? ytDefault : 'public'),
@@ -25,6 +37,8 @@ const withYouTubeFields = (base, ytDefault) => {
   delete f.youtube
   delete f.repeat
   delete f.igEnabled
+  delete f.igAccountId
+  delete f.igAccountUsername
   return f
 }
 // Built-in starter templates (server seeds) have ids tpl-1, tpl-2, … —
@@ -66,14 +80,16 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
   const draftKey = (accountId) => `ss-studio-draft:${accountId || 'default'}`
   const clearDrafts = () => {
     try {
-      localStorage.removeItem(draftKey(form.igAccountId || defaultIgUserId))
+      localStorage.removeItem(draftKey((form.igTargets || [])[0] || defaultIgUserId))
       localStorage.removeItem(draftKey(defaultIgUserId))
     } catch { /* storage unavailable */ }
   }
 
   const ytVisTouchedRef = useRef(false)
+  const targetsTouchedRef = useRef(false)
   useEffect(() => {
     ytVisTouchedRef.current = false
+    targetsTouchedRef.current = false
     if (editing?.id) {
       setForm(withYouTubeFields({ ...editing, scheduleTime: editing.scheduleTime || '' }, settings?.ytDefaultVisibility))
     } else if (seed) {
@@ -100,6 +116,27 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editing, seed])
 
+  // Default account pre-tick: a NEW post starts with the default
+  // Instagram account ticked (the owner can tick more, or untick it).
+  // Applies only until the user touches the tick list themselves, and
+  // never to an edit or a seed (those carry their own targets).
+  useEffect(() => {
+    if (editing?.id || seed || targetsTouchedRef.current || !defaultIgUserId) return
+    setForm((f) => ((f.igTargets || []).length ? f : { ...f, igTargets: [String(defaultIgUserId)] }))
+  }, [defaultIgUserId, editing, seed])
+
+  const toggleTarget = (id) => {
+    targetsTouchedRef.current = true
+    setForm((f) => {
+      const cur = f.igTargets || []
+      return { ...f, igTargets: cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id] }
+    })
+  }
+  // With connected accounts, "Instagram ticked" means at least one
+  // account is ticked; with none connected, the generic tick applies.
+  const hasAccounts = Array.isArray(igAccounts) && igAccounts.length > 0
+  const igTicked = hasAccounts ? (form.igTargets || []).length > 0 : Boolean(form.igTick)
+
   // YouTube visibility pre-fill: settings can arrive after the
   // composer mounts. When the user's saved default lands, apply it to
   // a NEW post — never to an edit/seed, and never over a visibility
@@ -117,7 +154,7 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
     const t = setTimeout(() => {
       try {
         if (form.caption || form.mediaUrl || form.hashtags || form.cta) {
-          localStorage.setItem(draftKey(form.igAccountId || defaultIgUserId), JSON.stringify(form))
+          localStorage.setItem(draftKey((form.igTargets || [])[0] || defaultIgUserId), JSON.stringify(form))
         }
       } catch { /* storage unavailable */ }
     }, 400)
@@ -189,7 +226,7 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
     const status = statusOverride || form.status || 'scheduled'
     if (!form.mediaUrl.trim()) { setError('Add a media URL or pick one from your library first (Step 1).'); setStep(1); return }
     // Platform picker: at least one platform must be ticked.
-    if (!form.igTick && !(form.youtubeEnabled && ytStatus?.connected)) { setError('Tick at least one platform in Step 3 — Instagram, YouTube, or both.'); setStep(3); return }
+    if (!igTicked && !(form.youtubeEnabled && ytStatus?.connected)) { setError('Tick at least one platform in Step 3 — Instagram, YouTube, or both.'); setStep(3); return }
     // Drafts need no time; scheduled posts do.
     if (status !== 'draft' && !form.scheduleTime) { setError('Pick a date and time to schedule (Step 3).'); setStep(3); return }
     const payload = {
@@ -202,12 +239,16 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
       status,
       // Fold the flat platform-picker fields back into stored shape.
       // The YouTube tick only counts when a channel is connected.
-      igEnabled: Boolean(form.igTick),
+      // With connected accounts the ticked list IS the Instagram
+      // selection; without any, the generic tick decides.
+      igEnabled: Boolean(igTicked),
+      ...(hasAccounts ? { igTargets: form.igTargets || [] } : {}),
       youtube: { enabled: Boolean(form.youtubeEnabled && ytStatus?.connected), title: (form.youtubeTitle || '').trim() },
       firstComment: (form.firstComment || '').trim(),
       repeat: form.repeatWeekly ? 'weekly' : '',
     }
     delete payload.igTick
+    if (!hasAccounts) delete payload.igTargets
     delete payload.youtubeEnabled
     delete payload.youtubeTitle
     delete payload.repeatWeekly
@@ -274,8 +315,8 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
         caption: form.caption, hashtags: form.hashtags, cta: form.cta,
         mediaUrl: form.mediaUrl, mediaType: form.mediaType, posterUrl: form.posterUrl,
         platform: form.platform, format: form.format,
-        igAccountId: form.igAccountId, igAccountUsername: form.igAccountUsername,
-        igEnabled: Boolean(form.igTick),
+        igAccountId: (form.igTargets || [])[0] || '', igTargets: form.igTargets || [],
+        igEnabled: Boolean(igTicked),
         youtube: { enabled: Boolean(form.youtubeEnabled), title: form.youtubeTitle || '' },
         ytVisibility: form.ytVisibility, ytMadeForKids: Boolean(form.ytMadeForKids),
         firstComment: form.firstComment || '',
@@ -297,15 +338,15 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
     setForm((f) => ({ ...f, mediaUrl: m.url, mediaType: m.kind === 'image' ? 'image' : 'video', posterUrl: m.posterUrl || '', title: m.title }))
   }
 
-  // Instagram preview identity: the account this post will publish to
-  // (the composer's selected account, else the default connection).
+  // Instagram preview identity: the first ticked account this post
+  // will publish to, else the default connection.
   const previewAccount = useMemo(() => {
-    const wanted = form.igAccountId || defaultIgUserId || ''
+    const wanted = (form.igTargets || [])[0] || defaultIgUserId || ''
     const found = (igAccounts || []).find((a) => String(a.igUserId) === String(wanted))
-    const username = found?.username || form.igAccountUsername || settings?.instagramUsername || settings?.instagramHandle || ''
+    const username = found?.username || settings?.instagramUsername || settings?.instagramHandle || ''
     const pic = found?.profile?.profile_picture_url || found?.profile?.profilePictureUrl || settings?.instagramProfile?.profile_picture_url || settings?.instagramProfile?.profilePictureUrl || ''
     return { username: String(username || '').replace(/^@/, ''), pic }
-  }, [form.igAccountId, form.igAccountUsername, igAccounts, defaultIgUserId, settings])
+  }, [form.igTargets, igAccounts, defaultIgUserId, settings])
   const previewAspect = form.format === 'FEED' ? '4 / 5' : '9 / 16'
 
   return (
@@ -500,22 +541,38 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
                   </select>
                 </div>
               </div>
-              {Array.isArray(igAccounts) && igAccounts.length > 0 && (
-                <div style={{ marginTop: 14 }}>
-                  <label htmlFor="igAccount">Instagram account</label>
-                  <select id="igAccount" value={form.igAccountId || defaultIgUserId || ''} onChange={(e) => { const a = igAccounts.find((x) => x.igUserId === e.target.value); set({ igAccountId: e.target.value, igAccountUsername: a ? a.username : '' }) }}>
-                    {igAccounts.map((a) => (
-                      <option key={a.igUserId} value={a.igUserId}>@{a.username || a.igUserId}{a.isDefault ? ' (default)' : ''}</option>
-                    ))}
-                    {form.igAccountId && !igAccounts.some((a) => a.igUserId === form.igAccountId) && (
-                      <option value={form.igAccountId}>@{form.igAccountUsername || form.igAccountId} (disconnected — pick another)</option>
-                    )}
-                  </select>
-                  <p className="muted small" style={{ marginTop: 6 }}>This post publishes to the chosen account only.</p>
-                </div>
-              )}
               <div style={{ marginTop: 16, borderTop: '1px solid var(--line)', paddingTop: 14 }}>
-                <label>Publish to <span className="muted">(tick one or both — the video goes to every ticked platform at the same time)</span></label>
+                <label>Publish to <span className="muted">(tick where this post goes — it publishes to every ticked account and platform at the same time)</span></label>
+                {hasAccounts ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
+                    {igAccounts.map((a) => (
+                      <label key={a.igUserId} style={{ display: 'flex', gap: 8, alignItems: 'center', cursor: 'pointer', border: '1px solid var(--line)', borderRadius: 12, padding: '9px 14px' }}>
+                        <input type="checkbox" checked={(form.igTargets || []).includes(a.igUserId)} onChange={() => toggleTarget(a.igUserId)} style={{ width: 'auto' }} />
+                        <b>Instagram</b> <span>@{a.username || a.igUserId}{a.isDefault ? ' (default)' : ''}</span>
+                      </label>
+                    ))}
+                    {(form.igTargets || []).filter((id) => !igAccounts.some((a) => a.igUserId === id)).map((id) => (
+                      <label key={id} style={{ display: 'flex', gap: 8, alignItems: 'center', cursor: 'pointer', border: '1px solid var(--line)', borderRadius: 12, padding: '9px 14px' }}>
+                        <input type="checkbox" checked onChange={() => toggleTarget(id)} style={{ width: 'auto' }} />
+                        <b>Instagram</b> <span>@{id} (disconnected)</span>
+                      </label>
+                    ))}
+                    {ytStatus?.connected ? (
+                      <label style={{ display: 'flex', gap: 8, alignItems: 'center', cursor: 'pointer', border: '1px solid var(--line)', borderRadius: 12, padding: '9px 14px' }}>
+                        <input type="checkbox" checked={Boolean(form.youtubeEnabled)} onChange={(e) => set({ youtubeEnabled: e.target.checked })} style={{ width: 'auto' }} />
+                        <b>YouTube</b> <span className="muted small">{ytStatus.channelTitle || 'your channel'}</span>
+                      </label>
+                    ) : (
+                      <span style={{ display: 'flex', gap: 8, alignItems: 'center', border: '1px solid var(--line)', borderRadius: 12, padding: '9px 14px', opacity: 0.75 }}>
+                        <input type="checkbox" checked={false} disabled readOnly style={{ width: 'auto' }} />
+                        <b>YouTube</b>
+                        {ytStatus && !ytStatus.configured
+                          ? <span className="muted small">not set up on the server yet</span>
+                          : <button type="button" className="btn ghost small" onClick={() => { if (onNavigate) onNavigate('connections') }}>Connect YouTube</button>}
+                      </span>
+                    )}
+                  </div>
+                ) : (
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
                   <label style={{ display: 'inline-flex', gap: 8, alignItems: 'center', cursor: 'pointer', border: '1px solid var(--line)', borderRadius: 999, padding: '8px 14px' }}>
                     <input type="checkbox" checked={Boolean(form.igTick)} onChange={(e) => set({ igTick: e.target.checked })} style={{ width: 'auto' }} />
@@ -536,6 +593,7 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
                     </span>
                   )}
                 </div>
+                )}
                 {form.youtubeEnabled && ytStatus?.connected && (
                   <div style={{ marginTop: 12 }}>
                     <label htmlFor="youtubeTitle">YouTube title <span className="muted">(blank = first line of the caption)</span></label>
@@ -564,10 +622,10 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
                     <p className="muted small" style={{ marginTop: 6 }}>The caption + hashtags become the YouTube description automatically. Videos only — an image post skips YouTube. Until Google approves the app, YouTube keeps every upload Private — the visibility you choose here takes effect automatically once the approval passes.</p>
                   </div>
                 )}
-                {!form.igTick && form.youtubeEnabled && ytStatus?.connected && (
+                {!igTicked && form.youtubeEnabled && ytStatus?.connected && (
                   <p className="muted small" style={{ marginTop: 8 }}>YouTube only — this post will not go to Instagram.</p>
                 )}
-                {!form.igTick && !form.youtubeEnabled && (
+                {!igTicked && !form.youtubeEnabled && (
                   <p className="small" style={{ marginTop: 8, color: 'var(--red)' }}>Tick at least one platform — Instagram, YouTube, or both.</p>
                 )}
               </div>

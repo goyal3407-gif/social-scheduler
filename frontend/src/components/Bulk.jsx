@@ -151,7 +151,9 @@ export default function Bulk({ onImport, posts, onUploadFile, igAccounts, defaul
           mediaType: /\.(png|jpe?g|gif|webp|avif)$/i.test(f.name) ? 'image' : 'video',
           posterUrl: item.posterUrl || '',
           format: 'REELS', status: 'scheduled', scheduleTime: slot.when.toISOString(),
-          igAccountId: fAccount || defaultIgUserId || '',
+          // Same target field the Studio writes: the one selected
+          // account as a one-element tick list.
+          ...((fAccount || defaultIgUserId) ? { igTargets: [fAccount || defaultIgUserId] } : {}),
         })
       } catch (e) {
         failures.push(`${f.name}: ${e.message || 'upload failed'}`)

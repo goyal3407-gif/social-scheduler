@@ -149,6 +149,17 @@ async function runScenario(scenario, bundleDir) {
       liveUrl: 'https://www.youtube.com/watch?v=ytOnlyVid1',
       youtube: { enabled: true, title: 'YT ONLY PUB' }, youtubeVideoId: 'ytOnlyVid1', youtubeStatus: 'uploaded',
     }),
+    // Multi-target seed (oldest of all, so the ordering assertions
+    // above stay untouched): live on one ticked account, failed on
+    // the other with its auto-retry armed — the row must read
+    // "Partial" and name both accounts.
+    post('p-partial', 'PARTIAL POST', 'partial', now - 4 * 86400000, {
+      liveUrl: 'https://instagram.com/p/partial1',
+      igTargets: [
+        { igUserId: '111', username: 'smokeone', status: 'published', liveUrl: 'https://instagram.com/p/partial1', error: '' },
+        { igUserId: '222', username: 'smoketwo', status: 'failed', liveUrl: '', error: 'stub failure', retryPending: true, retryAt: iso(now + 900000) },
+      ],
+    }),
   ]
   const json = (status, body) => ({ ok: status >= 200 && status < 300, status, json: async () => body })
   const ownBuildId = process.env.SMOKE_BUILD_ID || ''
@@ -162,7 +173,7 @@ async function runScenario(scenario, bundleDir) {
       case '/api/posts': return json(200, seeded)
       case '/api/media': return json(200, [])
       case '/api/templates': return json(200, [])
-      case '/api/settings': return json(200, { instagramAccounts: [], defaultIgUserId: '', checklistDismissed: true, setupDone: true, ytDefaultVisibility: 'unlisted' })
+      case '/api/settings': return json(200, { instagramAccounts: [{ igUserId: '111', username: 'smokeone', isDefault: true }, { igUserId: '222', username: 'smoketwo', isDefault: false }], defaultIgUserId: '111', checklistDismissed: true, setupDone: true, ytDefaultVisibility: 'unlisted' })
       case '/api/stats': return json(200, { scheduled: 2, published: 1, failed: 1, drafts: 0, mediaCount: 0 })
       case '/api/db-status': return json(200, { ok: true, db: 'mongodb', instagram: { connected: false } })
       case '/api/notifications': return json(200, { notifications: [], unread: 0 })
@@ -310,6 +321,18 @@ async function runScenario(scenario, bundleDir) {
     if (!igTrk) fail('no status tracker rendered for the Instagram-only post')
     if (!igTrk.textContent.includes('View on Instagram')) fail('Instagram-only tracker lost "View on Instagram"')
     if (igTrk.textContent.includes('YouTube')) fail('Instagram-only tracker mentions YouTube: ' + igTrk.textContent)
+    // Multi-target partial row: the badge reads "partial", the
+    // tracker names the live and the failed account, and the
+    // per-account chips show ✓ / ✗.
+    const partRow = [...window.document.querySelectorAll('.post-row')].find((r) => r.textContent.includes('PARTIAL POST'))
+    if (!partRow) fail('partial multi-target post row missing')
+    if (!partRow.textContent.includes('partial')) fail('partial post badge does not read "partial": ' + partRow.textContent.slice(0, 200))
+    const partTrk = partRow.querySelector('.post-tracker')
+    if (!partTrk) fail('no status tracker rendered for the partial post')
+    if (!partTrk.textContent.includes('Partial')) fail('partial tracker does not say "Partial": ' + partTrk.textContent)
+    if (!partTrk.textContent.includes('@smokeone') || !partTrk.textContent.includes('@smoketwo')) fail('partial tracker does not name both accounts: ' + partTrk.textContent)
+    if (!partRow.textContent.includes('@smokeone ✓')) fail('partial row missing the live account chip: ' + partRow.textContent.slice(0, 300))
+    if (!partRow.textContent.includes('@smoketwo ✗')) fail('partial row missing the failed account chip: ' + partRow.textContent.slice(0, 300))
     // Visit the other pack-2-touched lazy views too: a render crash in any
     // of them unmounts the whole app (there is no error boundary).
     for (const [tab, marker] of [['Calendar', 'posts in total'], ['Media', 'Media Library']]) {
@@ -342,6 +365,17 @@ async function runScenario(scenario, bundleDir) {
     const step3 = [...window.document.querySelectorAll('button')].find((el) => el.textContent.includes('Schedule & publish'))
     if (step3) step3.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }))
     await waitFor(() => root.textContent.includes('Publish to') && root.textContent.includes('Smoke Channel'), 'studio platform picker to render')
+    // Multi-target picker: Step 3 lists every connected Instagram
+    // account BY NAME with a tick box (no single-account dropdown),
+    // and the default account starts ticked for a new post.
+    if (window.document.querySelector('#igAccount')) fail('the old single-account dropdown is still in Studio Step 3')
+    const tickRow = (name) => [...window.document.querySelectorAll('label')].find((el) => el.textContent.includes(name) && el.querySelector('input[type="checkbox"]'))
+    const rowOne = tickRow('@smokeone')
+    const rowTwo = tickRow('@smoketwo')
+    if (!rowOne || !rowTwo) fail('Studio Step 3 does not list both connected accounts as tick rows')
+    if (!rowOne.querySelector('input[type="checkbox"]').checked) fail('default account is not pre-ticked for a new post')
+    if (rowTwo.querySelector('input[type="checkbox"]').checked) fail('non-default account is ticked by default')
+    if (!rowOne.textContent.includes('(default)')) fail('default account row is not marked (default)')
     // Phase E: ticking YouTube must reveal the visibility selector
     // PRE-FILLED from the user's saved default (the settings stub
     // returns ytDefaultVisibility 'unlisted'), the Made for Kids

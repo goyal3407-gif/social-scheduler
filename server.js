@@ -2332,7 +2332,7 @@ app.get('/api/instagram/import/:jobId', ah(async (req, res) => {
 }));
 
 // ---------- posts ----------
-const STATUSES = ['scheduled', 'draft', 'published', 'failed'];
+const STATUSES = ['scheduled', 'draft', 'published', 'failed', 'partial'];
 const FORMATS = ['REELS', 'FEED', 'STORY'];
 const PLATFORMS = ['Instagram', 'YouTube', 'Facebook', 'TikTok'];
 function validPostInput(b, { requireMedia = true } = {}) {
@@ -2375,6 +2375,18 @@ function validPostInput(b, { requireMedia = true } = {}) {
   // be ticked. Checked on create/bulk (full object present); PATCH
   // sends partial bodies, so it is not enforced there.
   if (requireMedia && b.igEnabled === false && !(b.youtube && b.youtube.enabled)) return 'Tick at least one platform — Instagram, YouTube, or both.';
+  // Multi-target picker: igTargets is the list of ticked Instagram
+  // accounts. It must be a short array of account ids (strings, or
+  // { igUserId } objects); an explicitly empty list with no other
+  // platform ticked is the same "tick at least one" error.
+  if (b.igTargets !== undefined) {
+    if (!Array.isArray(b.igTargets) || b.igTargets.length > 10) return 'That Instagram account selection is not valid.';
+    for (const t of b.igTargets) {
+      const id = typeof t === 'string' ? t : (t && typeof t === 'object' ? (t.igUserId || t.id) : null);
+      if (typeof id !== 'string' || !id) return 'That Instagram account selection is not valid.';
+    }
+    if (requireMedia && b.igTargets.length === 0 && b.igEnabled !== true && !(b.youtube && b.youtube.enabled)) return 'Tick at least one platform — Instagram, YouTube, or both.';
+  }
   // Recurrence (Phase C1): only weekly exists in v1.
   if (b.repeat !== undefined && b.repeat !== '' && b.repeat !== 'weekly') return 'That repeat setting is not valid — only weekly repeats are supported.';
   return null;
@@ -2403,24 +2415,145 @@ async function postTargetResolver(userId) {
   const { accounts, defaultIgUserId } = await db.getInstagramAccounts(userId);
   const byId = new Map(accounts.filter((a) => a.igUserId).map((a) => [String(a.igUserId), a]));
   const def = byId.get(String(defaultIgUserId || '')) || accounts.find((a) => a.igUserId) || null;
+  const resolveOne = (requested) => {
+    if (requested) {
+      const a = byId.get(String(requested));
+      if (!a) return { error: 'That Instagram account is not connected — connect it in Settings first, or choose a connected account.' };
+      return { igAccountId: a.igUserId || '', igAccountUsername: a.username || '' };
+    }
+    return def ? { igAccountId: def.igUserId || '', igAccountUsername: def.username || '' } : { igAccountId: '', igAccountUsername: '' };
+  };
   return {
-    resolve(requested) {
-      if (requested) {
-        const a = byId.get(String(requested));
-        if (!a) return { error: 'That Instagram account is not connected — connect it in Settings first, or choose a connected account.' };
-        return { igAccountId: a.igUserId || '', igAccountUsername: a.username || '' };
+    resolve: resolveOne,
+    // Multi-target: resolve a list of ticked account ids. Every id
+    // must be connected (same save-time rule, applied per account);
+    // duplicates collapse. An empty array is a valid answer — it
+    // means Instagram is unticked for this post.
+    resolveMany(requested) {
+      const out = [];
+      const seen = new Set();
+      for (const r of requested || []) {
+        const id = typeof r === 'string' ? r : (r && (r.igUserId || r.id)) || '';
+        if (!id || seen.has(String(id))) continue;
+        const one = resolveOne(id);
+        if (one.error) return { error: one.error };
+        seen.add(String(id));
+        out.push(one);
       }
-      return def ? { igAccountId: def.igUserId || '', igAccountUsername: def.username || '' } : { igAccountId: '', igAccountUsername: '' };
+      return { targets: out };
+    },
+    // The create/bulk entry point: an igTargets array wins; the
+    // legacy single igAccountId (older clients, Bulk's one-account
+    // selector) becomes a one-element list; no account field at all
+    // targets the default account, exactly as before.
+    resolveForBody(b) {
+      if (Array.isArray((b || {}).igTargets)) return this.resolveMany(b.igTargets);
+      const one = resolveOne((b || {}).igAccountId);
+      if (one.error) return { error: one.error };
+      return { targets: [one] };
     },
   };
 }
-function buildPost(b, userId, target = {}, ytDefaultVisibility = '') {
+// ---------- multi-target post state ----------
+// A post publishes to a LIST of Instagram accounts (igTargets). Each
+// target carries its own publish state, so one account can be live
+// while another is still retrying — and the media bridge copy may
+// only be deleted once EVERY target is terminal (see
+// maybeDeleteServerCopy). The legacy fields stay mirrored from the
+// list (first target -> igAccountId/igAccountUsername, first
+// published target -> liveUrl) so older code paths keep working.
+function freshTarget(t) {
+  return {
+    igUserId: (t && (t.igAccountId || t.igUserId)) || '',
+    username: (t && (t.igAccountUsername || t.username)) || '',
+    status: 'pending', liveUrl: '', error: '', publishedAt: '',
+    retryCount: 0, retryPending: false, retryAt: '', containerId: null,
+    firstCommentPosted: false,
+  };
+}
+function normalizeTarget(t) {
+  const base = freshTarget(t || {});
+  if (!t) return base;
+  if (['pending', 'publishing', 'published', 'failed'].includes(t.status)) base.status = t.status;
+  base.liveUrl = typeof t.liveUrl === 'string' ? t.liveUrl : '';
+  base.error = typeof t.error === 'string' ? t.error : '';
+  base.publishedAt = typeof t.publishedAt === 'string' ? t.publishedAt : '';
+  base.retryCount = Number.isFinite(t.retryCount) ? t.retryCount : 0;
+  base.retryPending = !!t.retryPending;
+  base.retryAt = typeof t.retryAt === 'string' ? t.retryAt : '';
+  base.containerId = t.containerId || null;
+  base.firstCommentPosted = !!t.firstCommentPosted;
+  return base;
+}
+// The post's target list, always as normalized target objects. A
+// legacy post (saved before multi-target support) reads as a
+// one-element list built from its stored single target + outcome.
+function targetsOf(post) {
+  if (!post) return [];
+  if (Array.isArray(post.igTargets) && post.igTargets.length) return post.igTargets.map(normalizeTarget);
+  const status = post.status === 'published' ? 'published' : post.status === 'failed' ? 'failed' : 'pending';
+  return [{
+    igUserId: post.igAccountId || '', username: post.igAccountUsername || '',
+    status,
+    liveUrl: status === 'published' ? (post.liveUrl || '') : '',
+    error: status === 'failed' ? (post.lastPublishError || '') : '',
+    publishedAt: '',
+    retryCount: post.retryCount || 0, retryPending: !!post.retryPending, retryAt: post.retryAt || '',
+    containerId: post.containerId || null, firstCommentPosted: !!post.firstCommentPosted,
+  }];
+}
+function targetTerminal(t) {
+  return t.status === 'published' || (t.status === 'failed' && !t.retryPending);
+}
+// The post-level status the queue shows, derived from its targets:
+// all live -> published; all permanently failed -> failed; a mix of
+// live and permanently failed (or live with more still to go) ->
+// partial; failures with a retry still armed read as failed, exactly
+// as single-account posts always have.
+function computeOverallStatus(post, targets) {
+  if (!targets.length) return (post && post.status) || 'scheduled';
+  const pub = targets.filter((t) => t.status === 'published').length;
+  const termFail = targets.filter((t) => t.status === 'failed' && !t.retryPending).length;
+  const anyFail = targets.some((t) => t.status === 'failed');
+  if (pub === targets.length) return 'published';
+  if (termFail === targets.length) return 'failed';
+  if (pub > 0 && termFail > 0 && pub + termFail === targets.length) return 'partial';
+  if (pub > 0) return 'partial';
+  if (anyFail) return 'failed';
+  return post && post.status === 'draft' ? 'draft' : 'scheduled';
+}
+// The full post-level patch for a target list: the list itself, the
+// legacy mirrors, and the derived status/retry summary.
+function summarizeTargets(post, targets) {
+  const first = targets[0] || { igUserId: '', username: '', containerId: null };
+  const firstPub = targets.find((t) => t.status === 'published');
+  const firstFail = targets.find((t) => t.status === 'failed');
+  const retrying = targets
+    .filter((t) => t.retryPending && t.retryAt)
+    .sort((a, b) => new Date(a.retryAt) - new Date(b.retryAt))[0];
+  return {
+    igTargets: targets,
+    igAccountId: first.igUserId || '',
+    igAccountUsername: first.username || '',
+    containerId: first.containerId || null,
+    liveUrl: firstPub ? (firstPub.liveUrl || '') : ((post && post.liveUrl) || ''),
+    lastPublishError: firstFail ? (firstFail.error || '') : '',
+    failedAt: firstFail ? ((post && post.failedAt) || new Date().toISOString()) : ((post && post.failedAt) || ''),
+    retryPending: !!retrying,
+    retryAt: retrying ? retrying.retryAt : '',
+    retryCount: targets.reduce((m, t) => Math.max(m, t.retryCount || 0), 0),
+    firstCommentPosted: targets.some((t) => t.firstCommentPosted) || !!((post && post.firstCommentPosted)),
+    status: computeOverallStatus(post, targets),
+  };
+}
+function buildPost(b, userId, targets = [], ytDefaultVisibility = '') {
   // Status and liveUrl are server-owned: a post becomes "published"
   // only through the publish flow, which also sets the real liveUrl
   // from Instagram. A client-supplied status/liveUrl is ignored, so a
   // post can never be created straight into a fake "published" state
   // (the only client choice kept is draft vs scheduled, as in Studio).
   const status = b.status === 'draft' ? 'draft' : 'scheduled';
+  const igTargets = (targets || []).map(freshTarget);
   return {
     id: uid('post'), userId,
     mediaUrl: b.mediaUrl,
@@ -2429,10 +2562,13 @@ function buildPost(b, userId, target = {}, ytDefaultVisibility = '') {
     hashtags: b.hashtags || '',
     cta: b.cta || '',
     platform: b.platform || 'Instagram',
-    // The Instagram account this post will publish to (multi-account):
-    // resolved server-side from the composer's choice or the default.
-    igAccountId: target.igAccountId || '',
-    igAccountUsername: target.igAccountUsername || '',
+    // The Instagram accounts this post will publish to (multi-
+    // target): resolved server-side from the composer's ticks or the
+    // default. The first target stays mirrored onto the legacy
+    // single-account fields for older code paths.
+    igTargets,
+    igAccountId: igTargets.length ? igTargets[0].igUserId : '',
+    igAccountUsername: igTargets.length ? igTargets[0].username : '',
     // Drafts may have no time yet; scheduled posts default to now.
     scheduleTime: b.scheduleTime || (status === 'draft' ? '' : new Date().toISOString()),
     status,
@@ -2455,8 +2591,9 @@ function buildPost(b, userId, target = {}, ytDefaultVisibility = '') {
     ytMadeForKids: b.ytMadeForKids === true,
     // Platform picker (Phase B revision): Instagram is ticked unless
     // explicitly unticked; a YouTube-only post publishes straight to
-    // YouTube with no Instagram leg.
-    igEnabled: b.igEnabled === false ? false : true,
+    // YouTube with no Instagram leg. With the multi-target picker an
+    // explicitly empty tick list also means Instagram is unticked.
+    igEnabled: b.igEnabled === false ? false : (Array.isArray(b.igTargets) ? igTargets.length > 0 : true),
     // First comment (Phase C2): posted as a comment right after a
     // successful publish; firstCommentPosted records that it landed.
     firstComment: typeof b.firstComment === 'string' ? b.firstComment.slice(0, 2200) : '',
@@ -2489,10 +2626,10 @@ app.post('/api/posts', ah(async (req, res) => {
   const err = validPostInput(b);
   if (err) return res.status(400).json({ ok: false, error: err });
   const resolver = await postTargetResolver(req.userId);
-  const target = resolver.resolve(b.igAccountId);
-  if (target.error) return res.status(400).json({ ok: false, error: target.error });
+  const resolved = resolver.resolveForBody(b);
+  if (resolved.error) return res.status(400).json({ ok: false, error: resolved.error });
   const settings = await db.getSettings(req.userId);
-  const post = buildPost(b, req.userId, target, settings && settings.ytDefaultVisibility);
+  const post = buildPost(b, req.userId, resolved.targets, settings && settings.ytDefaultVisibility);
   await db.savePost(post);
   res.json({ ok: true, post });
 }));
@@ -2509,9 +2646,9 @@ app.post('/api/posts/bulk', ah(async (req, res) => {
   rows.forEach((b, i) => {
     const err = validPostInput(b || {});
     if (err) { errors.push(`Row ${i + 1}: ${err}`); return; }
-    const target = resolver.resolve((b || {}).igAccountId);
-    if (target.error) { errors.push(`Row ${i + 1}: ${target.error}`); return; }
-    valid.push(buildPost(b, req.userId, target, settings && settings.ytDefaultVisibility));
+    const resolved = resolver.resolveForBody(b || {});
+    if (resolved.error) { errors.push(`Row ${i + 1}: ${resolved.error}`); return; }
+    valid.push(buildPost(b, req.userId, resolved.targets, settings && settings.ytDefaultVisibility));
   });
   if (valid.length) await db.savePostsBulk(valid);
   res.json({ ok: true, imported: valid.length, failed: rows.length - valid.length, errors: errors.slice(0, 10) });
@@ -2532,17 +2669,37 @@ app.patch('/api/posts/:id', ah(async (req, res) => {
   if (b.ytMadeForKids !== undefined) patch.ytMadeForKids = b.ytMadeForKids === true;
   if (b.repeat !== undefined) patch.repeat = b.repeat === 'weekly' ? 'weekly' : '';
   if (b.igEnabled !== undefined) patch.igEnabled = b.igEnabled === false ? false : true;
+  // Multi-target edit: the Studio sends the ticked account list.
+  // Existing targets keep their publish state (a live account stays
+  // live); newly ticked accounts start pending; unticked ones drop
+  // off. The post-level fields are re-derived from the list.
+  if (b.igTargets !== undefined) {
+    const current = await db.getPost(req.params.id);
+    if (!current || current.userId !== req.userId) return res.status(404).json({ ok: false, error: 'That post no longer exists — it may have been deleted. Refresh the queue.' });
+    const resolver = await postTargetResolver(req.userId);
+    const resolved = resolver.resolveMany(b.igTargets);
+    if (resolved.error) return res.status(400).json({ ok: false, error: resolved.error });
+    const existing = targetsOf(current);
+    const merged = resolved.targets.map((r) => {
+      const prev = existing.find((t) => t.igUserId === r.igAccountId);
+      return prev ? { ...prev, username: r.igAccountUsername || prev.username } : freshTarget(r);
+    });
+    Object.assign(patch, summarizeTargets(current, merged));
+    if (b.igEnabled === undefined) patch.igEnabled = merged.length > 0;
+  }
   // Retargeting a post to another connected account (multi-account):
   // the account must be connected; an empty value clears the target
-  // (the post then publishes via the default account).
+  // (the post then publishes via the default account). The legacy
+  // field also rewrites the target list so the two stay in step.
   if (b.igAccountId !== undefined) {
-    if (!b.igAccountId) { patch.igAccountId = ''; patch.igAccountUsername = ''; }
+    if (!b.igAccountId) { patch.igAccountId = ''; patch.igAccountUsername = ''; patch.igTargets = [freshTarget({})]; }
     else {
       const resolver = await postTargetResolver(req.userId);
       const target = resolver.resolve(b.igAccountId);
       if (target.error) return res.status(400).json({ ok: false, error: target.error });
       patch.igAccountId = target.igAccountId;
       patch.igAccountUsername = target.igAccountUsername;
+      patch.igTargets = [freshTarget(target)];
     }
   }
   if (b.status === 'draft' || b.status === 'scheduled') patch.status = b.status;
@@ -2574,6 +2731,9 @@ app.post('/api/posts/:id/duplicate', ah(async (req, res) => {
     containerId: undefined,
     createdAt: new Date().toISOString(),
   };
+  // Same accounts as the original, but every target starts fresh —
+  // the copy has published nothing yet.
+  copy.igTargets = targetsOf(orig).map(freshTarget);
   delete copy.instagramId;
   delete copy.containerId;
   await db.savePost(copy);
@@ -2594,8 +2754,13 @@ app.post('/api/posts/:id/reschedule', ah(async (req, res) => {
   }
   if (Number.isNaN(next.getTime())) return res.status(400).json({ ok: false, error: 'That date/time is not valid — pick a date and time from the calendar picker.' });
   const patch = { scheduleTime: next.toISOString() };
-  // A published/failed post moved to a new time goes back to the queue.
-  if (post.status === 'published' || post.status === 'failed') patch.status = 'scheduled';
+  // A published/failed/partial post moved to a new time goes back to
+  // the queue, with every target reset so it publishes again.
+  if (post.status === 'published' || post.status === 'failed' || post.status === 'partial') {
+    patch.status = 'scheduled';
+    patch.liveUrl = '';
+    patch.igTargets = targetsOf(post).map(freshTarget);
+  }
   const updated = await db.updatePost(req.userId, req.params.id, patch);
   res.json({ ok: true, post: updated });
 }));
@@ -2703,6 +2868,32 @@ async function markFailed(userId, post, error, { isAutoRetry = false } = {}) {
     `Publish failed: ${friendly ? `${friendly} (Details: ${short})` : short}${patch.retryPending ? ' It will be retried automatically in about 15 minutes.' : ''}`);
   return short;
 }
+// Per-target failure (multi-target publish): marks ONE target failed,
+// arms that target's single automatic retry (+15 min), and re-derives
+// the post-level state. The failure notification keeps the exact
+// single-target wording when the post has one target; with several
+// targets it names the account that failed.
+async function markTargetFailed(userId, post, targets, target, error, { isRetryAttempt = false } = {}) {
+  const short = String(error || 'Publish failed.').slice(0, 200);
+  target.status = 'failed';
+  target.containerId = null;
+  target.error = short;
+  if (isRetryAttempt) target.retryCount = (target.retryCount || 0) + 1;
+  target.retryPending = (target.retryCount || 0) < 1;
+  target.retryAt = target.retryPending ? new Date(Date.now() + AUTO_RETRY_DELAY_MS).toISOString() : '';
+  await db.updatePost(userId, post.id, summarizeTargets(post, targets));
+  const friendly = friendlyFailureText(short);
+  const who = targets.length > 1 && target.username ? ` for @${target.username}` : '';
+  await notifyUser(userId, 'publish-failure', post.id,
+    `Publish failed${who}: ${friendly ? `${friendly} (Details: ${short})` : short}${target.retryPending ? ' It will be retried automatically in about 15 minutes.' : ''}`);
+  return short;
+}
+// Persist a target list mid-publish (state changes between Graph
+// calls) and return the fresh post row.
+async function persistTargets(userId, post, targets) {
+  await db.updatePost(userId, post.id, summarizeTargets(post, targets));
+  return db.getPost(userId, post.id);
+}
 // Server-copy auto-delete (the owner's storage model: the server is
 // only a bridge — Instagram has the post now, so the uploaded bytes do
 // not need to live here). After a successful publish, delete the stored
@@ -2724,9 +2915,18 @@ async function maybeDeleteServerCopy(userId, post) {
   const fileId = ociItem ? ociItem.objectName : m[1];
   const settings = await db.getSettings(userId).catch(() => ({}));
   if (settings && settings.keepServerCopyAfterPublish === true) return;
+  // Multi-target rule (the 2026-11-19 lesson: a library copy deleted
+  // after its first publish 404'd the second account's post): this
+  // post's own copy goes only once EVERY ticked Instagram target is
+  // terminal — published or permanently failed. A target still
+  // pending, publishing, or armed for its retry still needs the file.
+  if (post.igEnabled !== false) {
+    const targets = targetsOf(post);
+    if (targets.length && !targets.every(targetTerminal)) return;
+  }
   const posts = await db.listPosts(userId, { all: true }).catch(() => []);
   const stillNeeded = posts.some((p) => p.id !== post.id && p.mediaUrl === url
-    && ['scheduled', 'draft', 'failed'].includes(p.status));
+    && ['scheduled', 'draft', 'failed', 'partial'].includes(p.status));
   if (stillNeeded) return;
   let removed = true;
   if (ociItem) removed = await ociDeleteObject(ociItem.objectName);
@@ -2833,6 +3033,9 @@ async function spawnNextOccurrence(userId, post) {
       caption: post.caption || '', hashtags: post.hashtags || '', cta: post.cta || '',
       platform: post.platform || 'Instagram',
       igAccountId: post.igAccountId || '', igAccountUsername: post.igAccountUsername || '',
+      // The next occurrence targets the same accounts, each starting
+      // fresh — nothing has published from it yet.
+      igTargets: targetsOf(post).map(freshTarget),
       igEnabled: post.igEnabled !== false,
       scheduleTime: new Date(nextMs).toISOString(),
       status: 'scheduled', format: post.format || 'REELS', liveUrl: '',
@@ -2894,130 +3097,216 @@ async function attemptPublish(userId, post, ig, publicBaseUrl) {
     publishInFlight.delete(lockKey);
   }
 }
+// Publish ONE Instagram target of a post, with THAT target account's
+// own credentials — the container -> FINISHED -> media_publish ->
+// permalink flow, plus that target's first comment. Mutates the
+// target object and returns { ok, liveUrl, mediaId } /
+// { retry: true, containerId, error } / { error }; the caller owns
+// persistence and the post-level state (summarizeTargets).
+async function publishOneTarget(userId, post, targets, target, publicBaseUrl) {
+  const resolved = await resolvePublishCreds(userId, target.igUserId ? { igAccountId: target.igUserId } : {});
+  if (resolved.missing) return { error: missingAccountError(resolved), missing: true };
+  const ig = resolved.ig || {};
+  if (!ig.token || !ig.igUserId) return { error: 'Instagram is not connected — connect Instagram in Settings to publish from here.', missing: true };
+  const token = ig.token;
+  const igId = ig.igUserId;
+  const base = graphApiBase(ig.tokenHost);
+  let containerId = target.containerId || null;
+  if (containerId) {
+    // Resume a container from an earlier attempt instead of duplicating it.
+    const s = await graph('/' + containerId + '?fields=status_code&access_token=' + encodeURIComponent(token), 'GET', undefined, base);
+    if (s && s.error) containerId = null; // container gone — make a fresh one
+    else if (s && s.status_code === 'ERROR') containerId = null;
+    else if (s && s.status_code === 'FINISHED') { /* fall through to publish */ }
+    else if (s) {
+      return { retry: true, containerId, error: 'Instagram is still processing this video — wait a minute, then press Publish again. Nothing was published yet and nothing was duplicated.' };
+    }
+  }
+  if (!containerId) {
+    const created = await graph(`/${igId}/media`, 'POST', publishContainerBody(post, token), base);
+    if (!created || created.error) {
+      return { error: friendlyGraphError(created, 'Instagram could not create this post. Check the media link is a public video/image and try again.') };
+    }
+    containerId = created.id;
+    target.containerId = containerId;
+    target.status = 'publishing';
+    await persistTargets(userId, post, targets);
+  }
+  // Poll container status until FINISHED (max ~45s elapsed: Vercel stops
+  // at 60s, so the loop is capped by wall-clock, not just iterations).
+  let status = '';
+  const pollStarted = Date.now();
+  for (let i = 0; i < 9 && Date.now() - pollStarted < 45000; i++) {
+    const s = await graph('/' + containerId + '?fields=status_code&access_token=' + encodeURIComponent(token), 'GET', undefined, base);
+    status = (s && s.status_code) || '';
+    if (status === 'FINISHED') break;
+    if (status === 'ERROR' || (s && s.error)) {
+      return { error: 'Instagram could not process this media — the file may be in a format Instagram does not accept. Try a standard MP4 (H.264) or JPG and publish again.' };
+    }
+    await new Promise((r) => setTimeout(r, 5000));
+  }
+  if (status !== 'FINISHED') {
+    return { retry: true, containerId, error: 'Instagram is still processing this video — wait a minute, then press Publish again. Nothing was published yet and nothing was duplicated.' };
+  }
+  const published = await graph(`/${igId}/media_publish`, 'POST', { creation_id: containerId, access_token: token }, base);
+  if (!published || published.error) {
+    return { error: friendlyGraphError(published, 'Instagram could not publish this post.') };
+  }
+  const media = await graph('/' + published.id + '?fields=permalink,media_type&access_token=' + encodeURIComponent(token), 'GET', undefined, base);
+  target.status = 'published';
+  target.liveUrl = (media && media.permalink) || '';
+  target.error = '';
+  target.containerId = null;
+  target.retryPending = false;
+  target.retryAt = '';
+  target.publishedAt = new Date().toISOString();
+  // First comment (Phase C2): post the prepared comment (usually the
+  // hashtags) on THIS target's just-created media. A comment failure
+  // is soft — the post is live either way; the user is notified.
+  if (post.firstComment && String(post.firstComment).trim()) {
+    try {
+      const c = await graph('/' + published.id + '/comments', 'POST', { message: String(post.firstComment).slice(0, 2200), access_token: token }, base);
+      if (!c || c.error) throw new Error(friendlyGraphError(c, 'Instagram refused the comment'));
+      target.firstCommentPosted = true;
+    } catch (e) {
+      try { await notifyUser(userId, 'comment-failed', post.id, `Your post “${String(post.caption || 'Untitled post').slice(0, 80)}” is live, but its first comment could not be added (${String((e && e.message) || e).slice(0, 160)}). You can add the comment manually on Instagram.`); } catch { /* notifications never fail a publish */ }
+    }
+  }
+  return { ok: true, liveUrl: target.liveUrl, mediaId: published.id };
+}
+// YouTube cross-post (Phase B): upload the same video alongside the
+// Instagram publish. A YouTube failure NEVER fails or duplicates the
+// Instagram side: it is recorded on the post and reported through the
+// normal notification path. A post that already has a youtubeVideoId
+// is never uploaded twice. Images skip softly (YouTube is video-only).
+async function runYouTubeCrossPost(userId, post) {
+  const ytLabel = String(post.caption || 'Untitled post').slice(0, 80);
+  try {
+    if ((post.mediaType || 'video') === 'image') {
+      await db.updatePost(userId, post.id, { youtubeStatus: 'skipped', youtubeError: '' });
+      await notifyUser(userId, 'youtube-skipped', post.id, `YouTube cross-post skipped for “${ytLabel}” — YouTube accepts videos only, and this post is an image. The Instagram post is live.`);
+    } else {
+      const bytes = await fetchPostMediaBytes(post);
+      if (!bytes) throw new Error('the media file could not be read for the YouTube upload');
+      const videoId = await uploadVideoToYouTube(userId, post, bytes);
+      await db.updatePost(userId, post.id, { youtubeVideoId: videoId, youtubeStatus: 'uploaded', youtubeError: '' });
+      await notifyUser(userId, 'youtube-success', post.id, `Also posted to YouTube (private): “${ytLabel}”`);
+    }
+  } catch (e) {
+    const reason = String((e && e.message) || e || 'unknown error').slice(0, 300);
+    try { await db.updatePost(userId, post.id, { youtubeStatus: 'failed', youtubeError: reason }); } catch { /* post may be gone */ }
+    try { await notifyUser(userId, 'youtube-failed', post.id, `Instagram posted fine, but the YouTube upload failed for “${ytLabel}”: ${reason}. The Instagram post is live — nothing was duplicated.`); } catch { /* notifications never fail a publish */ }
+  }
+}
 async function attemptPublishLocked(userId, post, ig, publicBaseUrl) {
   // Platform picker (Phase B revision): Instagram unticked means a
   // YouTube-only post — no Instagram leg runs at all.
   if (post && post.igEnabled === false) return attemptYouTubeOnlyPublish(userId, post);
   const isAutoRetry = !!(post && post._autoRetry); // set by duePostsFor for the one automatic retry
-  const token = ig.token;
-  const igId = ig.igUserId;
-  const base = graphApiBase(ig.tokenHost);
-  let containerId = post.containerId || null;
   try {
     await db.updatePost(userId, post.id, { publishAttempts: (post.publishAttempts || 0) + 1 });
     // Uploaded files must reach Instagram as a public URL: migrate a
     // data: media URL to a stored file + /media/<id> URL first (no-op
     // for link media, which is already public).
     await ensurePublishableMedia(userId, post, publicBaseUrl || 'https://social-scheduler-one-sandy.vercel.app');
+    let targets = targetsOf(post);
     if (typeof post.mediaUrl === 'string' && post.mediaUrl.startsWith('data:')) {
       const err = 'This post’s media could not be prepared for publishing — upload the file again from the Media Library, then publish.';
-      await markFailed(userId, post, err, { isAutoRetry });
-      return { ok: false, error: err };
-    }
-    if (containerId) {
-      // Resume a container from an earlier attempt instead of duplicating it.
-      const s = await graph('/' + containerId + '?fields=status_code&access_token=' + encodeURIComponent(token), 'GET', undefined, base);
-      if (s && s.error) containerId = null; // container gone — make a fresh one
-      else if (s && s.status_code === 'ERROR') containerId = null;
-      else if (s && s.status_code === 'FINISHED') { /* fall through to publish */ }
-      else if (s) {
-        return { ok: false, retry: true, containerId, error: 'Instagram is still processing this video — wait a minute, then press Publish again. Nothing was published yet and nothing was duplicated.' };
-      }
-    }
-    if (!containerId) {
-      const created = await graph(`/${igId}/media`, 'POST', publishContainerBody(post, token), base);
-      if (!created || created.error) {
-        const err = friendlyGraphError(created, 'Instagram could not create this post. Check the media link is a public video/image and try again.');
-        await markFailed(userId, post, err, { isAutoRetry });
-        return { ok: false, error: err };
-      }
-      containerId = created.id;
-      await db.updatePost(userId, post.id, { containerId });
-    }
-    // Poll container status until FINISHED (max ~45s elapsed: Vercel stops
-    // at 60s, so the loop is capped by wall-clock, not just iterations).
-    let status = '';
-    const pollStarted = Date.now();
-    for (let i = 0; i < 9 && Date.now() - pollStarted < 45000; i++) {
-      const s = await graph('/' + containerId + '?fields=status_code&access_token=' + encodeURIComponent(token), 'GET', undefined, base);
-      status = (s && s.status_code) || '';
-      if (status === 'FINISHED') break;
-      if (status === 'ERROR' || (s && s.error)) {
-        const err = 'Instagram could not process this media — the file may be in a format Instagram does not accept. Try a standard MP4 (H.264) or JPG and publish again.';
-        await markFailed(userId, post, err, { isAutoRetry });
-        return { ok: false, error: err };
-      }
-      await new Promise((r) => setTimeout(r, 5000));
-    }
-    if (status !== 'FINISHED') {
-      return { ok: false, retry: true, containerId, error: 'Instagram is still processing this video — wait a minute, then press Publish again. Nothing was published yet and nothing was duplicated.' };
-    }
-    const published = await graph(`/${igId}/media_publish`, 'POST', { creation_id: containerId, access_token: token }, base);
-    if (!published || published.error) {
-      const err = friendlyGraphError(published, 'Instagram could not publish this post.');
-      await markFailed(userId, post, err, { isAutoRetry });
-      return { ok: false, error: err };
-    }
-    const media = await graph('/' + published.id + '?fields=permalink,media_type&access_token=' + encodeURIComponent(token), 'GET', undefined, base);
-    await db.updatePost(userId, post.id, { status: 'published', liveUrl: (media && media.permalink) || '', containerId: null, lastPublishError: '', retryPending: false, retryAt: '' });
-    // The library item this came from has now been used once.
-    try {
-      const library = await db.listMedia(userId, { all: true });
-      const item = library.find((m) => m.url && post.mediaUrl && m.url === post.mediaUrl);
-      if (item) await db.updateMedia(userId, item.id, { usedCount: (item.usedCount || 0) + 1 });
-    } catch { /* usedCount is a nicety, never fail a publish over it */ }
-    await notifyUser(userId, 'publish-success', post.id, `Published to Instagram: “${String(post.caption || 'Untitled post').slice(0, 80)}”`);
-    // YouTube cross-post (Phase B): upload the same video alongside —
-    // BEFORE the server-copy cleanup below, which may delete the very
-    // bytes the upload needs. A YouTube failure NEVER fails or
-    // duplicates the Instagram post: it is recorded on the post and
-    // reported through the normal notification path. A post that
-    // already has a youtubeVideoId is never uploaded twice.
-    if (post.youtube && post.youtube.enabled && !post.youtubeVideoId) {
-      const ytLabel = String(post.caption || 'Untitled post').slice(0, 80);
-      try {
-        if ((post.mediaType || 'video') === 'image') {
-          await db.updatePost(userId, post.id, { youtubeStatus: 'skipped', youtubeError: '' });
-          await notifyUser(userId, 'youtube-skipped', post.id, `YouTube cross-post skipped for “${ytLabel}” — YouTube accepts videos only, and this post is an image. The Instagram post is live.`);
-        } else {
-          const bytes = await fetchPostMediaBytes(post);
-          if (!bytes) throw new Error('the media file could not be read for the YouTube upload');
-          const videoId = await uploadVideoToYouTube(userId, post, bytes);
-          await db.updatePost(userId, post.id, { youtubeVideoId: videoId, youtubeStatus: 'uploaded', youtubeError: '' });
-          await notifyUser(userId, 'youtube-success', post.id, `Also posted to YouTube (private): “${ytLabel}”`);
+      for (const t of targets) {
+        if (t.status === 'pending' || t.status === 'publishing' || t.status === 'failed') {
+          await markTargetFailed(userId, post, targets, t, err, { isRetryAttempt: isAutoRetry });
         }
-      } catch (e) {
-        const reason = String((e && e.message) || e || 'unknown error').slice(0, 300);
-        try { await db.updatePost(userId, post.id, { youtubeStatus: 'failed', youtubeError: reason }); } catch { /* post may be gone */ }
-        try { await notifyUser(userId, 'youtube-failed', post.id, `Instagram posted fine, but the YouTube upload failed for “${ytLabel}”: ${reason}. The Instagram post is live — nothing was duplicated.`); } catch { /* notifications never fail a publish */ }
       }
+      return { ok: false, error: err };
     }
-    // First comment (Phase C2): post the prepared comment (usually
-    // the hashtags) on the just-created media. A comment failure is
-    // soft — the post is live either way; the user is notified.
-    if (post.firstComment && String(post.firstComment).trim()) {
+    // Which targets this attempt may touch: pending/publishing ones
+    // always; a failed target only on its armed automatic retry (due
+    // sweep) or a manual publish press. Published targets are never
+    // re-published — no duplicates, ever.
+    const now = Date.now();
+    const attemptable = targets.filter((t) => t.status === 'pending' || t.status === 'publishing'
+      || (t.status === 'failed' && (!isAutoRetry || (t.retryPending && t.retryAt && new Date(t.retryAt).getTime() <= now))));
+    let anyPublished = false;
+    let anyProcessing = false;
+    let firstError = '';
+    let firstMediaId = '';
+    const errors = [];
+    let missingFailures = 0;
+    for (const target of attemptable) {
+      const r = await publishOneTarget(userId, post, targets, target, publicBaseUrl);
+      if (r.ok) {
+        anyPublished = true;
+        if (!firstMediaId) firstMediaId = r.mediaId || '';
+        const who = targets.length > 1 && target.username ? ` (@${target.username})` : '';
+        await notifyUser(userId, 'publish-success', post.id, `Published to Instagram${who}: “${String(post.caption || 'Untitled post').slice(0, 80)}”`);
+      } else if (r.retry) {
+        anyProcessing = true;
+        target.status = 'publishing';
+        target.containerId = r.containerId || target.containerId || null;
+        if (!firstError) firstError = r.error || '';
+      } else {
+        errors.push(r.error || '');
+        if (r.missing) missingFailures++;
+        if (!firstError) firstError = r.error || '';
+        await markTargetFailed(userId, post, targets, target, r.error, { isRetryAttempt: isAutoRetry });
+      }
+      await persistTargets(userId, post, targets);
+    }
+    if (anyPublished) {
+      // The library item this came from has now been used once.
       try {
-        const c = await graph('/' + published.id + '/comments', 'POST', { message: String(post.firstComment).slice(0, 2200), access_token: token }, base);
-        if (!c || c.error) throw new Error(friendlyGraphError(c, 'Instagram refused the comment'));
-        await db.updatePost(userId, post.id, { firstCommentPosted: true });
-      } catch (e) {
-        try { await notifyUser(userId, 'comment-failed', post.id, `Your post “${String(post.caption || 'Untitled post').slice(0, 80)}” is live, but its first comment could not be added (${String((e && e.message) || e).slice(0, 160)}). You can add the comment manually on Instagram.`); } catch { /* notifications never fail a publish */ }
+        const library = await db.listMedia(userId, { all: true });
+        const item = library.find((m) => m.url && post.mediaUrl && m.url === post.mediaUrl);
+        if (item) await db.updateMedia(userId, item.id, { usedCount: (item.usedCount || 0) + 1 });
+      } catch { /* usedCount is a nicety, never fail a publish over it */ }
+      // YouTube cross-post (Phase B): after the Instagram legs and
+      // BEFORE the server-copy cleanup below, which may delete the
+      // very bytes the upload needs.
+      if (post.youtube && post.youtube.enabled && !post.youtubeVideoId) {
+        await runYouTubeCrossPost(userId, post);
       }
     }
+    const allTerminal = targets.length > 0 && targets.every(targetTerminal);
+    const allPublished = targets.length > 0 && targets.every((t) => t.status === 'published');
     // Recurrence (Phase C1): spawn the next weekly occurrence BEFORE
     // the server-copy cleanup below, so the new occurrence keeps the
-    // bridge copy alive (cleanup skips media a scheduled post needs).
-    await spawnNextOccurrence(userId, post);
-    // The server was only a bridge for uploaded media: now that
-    // Instagram has the post, drop the stored copy (unless the user
-    // keeps copies, or another unpublished post still needs the file).
-    try { await maybeDeleteServerCopy(userId, post); } catch { /* cleanup never fails a publish */ }
-    return { ok: true, liveUrl: (media && media.permalink) || '', mediaId: published.id };
+    // bridge copy alive. Re-read the post so the nextOccurrenceId
+    // guard sees the freshest state (never spawn twice).
+    if (allTerminal && targets.some((t) => t.status === 'published')) {
+      const fresh = await db.getPost(userId, post.id).catch(() => null);
+      if (fresh && !fresh.nextOccurrenceId) await spawnNextOccurrence(userId, fresh);
+    }
+    // The server was only a bridge for uploaded media: the stored
+    // copy is dropped once EVERY target is terminal (the cleanup
+    // itself enforces that), unless the user keeps copies or another
+    // unpublished post still needs the file.
+    if (anyPublished || allTerminal) {
+      try {
+        const fresh = await db.getPost(userId, post.id).catch(() => null);
+        if (fresh) await maybeDeleteServerCopy(userId, fresh);
+      } catch { /* cleanup never fails a publish */ }
+    }
+    const pubTarget = targets.find((t) => t.status === 'published');
+    if (allPublished) return { ok: true, liveUrl: pubTarget ? (pubTarget.liveUrl || '') : '', mediaId: firstMediaId };
+    if (anyPublished) return { ok: true, partial: true, liveUrl: pubTarget ? (pubTarget.liveUrl || '') : '', mediaId: firstMediaId, error: firstError };
+    if (anyProcessing) {
+      const busy = targets.find((t) => t.containerId);
+      return { ok: false, retry: true, containerId: busy ? busy.containerId : null, error: firstError };
+    }
+    return { ok: false, error: firstError, missingAll: errors.length > 0 && missingFailures === errors.length };
   } catch (e) {
     // A failed publish attempt — including a network failure reaching
-    // Instagram — marks the post failed so it is visible in the Queue as
-    // needing attention, instead of silently staying "scheduled".
-    try { await markFailed(userId, post, 'Could not reach Instagram — check your connection and try publishing again in a minute.', { isAutoRetry }); } catch { /* post may have been deleted; the error below still stands */ }
+    // Instagram — marks the post's outstanding targets failed so it is
+    // visible in the Queue as needing attention, instead of silently
+    // staying "scheduled".
+    try {
+      const targets = targetsOf(post);
+      for (const t of targets) {
+        if (t.status === 'pending' || t.status === 'publishing' || t.status === 'failed') {
+          await markTargetFailed(userId, post, targets, t, 'Could not reach Instagram — check your connection and try publishing again in a minute.', { isRetryAttempt: isAutoRetry });
+        }
+      }
+    } catch { /* post may have been deleted; the error below still stands */ }
     return { ok: false, error: 'Could not reach Instagram — check your connection and try publishing again in a minute.' };
   }
 }
@@ -3032,45 +3321,43 @@ app.post('/api/posts/:id/publish', ah(async (req, res) => {
   if (post.status === 'published') {
     return res.status(409).json({ ok: false, error: 'This post is already published — it cannot be published again. Duplicate it if you want to post it again.' });
   }
-  // Multi-account: publish with the TARGET account's token. A post
-  // whose target account was disconnected fails here with a clear
-  // message + the usual failure notification — it is never silently
-  // published from a different account. YouTube-only posts (Instagram
-  // unticked) skip credential resolution entirely.
-  let ig = {};
-  if (post.igEnabled !== false) {
-    const resolved = await resolvePublishCreds(req.userId, post);
-    if (resolved.missing) {
-      const err = missingAccountError(resolved);
-      await markFailed(req.userId, post, err, { isAutoRetry: !!post._autoRetry });
-      return res.status(400).json({ ok: false, error: err });
-    }
-    ig = resolved.ig;
-    if (!ig.token || !ig.igUserId) {
-      return res.status(400).json({ ok: false, error: 'Instagram is not connected — connect Instagram in Settings to publish from here.' });
-    }
-  }
-  const result = await attemptPublish(req.userId, post, ig, publicBase(req));
+  // Multi-target: each ticked account publishes with its OWN token
+  // inside attemptPublish; a target whose account was disconnected
+  // fails only itself (failure notification included) — the post is
+  // never silently published from a different account. YouTube-only
+  // posts (Instagram unticked) skip Instagram entirely.
+  const result = await attemptPublish(req.userId, post, {}, publicBase(req));
+  if (result.ok && result.partial) return res.json({ ok: true, partial: true, liveUrl: result.liveUrl, mediaId: result.mediaId, error: result.error });
   if (result.ok) return res.json({ ok: true, liveUrl: result.liveUrl, mediaId: result.mediaId });
   if (result.retry) return res.json({ ok: false, retry: true, containerId: result.containerId, error: result.error });
+  // Nothing could publish because no target account is connected:
+  // a client-side fix (connect the account), not a server error.
+  if (result.missingAll || /no longer connected|not connected/.test(result.error || '')) return res.status(400).json({ ok: false, error: result.error });
   return res.status(502).json({ ok: false, error: result.error });
 }));
 // Posts that are due for one user: scheduled posts whose time has passed
 // (uploaded-file posts are included — attemptPublish migrates their
-// media to a public URL first), plus failed posts whose ONE automatic
-// retry is due (retryAt passed — markFailed sets it ~15 minutes after
-// the first failure). Due retries are tagged _autoRetry in memory only,
-// so attemptPublish knows a failure there is final.
+// media to a public URL first), plus failed/partial posts with at
+// least one target whose ONE automatic retry is due (retryAt passed —
+// markTargetFailed sets it ~15 minutes after the first failure). Due
+// retries are tagged _autoRetry in memory only, so attemptPublish
+// knows a failure there is final for that target.
 async function duePostsFor(userId, max) {
   const now = Date.now();
   const posts = await db.listPosts(userId, { all: true });
+  const retryDue = (p) => {
+    if (p.igEnabled === false) {
+      return p.retryPending && p.retryAt && new Date(p.retryAt).getTime() <= now && (p.retryCount || 0) < 1;
+    }
+    return targetsOf(p).some((t) => t.status === 'failed' && t.retryPending && t.retryAt
+      && new Date(t.retryAt).getTime() <= now && (t.retryCount || 0) < 1);
+  };
   const due = posts
     .filter((p) => p.mediaUrl && p.scheduleTime && new Date(p.scheduleTime).getTime() <= now)
     .filter((p) => p.status === 'scheduled'
-      || (p.status === 'failed' && p.retryPending && p.retryAt
-        && new Date(p.retryAt).getTime() <= now && (p.retryCount || 0) < 1))
+      || ((p.status === 'failed' || p.status === 'partial') && retryDue(p)))
     .sort((a, b) => new Date(a.scheduleTime) - new Date(b.scheduleTime));
-  return due.slice(0, max).map((p) => (p.status === 'failed' ? { ...p, _autoRetry: true } : p));
+  return due.slice(0, max).map((p) => (p.status === 'failed' || p.status === 'partial' ? { ...p, _autoRetry: true } : p));
 }
 // Publish everything that is due for the signed-in user, right now.
 // This is what the Dashboard/Queue "Publish due" button calls, and what a
@@ -3092,30 +3379,15 @@ app.post('/api/publish-due', ah(async (req, res) => {
   const failed = [];
   const retrying = [];
   for (const post of due) {
-    if (post.igEnabled === false) {
-      const result = await attemptPublish(req.userId, post, {}, publicBase(req));
-      if (result.ok) published.push({ id: post.id, liveUrl: result.liveUrl });
-      else if (result.retry) retrying.push({ id: post.id, error: result.error });
-      else failed.push({ id: post.id, error: result.error });
-      continue;
+    // Per-target connections (multi-target): the keeper runs for each
+    // distinct target account first, then every target publishes with
+    // its OWN token inside attemptPublish. A disconnected target
+    // fails only itself — never a silent publish from another account.
+    if (post.igEnabled !== false) {
+      const ids = new Set(targetsOf(post).map((t) => t.igUserId).filter(Boolean));
+      for (const id of ids) await ensureInstagramTokenFresh(req.userId, { igUserId: id }).catch(() => null);
     }
-    // Per-post connection (multi-account): keeper first for the
-    // target account, then publish with THAT account's token. A post
-    // whose target was disconnected fails with a clear notification —
-    // never a silent publish from another account.
-    if (post.igAccountId) await ensureInstagramTokenFresh(req.userId, { igUserId: post.igAccountId }).catch(() => null);
-    const resolved = await resolvePublishCreds(req.userId, post);
-    if (resolved.missing) {
-      const err = missingAccountError(resolved);
-      await markFailed(req.userId, post, err, { isAutoRetry: !!post._autoRetry });
-      failed.push({ id: post.id, error: err });
-      continue;
-    }
-    if (!resolved.ig.token || !resolved.ig.igUserId) {
-      failed.push({ id: post.id, error: 'Instagram is not connected — connect Instagram in Settings to publish from here.' });
-      continue;
-    }
-    const result = await attemptPublish(req.userId, post, resolved.ig, publicBase(req));
+    const result = await attemptPublish(req.userId, post, {}, publicBase(req));
     if (result.ok) published.push({ id: post.id, liveUrl: result.liveUrl });
     else if (result.retry) retrying.push({ id: post.id, error: result.error });
     else failed.push({ id: post.id, error: result.error });
@@ -3152,24 +3424,14 @@ const cronPublishDue = ah(async (req, res) => {
     if ((!defaultIg.token || !defaultIg.igUserId) && accounts.length === 0 && !due.some((p) => p.igEnabled === false)) { summary.push({ userId: user.id, skipped: 'instagram-not-connected' }); continue; }
     let published = 0; let failed = 0;
     for (const post of due) {
-      if (post.igEnabled === false) {
-        const result = await attemptPublish(user.id, post, {}, publicBase(req));
-        if (result.ok) published++;
-        else if (!result.retry) failed++;
-        continue;
+      // Per-target connections (multi-target): keeper per distinct
+      // target account, then attemptPublish runs every target with
+      // its own token; a disconnected target fails only itself.
+      if (post.igEnabled !== false) {
+        const ids = new Set(targetsOf(post).map((t) => t.igUserId).filter(Boolean));
+        for (const id of ids) await ensureInstagramTokenFresh(user.id, { igUserId: id }).catch(() => null);
       }
-      // Per-post connection (multi-account): publish with the target
-      // account's token; a disconnected target fails the post with a
-      // notification instead of borrowing another account.
-      if (post.igAccountId) await ensureInstagramTokenFresh(user.id, { igUserId: post.igAccountId }).catch(() => null);
-      const resolved = await resolvePublishCreds(user.id, post);
-      if (resolved.missing) {
-        await markFailed(user.id, post, missingAccountError(resolved), { isAutoRetry: !!post._autoRetry });
-        failed++;
-        continue;
-      }
-      if (!resolved.ig.token || !resolved.ig.igUserId) { failed++; continue; }
-      const result = await attemptPublish(user.id, post, resolved.ig, publicBase(req));
+      const result = await attemptPublish(user.id, post, {}, publicBase(req));
       if (result.ok) published++;
       else if (!result.retry) failed++;
     }
@@ -3577,6 +3839,7 @@ app.post('/api/drafts', ah(async (req, res) => {
   if (b.ytVisibility !== undefined && !YT_VISIBILITIES.includes(b.ytVisibility)) return res.status(400).json({ ok: false, error: 'That YouTube visibility is not valid — use Public, Unlisted or Private.' });
   if (b.ytMadeForKids !== undefined && typeof b.ytMadeForKids !== 'boolean') return res.status(400).json({ ok: false, error: 'That draft is not valid — please try again.' });
   if (b.repeat !== undefined && b.repeat !== '' && b.repeat !== 'weekly') return res.status(400).json({ ok: false, error: 'That repeat setting is not valid.' });
+  if (b.igTargets !== undefined && (!Array.isArray(b.igTargets) || b.igTargets.length > 10 || b.igTargets.some((t) => typeof t !== 'string'))) return res.status(400).json({ ok: false, error: 'That draft is not valid — please try again.' });
   const existing = await db.listDrafts(req.userId);
   if (existing.length >= 100) return res.status(400).json({ ok: false, error: 'You have 100 saved drafts — delete some before saving more.' });
   const d = {
@@ -3585,6 +3848,7 @@ app.post('/api/drafts', ah(async (req, res) => {
     mediaUrl: (b.mediaUrl || '').slice(0, 2000), mediaType: b.mediaType || 'video', posterUrl: (b.posterUrl || '').slice(0, 2000),
     platform: b.platform || 'Instagram', format: b.format || 'REELS',
     igAccountId: b.igAccountId || '', igAccountUsername: b.igAccountUsername || '',
+    igTargets: Array.isArray(b.igTargets) ? b.igTargets.slice(0, 10) : [],
     igEnabled: b.igEnabled === false ? false : true,
     youtube: normalizeYouTubeSetting(b.youtube),
     ytVisibility: b.ytVisibility !== undefined ? ytVisibilityOf(b.ytVisibility) : 'public',
