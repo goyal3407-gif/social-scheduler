@@ -33,3 +33,4 @@ export const IconMenu = (p) => <I {...p} d="M4 7h16M4 12h16M4 17h16" />
 export const IconComment = (p) => <I {...p} d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5c-1.5 0-3-.4-4.2-1.1L3 20l1.1-5.3A8.5 8.5 0 1 1 21 11.5z" />
 export const IconBookmark = (p) => <I {...p} d="M6 3h12v18l-6-4.5L6 21z" />
 export const IconBell = (p) => <I {...p}><path d="M18 9a6 6 0 1 0-12 0c0 6-2.5 7-2.5 7h17S18 15 18 9z" /><path d="M10 20a2.2 2.2 0 0 0 4 0" /></I>
+export const IconTag = (p) => <I {...p}><path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z" /><circle cx="7.5" cy="7.5" r="1.3" /></I>

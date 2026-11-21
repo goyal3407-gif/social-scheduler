@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
-import { api, dailyPlan, fmtDateTime, formatCountdown, openInstagramDirectConnect } from '../api.js'
-import { PostRow, Skeleton, ErrorBox, Empty } from './shared.jsx'
-import { IconClock, IconPlay } from './icons.jsx'
+import { api, fmtDateTime, formatCountdown, openInstagramDirectConnect } from '../api.js'
+import { ErrorBox } from './shared.jsx'
+import { IconClock } from './icons.jsx'
 
 function useCountdown(targetIso) {
   const [now, setNow] = useState(Date.now())
@@ -18,17 +18,25 @@ function useCountdown(targetIso) {
   return { label: formatCountdown(targetIso), parts: { d, h, m } }
 }
 
-const PlanCard = lazy(() => import('./PlanCard.jsx'))
 const GuideWizard = lazy(() => import('./GuideWizard.jsx'))
-const MyStats = lazy(() => import('./MyStats.jsx'))
 
-export default function Dashboard({ posts, media, user, stats, loading, error, onRetry, onCreate, onGoQueue, onNavigate, onEdit, onDelete, onPublish, publishingId, settings, onDuplicate, onPostAgain, onReschedule, onRescheduleNextBest, onDismissChecklist, overdue, onPublishDue, notifications, onReconnect, tr, onSearch, onRetryPost, retryingId, onDismissGuide, inWorkspace }) {
+// Dashboard (batch 4): ONE job — status at a glance, short enough to
+// read in five seconds. Greeting + next post + one big New Post
+// button, the problem alerts (never hidden — the satisfaction rule),
+// and a "Today at a glance" card: published today, up next, problems,
+// plus the Instagram/YouTube connection strip. Everything else moved
+// to its own tab: the plan lives on Pricing, the post lists live in
+// Queue, the day-by-day table lives in Calendar, totals live in
+// Pricing's "Your numbers".
+export default function Dashboard({ posts, media, user, loading, error, onRetry, onCreate, onGoQueue, onNavigate, onPublish, publishingId, settings, onDismissChecklist, overdue, onPublishDue, notifications, tr, onSearch, onDismissGuide, inWorkspace }) {
   const t = tr || ((k) => k)
-  // Home search pill (D3 refinement): routes into the same global
-  // search as the top nav — Queue filtered by caption, Media by name.
+  // Home search pill: routes into the same global search as the top
+  // nav — Queue filtered by caption, Media by name. Kept on Home
+  // because on phones the header search collapses to an icon; this
+  // pill is the visible search entry here.
   const [homeQ, setHomeQ] = useState('')
-  // Publishing streak (real data only): consecutive days with at least one
-  // published post, ending today or yesterday.
+  // Publishing streak (real data only): consecutive days with at
+  // least one published post, ending today or yesterday.
   const streak = useMemo(() => {
     const days = new Set((posts || []).filter((p) => p.status === 'published' && p.scheduleTime).map((p) => new Date(p.scheduleTime).toDateString()))
     if (!days.size) return 0
@@ -41,9 +49,11 @@ export default function Dashboard({ posts, media, user, stats, loading, error, o
   // Getting started: three steps, each done-state derived from the
   // user's real data. Dismissal is stored server-side (settings), so
   // it follows the account; the card hides for good once all three
-  // steps are done.
+  // steps are done. Step 1 goes straight to the Connections tab —
+  // that is where accounts live now (batch 4 de-duplication; the old
+  // card sent users to Settings, which itself pointed onward).
   const checklist = useMemo(() => [
-    { done: Boolean(settings?.instagramConnected), label: 'Connect Instagram', hint: 'So your posts can publish live', tab: 'settings', cta: 'Connect' },
+    { done: Boolean(settings?.instagramConnected), label: 'Connect Instagram', hint: 'So your posts can publish live', tab: 'connections', cta: 'Connect' },
     { done: (media || []).length > 0, label: 'Add your first media', hint: 'Upload a video or image, or add one by link', tab: 'media', cta: 'Add media' },
     { done: (posts || []).length > 0, label: 'Schedule your first post', hint: 'Pick a time in the Studio', tab: 'studio', cta: 'Create a post' },
   ], [settings, media, posts])
@@ -55,27 +65,14 @@ export default function Dashboard({ posts, media, user, stats, loading, error, o
     const first = user?.name ? String(user.name).trim().split(/\s+/)[0] : ''
     return first ? `${word}, ${first}` : word
   }, [user, t])
-  // D1: posts per day for the last 14 days (published + scheduled by
-  // their scheduleTime) — a tiny theme-aware bar chart, no libraries.
-  const chart14 = useMemo(() => {
-    const days = []
-    const now = new Date()
-    for (let i = 13; i >= 0; i--) {
-      const d = new Date(now); d.setDate(d.getDate() - i)
-      days.push({ key: d.toDateString(), label: d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }), count: 0, today: i === 0 })
-    }
-    const byKey = new Map(days.map((d) => [d.key, d]))
-    for (const p of posts || []) {
-      if (!p.scheduleTime || (p.status !== 'published' && p.status !== 'scheduled')) continue
-      const slot = byKey.get(new Date(p.scheduleTime).toDateString())
-      if (slot) slot.count++
-    }
-    const max = Math.max(1, ...days.map((d) => d.count))
-    return { days, max }
-  }, [posts])
   const postedThisWeek = useMemo(() => {
     const now = Date.now()
     return (posts || []).filter((p) => p.status === 'published' && p.scheduleTime && new Date(p.scheduleTime).getTime() <= now && new Date(p.scheduleTime).getTime() >= now - 7 * 86400000).length
+  }, [posts])
+  // Today at a glance — all from the user's real posts.
+  const publishedToday = useMemo(() => {
+    const key = new Date().toDateString()
+    return (posts || []).filter((p) => p.status === 'published' && new Date(p.publishedAt || p.scheduleTime || 0).toDateString() === key).length
   }, [posts])
   const upcoming = useMemo(() => {
     const now = Date.now()
@@ -85,16 +82,10 @@ export default function Dashboard({ posts, media, user, stats, loading, error, o
   }, [posts])
   const next = upcoming[0]
   const cd = useCountdown(next?.scheduleTime)
-  const plan = useMemo(() => dailyPlan(posts, 8), [posts])
-  const recent = useMemo(() => [...(posts || [])].sort((a, b) => new Date(b.createdAt || b.scheduleTime || 0) - new Date(a.createdAt || a.scheduleTime || 0)).slice(0, 5), [posts])
-  const s = stats || {}
-  const weekCount = useMemo(() => {
-    const now = Date.now()
-    return (posts || []).filter((p) => p.scheduleTime && new Date(p.scheduleTime).getTime() >= now && new Date(p.scheduleTime).getTime() < now + 7 * 86400000).length
-  }, [posts])
   const failedPosts = useMemo(() => [...(posts || [])]
     .filter((p) => p.status === 'failed')
     .sort((a, b) => new Date(b.failedAt || b.scheduleTime || 0) - new Date(a.failedAt || a.scheduleTime || 0)), [posts])
+  const partialCount = useMemo(() => (posts || []).filter((p) => p.status === 'partial').length, [posts])
   // Broken Instagram connections (keeper verdict: Meta revoked the
   // token, auto-renewal cannot save it). Usernames of every connected
   // account in that state — the default account's health plus every
@@ -109,11 +100,27 @@ export default function Dashboard({ posts, media, user, stats, loading, error, o
     for (const a of settings?.instagramAccounts || []) if (a?.health?.needsReconnect) push(a.username || '')
     return out
   }, [settings])
+  const overdueCount = (overdue || []).length
+  const problemCount = failedPosts.length + partialCount + overdueCount + brokenIg.length
+  const problemBits = [
+    failedPosts.length + partialCount > 0 ? `${failedPosts.length + partialCount} ${t('probPosts')}` : '',
+    overdueCount > 0 ? `${overdueCount} ${t('probOverdue')}` : '',
+    brokenIg.length > 0 ? `${brokenIg.length} ${t('probConnection')}` : '',
+  ].filter(Boolean).join(' · ')
   const [reconnectBusy, setReconnectBusy] = useState(false)
   const startReconnect = async () => {
     setReconnectBusy(true)
     try { await openInstagramDirectConnect() } finally { setReconnectBusy(false) }
   }
+  // YouTube half of the connection strip (the Instagram half reads
+  // from settings, which App already loads). One small status call,
+  // the same endpoint the Connections card uses.
+  const [yt, setYt] = useState(null)
+  useEffect(() => {
+    let live = true
+    api.youtubeStatus().then((d) => { if (live) setYt(d) }).catch(() => { if (live) setYt({ connected: false }) })
+    return () => { live = false }
+  }, [])
   // Tomorrow nudge: shown when nothing is scheduled for tomorrow.
   // Dismissing hides it for the rest of today (localStorage by date).
   const [nudgeDismissed, setNudgeDismissed] = useState(() => {
@@ -124,8 +131,8 @@ export default function Dashboard({ posts, media, user, stats, loading, error, o
     try { localStorage.setItem('ss-nudge-day', new Date().toDateString()) } catch { /* stays hidden this session */ }
   }
   const hasTomorrow = useMemo(() => {
-    const t = new Date(); t.setDate(t.getDate() + 1)
-    const key = t.toDateString()
+    const tm = new Date(); tm.setDate(tm.getDate() + 1)
+    const key = tm.toDateString()
     return (posts || []).some((p) => p.status === 'scheduled' && p.scheduleTime && new Date(p.scheduleTime).toDateString() === key)
   }, [posts])
 
@@ -142,8 +149,6 @@ export default function Dashboard({ posts, media, user, stats, loading, error, o
           <GuideWizard steps={guideSteps} tr={t} onNavigate={onNavigate} onDismiss={onDismissGuide} />
         </Suspense>
       )}
-      {!inWorkspace && <Suspense fallback={null}><PlanCard /></Suspense>}
-      <Suspense fallback={null}><MyStats tr={t} /></Suspense>
       <section className="home-head" aria-label="Next scheduled post">
         <h1>{greeting}</h1>
         {onSearch && (
@@ -176,6 +181,8 @@ export default function Dashboard({ posts, media, user, stats, loading, error, o
         )}
       </section>
 
+      {error && <ErrorBox error={error} onRetry={onRetry} />}
+
       {!loading && brokenIg.length > 0 && (
         <div className="alert error" role="alert" style={{ marginTop: 16 }}>
           <div style={{ flex: 1 }}>
@@ -188,44 +195,32 @@ export default function Dashboard({ posts, media, user, stats, loading, error, o
         </div>
       )}
 
-      <div className="stats stats-3" aria-label="Overview">
-        {loading ? Array.from({ length: 3 }).map((_, i) => <div key={i} className="skel" style={{ height: 92 }} />) : (
-          <>
-            <div className="stat"><b>{s.scheduled ?? upcoming.length}</b><span>{t('scheduled')}</span><small>{weekCount} in the next 7 days</small></div>
-            <div className="stat"><b>{s.published ?? (posts || []).filter((p) => p.status === 'published').length}</b><span>{t('published')}</span><small>{postedThisWeek} this week{streak > 0 ? ` · ${streak}-day streak` : ''}</small></div>
-            <div className="stat"><b>{s.total ?? (posts || []).length}</b><span>{t('totalPosts')}</span><small>{s.mediaCount ?? (media || []).length} media in library</small></div>
-          </>
-        )}
-      </div>
-
       {!loading && (
-        <div className="card" style={{ padding: '14px 16px', marginTop: 12 }} aria-label="Posts per day, last 14 days">
-          <p className="small" style={{ margin: '0 0 10px' }}><b>Last 14 days</b> <span className="muted">— posts per day (published + scheduled)</span></p>
-          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, height: 64 }} role="img" aria-label={chart14.days.map((d) => `${d.label}: ${d.count}`).join(', ')}>
-            {chart14.days.map((d) => (
-              <div key={d.key} title={`${d.label}: ${d.count} post${d.count === 1 ? '' : 's'}`} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, minWidth: 0 }}>
-                <div style={{ width: '100%', maxWidth: 26, height: `${Math.max(4, Math.round((d.count / chart14.max) * 44))}px`, borderRadius: '4px 4px 0 0', background: d.today ? 'var(--gold, #e8c268)' : 'var(--accent, #7c8cff)', opacity: d.count ? 1 : 0.25 }} />
-                <span className="muted" style={{ fontSize: 9 }}>{d.label.split(' ')[0]}</span>
-              </div>
-            ))}
+        <section className="card" style={{ padding: '14px 16px', marginTop: 16 }} aria-label={t('todayGlance')}>
+          <h2 style={{ margin: 0, fontSize: 17 }}>{t('todayGlance')}</h2>
+          <div className="stats stats-3" style={{ marginTop: 12 }}>
+            <div className="stat"><b>{publishedToday}</b><span>{t('publishedToday')}</span><small>{postedThisWeek} this week{streak > 0 ? ` · ${streak}-day streak` : ''}</small></div>
+            <div className="stat"><b>{upcoming.length}</b><span>{t('scheduled')}</span><small>{next ? `${new Date(next.scheduleTime).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} · ${new Date(next.scheduleTime).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} · in ${cd.label}` : t('nothingScheduled')}</small></div>
+            <div className="stat"><b style={problemCount > 0 ? { color: 'var(--red)' } : undefined}>{problemCount}</b><span>{t('problems')}</span><small>{problemCount > 0 ? problemBits : t('allGood')}</small></div>
           </div>
-        </div>
-      )}
-
-      {!loading && (
-        <div className="ig-row" role="status">
-          <span className={`dot ${settings ? (brokenIg.length > 0 || !settings.instagramConnected ? 'off' : '') : 'amber'}`} aria-hidden="true" />
-          <div className="grow">
-            <b>Instagram: </b>
-            {!settings ? 'Checking connection…' : brokenIg.length > 0 ? <>Connection broken{brokenIg[0] ? ` for @${brokenIg[0]}` : ''} — reconnect so your scheduled posts can publish.</> : settings.instagramConnected ? <>Connected{settings.instagramHandle ? ` as @${settings.instagramHandle}` : ''} — publishing is ready.</> : 'Not connected yet — connect Instagram to publish live.'}
-            {settings?.instagramConnected && brokenIg.length === 0 && <span className="muted small" style={{ display: 'block' }}>Token is stored on the server only — it is never shown in this app.</span>}
+          <div className="conn-strip">
+            <span className="conn-chip">
+              <span className={`dot ${!settings ? 'amber' : brokenIg.length > 0 || !settings.instagramConnected ? 'off' : ''}`} aria-hidden="true" />
+              Instagram · {!settings ? '…' : brokenIg.length > 0 ? t('connectionBroken') : settings.instagramConnected ? `${t('connected')}${settings.instagramHandle ? ` · @${settings.instagramHandle}` : ''}` : t('notConnected')}
+              {!inWorkspace && settings && brokenIg.length > 0 && <button type="button" className="btn primary small" disabled={reconnectBusy} onClick={startReconnect}>{reconnectBusy ? '…' : t('reconnect')}</button>}
+              {!inWorkspace && settings && brokenIg.length === 0 && !settings.instagramConnected && <button type="button" className="btn ghost small" onClick={() => onNavigate && onNavigate('connections')}>{t('openConnections')}</button>}
+            </span>
+            <span className="conn-chip">
+              <span className={`dot ${yt == null ? 'amber' : yt.connected ? '' : 'off'}`} aria-hidden="true" />
+              YouTube · {yt == null ? '…' : yt.connected ? `${t('connected')}${yt.channelTitle ? ` · ${yt.channelTitle}` : ''}` : t('notConnected')}
+              {!inWorkspace && yt && !yt.connected && <button type="button" className="btn ghost small" onClick={() => onNavigate && onNavigate('connections')}>{t('openConnections')}</button>}
+            </span>
+            {problemCount > 0 && (
+              <button type="button" className="btn small" onClick={onGoQueue} style={{ marginLeft: 'auto' }}>{t('reviewInQueue')}</button>
+            )}
           </div>
-          {settings && brokenIg.length > 0 && <button type="button" className="btn primary small" disabled={reconnectBusy} onClick={startReconnect}>{reconnectBusy ? 'Opening…' : 'Reconnect'}</button>}
-          {settings && !settings.instagramConnected && brokenIg.length === 0 && <button type="button" className="btn ghost small" onClick={() => onNavigate && onNavigate('settings')}>Open Settings</button>}
-        </div>
+        </section>
       )}
-
-      {error && <ErrorBox error={error} onRetry={onRetry} />}
 
       {!loading && overdue && overdue.length > 0 && (
         <div className="alert error" role="alert" style={{ marginTop: 16 }}>
@@ -256,7 +251,7 @@ export default function Dashboard({ posts, media, user, stats, loading, error, o
         <section className="card section" aria-label="Notifications">
           <div className="card-head"><div><h2>Notifications</h2><p>Publish results — successes and failures with their reasons.</p></div></div>
           <div>
-            {notifications.slice(0, 8).map((n) => (
+            {notifications.slice(0, 5).map((n) => (
               <p key={n.id} className="small" style={{ padding: '6px 0', color: n.read ? 'var(--muted)' : 'var(--ink)' }}>
                 {n.type === 'publish-success' ? '✅ ' : '⚠️ '}<b>{n.type === 'publish-success' ? 'Published' : 'Publish problem'}</b>
                 <span className="muted"> · {fmtDateTime(n.createdAt)}</span>
@@ -301,67 +296,6 @@ export default function Dashboard({ posts, media, user, stats, loading, error, o
           <button type="button" className="nudge-close" aria-label="Dismiss for today" onClick={dismissNudge}>✕</button>
         </div>
       )}
-
-      <section className="card section" aria-label="Daily plan">
-        <div className="card-head">
-          <div><h2>Daily plan — today + next 7 days</h2><p>Scheduled posts per day, from your saved posts. {next ? `Next post due ${fmtDateTime(next.scheduleTime)}.` : 'No post due yet.'}</p></div>
-          <button type="button" className="btn ghost small" onClick={onGoQueue}>Queue →</button>
-        </div>
-        {loading ? <Skeleton rows={3} /> : (
-          <div className="table-wrap">
-            <table>
-              <thead><tr><th>Day</th><th>Scheduled posts</th><th>Next post due</th></tr></thead>
-              <tbody>
-                {plan.map((d, i) => {
-                  const dayPosts = [...(posts || [])]
-                    .filter((p) => p.status === 'scheduled' && p.scheduleTime && new Date(p.scheduleTime).toDateString() === d.date.toDateString())
-                    .sort((a, b) => new Date(a.scheduleTime) - new Date(b.scheduleTime))
-                  return (
-                    <tr key={d.date.toDateString()} style={i === 0 ? { background: 'var(--surface-2)' } : undefined}>
-                      <td><b>{d.label}</b></td>
-                      <td>{d.count === 0 ? '—' : `${d.count} post${d.count === 1 ? '' : 's'}`}</td>
-                      <td>{dayPosts[0] ? fmtDateTime(dayPosts[0].scheduleTime) : '—'}</td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-
-      <div className="two-col section">
-        <section className="card">
-          <div className="card-head">
-            <div><h2>{t('upNext')}</h2><p>Your next scheduled posts, in order.</p></div>
-            <button type="button" className="btn ghost small" onClick={onGoQueue}>Queue →</button>
-          </div>
-          {loading ? <Skeleton variant="posts" rows={3} /> : upcoming.length === 0 ? (
-            <Empty title="Nothing scheduled yet" body="No posts are scheduled. Schedule one from Studio or Bulk and it will show up here, soonest first." action={<button type="button" className="btn primary small" onClick={onCreate}>Create a post</button>} />
-          ) : upcoming.slice(0, 4).map((p) => (
-            <PostRow key={p.id} post={p} onEdit={onEdit} onDelete={onDelete} onPublish={onPublish} publishing={publishingId === p.id} onDuplicate={onDuplicate} onPostAgain={onPostAgain} onReschedule={onReschedule} onRescheduleNextBest={onRescheduleNextBest} onReconnect={onReconnect} onRetry={onRetryPost} retrying={retryingId === p.id} />
-          ))}
-        </section>
-
-        <section className="card">
-          <div className="card-head"><div><h2>Recent activity</h2><p>Latest posts you created or edited.</p></div></div>
-          {loading ? <Skeleton variant="posts" rows={3} /> : recent.length === 0 ? (
-            <Empty title="No posts yet" body="Your recent posts will appear here once you create one." />
-          ) : recent.map((p) => (
-            <PostRow key={p.id} post={p} onEdit={onEdit} onDelete={onDelete} onPublish={onPublish} publishing={publishingId === p.id} onPostAgain={onPostAgain} onReconnect={onReconnect} onRetry={onRetryPost} retrying={retryingId === p.id} />
-          ))}
-        </section>
-      </div>
-
-      <section className="card section">
-        <div className="card-head"><div><h2>How it works</h2><p>Three steps, no learning curve.</p></div></div>
-        <div className="three-col">
-          <div><b>1 · Add media</b><p className="muted mt" style={{ marginTop: 6 }}>Upload a video or image, or paste a link. Your library keeps everything organised by folder and tag.</p></div>
-          <div><b>2 · Write &amp; schedule</b><p className="muted" style={{ marginTop: 6 }}>Studio scores your caption, checks your hashtags and warns you before a vertical video goes out as a Feed post.</p></div>
-          <div><b>3 · Publish or queue</b><p className="muted" style={{ marginTop: 6 }}>Publish now, or let the queue handle it at the time you picked — 7pm, 9pm, whenever your audience is online.</p></div>
-        </div>
-        <p className="muted mt"><IconPlay size={14} /> Free forever. No trial, no card, no locked features.</p>
-      </section>
     </div>
   )
 }

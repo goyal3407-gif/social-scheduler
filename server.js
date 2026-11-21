@@ -2661,10 +2661,17 @@ function upgradeQuote(user) {
   const cur = effectivePlanOf(user);
   const prices = {};
   for (const p of Object.values(PLANS)) prices[p.id] = p.priceInr;
+  const ser = (n) => (Number.isFinite(n) ? n : null);
   const options = Object.values(PLANS).map((p) => ({
     plan: p.id, name: p.name, priceInr: p.priceInr,
     kind: p.id === cur.id ? 'current' : (PLAN_RANK[p.id] > PLAN_RANK[cur.id] ? 'upgrade' : 'downgrade'),
     chargeInr: Math.max(0, p.priceInr - cur.priceInr),
+    // Batch 4: the Pricing tab renders its comparison from this same
+    // config, so the limits a visitor reads are the limits the server
+    // enforces (null = unlimited, same serialization as planInfoOf).
+    limits: { accounts: ser(p.accounts), igAccounts: ser(p.igAccounts), postsPerDay: ser(p.postsPerDay), postsPerMonth: ser(p.postsPerMonth) },
+    fullBridge: !!p.fullBridge,
+    aiPerDay: ser(p.aiPerDay),
   }));
   return { current: cur.id, currentName: cur.name, currentPriceInr: cur.priceInr, prices, options };
 }

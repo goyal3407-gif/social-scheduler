@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense } fro
 import { api, nextBestTime, getWorkspaceId, setWorkspaceId } from './api.js'
 import { trFor } from './i18n.js'
 import { ResetPassword } from './components/Auth.jsx'
-import { IconHome, IconCal, IconQueue, IconPlus, IconMedia, IconBulk, IconTools, IconSpark, IconSettings, IconSun, IconMoon, IconMenu, IconX, IconBell, IconLink, IconSearch } from './components/icons.jsx'
+import { IconHome, IconCal, IconQueue, IconPlus, IconMedia, IconBulk, IconTools, IconSpark, IconSettings, IconSun, IconMoon, IconMenu, IconX, IconBell, IconLink, IconSearch, IconTag } from './components/icons.jsx'
 import { Skeleton, isOwnMediaUrl } from './components/shared.jsx'
 // The build id baked in at build time (vite define). The update guard
 // below compares it with the id the server/static file reports for
@@ -49,6 +49,7 @@ const Tools = lazyRetry(() => import('./components/Tools.jsx'))
 const AIStudio = lazyRetry(() => import('./components/AIStudio.jsx'))
 const Settings = lazyRetry(() => import('./components/Settings.jsx'))
 const Connections = lazyRetry(() => import('./components/Connections.jsx'))
+const Pricing = lazyRetry(() => import('./components/Pricing.jsx'))
 // The public landing page is only ever shown to logged-out visitors,
 // so it lazy-loads like the heavy tabs — the signed-in shell (and the
 // main-chunk budget) never pays for it.
@@ -69,6 +70,7 @@ const NAV = [
   // truncated to "AI Stud…", so the dock renders it on two lines.
   { id: 'ai', label: 'AI Studio', dockLabel: 'AI\nStudio', Icon: IconSpark },
   { id: 'connections', label: 'Connections', Icon: IconLink },
+  { id: 'pricing', label: 'Pricing', Icon: IconTag },
   { id: 'settings', label: 'Settings', Icon: IconSettings }
 ]
 
@@ -355,7 +357,7 @@ export default function App() {
   }, [wsId]) // eslint-disable-line react-hooks/exhaustive-deps
   // Owner-only tabs make no sense inside someone else's workspace.
   useEffect(() => {
-    if (wsId && (tab === 'settings' || tab === 'connections' || tab === 'tools')) setTab('home')
+    if (wsId && (tab === 'settings' || tab === 'connections' || tab === 'tools' || tab === 'pricing')) setTab('home')
   }, [wsId, tab])
 
   // Auto-bridge: schedule requests made from the on-device library
@@ -899,6 +901,7 @@ export default function App() {
             <button type="button" className={tab === 'bulk' ? 'active' : ''} onClick={() => setTab('bulk')}>{tr('bulk')}</button>
             {!wsId && <button type="button" className={tab === 'tools' ? 'active' : ''} onClick={() => setTab('tools')}>{tr('tools')}</button>}
             {!wsId && <button type="button" className={tab === 'connections' ? 'active' : ''} onClick={() => setTab('connections')}>{tr('connections')}</button>}
+            {!wsId && <button type="button" className={tab === 'pricing' ? 'active' : ''} onClick={() => setTab('pricing')}>{tr('pricing')}</button>}
           </nav>
           <form className="topnav-search" role="search" onSubmit={(e) => { e.preventDefault(); runGlobalSearch(globalQ) }} style={{ marginRight: 8 }}>
             <input type="search" value={globalQ} onChange={(e) => setGlobalQ(e.target.value)} placeholder={tr('searchPlaceholder')} aria-label="Search posts and media" />
@@ -914,10 +917,10 @@ export default function App() {
               </span>
             )}
             {!wsId && (
-              <span className="pill" title={user.comp ? 'Your plan — comp, free forever' : 'Your current plan'}>
+              <button type="button" className="pill" title={user.comp ? 'Your plan — comp, free forever' : 'Your current plan — open Pricing'} onClick={() => setTab('pricing')}>
                 <span className="dot" />
                 {user.planName || 'Free'} plan
-              </span>
+              </button>
             )}
             <button type="button" className="btn topnav-create" onClick={() => goStudio(null)}>{tr('createPost')}</button>
             <button type="button" className="icon-btn bell-btn" onClick={openNotifications} aria-label={unread ? `Notifications — ${unread} unread` : 'Notifications'}>
@@ -985,7 +988,7 @@ export default function App() {
               <input type="search" value={globalQ} onChange={(e) => setGlobalQ(e.target.value)} placeholder={tr('searchPlaceholder')} aria-label="Search posts and media" />
             </form>
             <nav className="drawer-nav" aria-label="Menu navigation">
-              {NAV.filter(({ id }) => !wsId || !['tools', 'connections', 'settings'].includes(id)).map(({ id, label, Icon }) => (
+              {NAV.filter(({ id }) => !wsId || !['tools', 'connections', 'settings', 'pricing'].includes(id)).map(({ id, label, Icon }) => (
                 <button key={id} type="button" className={`drawer-item ${tab === id ? 'active' : ''}`} aria-current={tab === id ? 'page' : undefined}
                   onClick={() => { setTab(id); setMenuOpen(false); window.scrollTo({ top: 0 }) }}>
                   <Icon size={20} /><span>{tr(id === 'ai' ? 'aiStudio' : id) || label}</span>
@@ -1000,10 +1003,17 @@ export default function App() {
                 <span className={`dot ${!settings ? 'amber' : igBroken ? 'off' : settings.instagramConnected ? '' : 'off'}`} />
                 {!settings ? 'IG checking…' : igBroken ? 'IG connection broken' : settings.instagramConnected ? `IG ${settings.instagramHandle || 'connected'}` : 'IG not connected'}
               </span>
-              <span className="pill" title={user.comp ? 'Your plan — comp, free forever' : 'Your current plan'} style={{ marginLeft: 8 }}>
-                <span className="dot" />
-                {user.planName || 'Free'} plan
-              </span>
+              {wsId ? (
+                <span className="pill" title={user.comp ? 'Your plan — comp, free forever' : 'Your current plan'} style={{ marginLeft: 8 }}>
+                  <span className="dot" />
+                  {user.planName || 'Free'} plan
+                </span>
+              ) : (
+                <button type="button" className="pill" title={user.comp ? 'Your plan — comp, free forever' : 'Your current plan — open Pricing'} style={{ marginLeft: 8 }} onClick={() => { setTab('pricing'); setMenuOpen(false); window.scrollTo({ top: 0 }) }}>
+                  <span className="dot" />
+                  {user.planName || 'Free'} plan
+                </button>
+              )}
               <p className="muted small" style={{ marginTop: 10 }}>{user.email}</p>
               <p style={{ marginTop: 8 }}><a href="/contact.html" className="small">Contact</a></p>
               <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
@@ -1086,6 +1096,9 @@ export default function App() {
         )}
         {tab === 'connections' && (
           <div className="section"><Connections settings={settings} onInstagramChanged={refreshSettings} /></div>
+        )}
+        {tab === 'pricing' && !wsId && (
+          <div className="section"><Pricing tr={tr} /></div>
         )}
         </Suspense>
 

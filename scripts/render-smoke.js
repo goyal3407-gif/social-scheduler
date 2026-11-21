@@ -179,6 +179,13 @@ async function runScenario(scenario, bundleDir) {
       case '/api/notifications': return json(200, { notifications: [], unread: 0 })
       case '/api/hashtag-groups': return json(200, [])
       case '/api/youtube/status': return json(200, { ok: true, configured: true, connected: true, channelId: 'chan-smoke', channelTitle: 'Smoke Channel', channelThumb: '' })
+      case '/api/my-stats': return json(200, { ok: true, stats: { published: 3, failed: 1, partial: 0, successRate: 75, publishedThisMonth: 2, scheduled: 2, drafts: 0, total: 6, perAccount: [{ account: '@smokeone', published: 3, failed: 1 }] }, note: 'Basic stats from KiluaAI records.' })
+      case '/api/plan/usage': return json(200, { ok: true, plan: { plan: 'free', planName: 'Free', basePlan: 'free', comp: false, planExpiresAt: '', limits: { accounts: 2, igAccounts: 1, postsPerDay: 2, postsPerMonth: 30 } }, ai: { perDay: 5, usedToday: 0, remaining: 5 }, pricing: { current: 'free', currentName: 'Free', currentPriceInr: 0, prices: { free: 0, pro: 249, max: 499, ultra: 999 }, options: [
+        { plan: 'free', name: 'Free', priceInr: 0, kind: 'current', chargeInr: 0, limits: { accounts: 2, igAccounts: 1, postsPerDay: 2, postsPerMonth: 30 }, fullBridge: false, aiPerDay: 5 },
+        { plan: 'pro', name: 'Pro', priceInr: 249, kind: 'upgrade', chargeInr: 249, limits: { accounts: 3, igAccounts: 3, postsPerDay: null, postsPerMonth: 100 }, fullBridge: false, aiPerDay: 25 },
+        { plan: 'max', name: 'Max', priceInr: 499, kind: 'upgrade', chargeInr: 499, limits: { accounts: 10, igAccounts: 10, postsPerDay: null, postsPerMonth: null }, fullBridge: true, aiPerDay: 100 },
+        { plan: 'ultra', name: 'Ultra', priceInr: 999, kind: 'upgrade', chargeInr: 999, limits: { accounts: null, igAccounts: null, postsPerDay: null, postsPerMonth: null }, fullBridge: true, aiPerDay: null },
+      ] }, usage: { postsToday: 0, postsThisMonth: 0, instagramConnected: 2, youtubeConnected: true, accountsConnected: 3 } })
       default: return json(200, {})
     }
   }
@@ -389,7 +396,37 @@ async function runScenario(scenario, bundleDir) {
     if (kidsRadios.length !== 2) fail('Made for Kids Yes/No radios missing')
     if (!kidsRadios[0].checked || kidsRadios[1].checked) fail('Made for Kids does not default to No')
     if (!root.textContent.includes('takes effect automatically once the approval passes')) fail('honest audit note missing next to the visibility selector')
-    console.log('render-smoke scenario B: PASS (dashboard + queue + calendar + media + connections + studio render, scheduled-first order holds, tracker platform wording correct, YouTube visibility pre-fills from the saved default)')
+    // Batch 4: back Home — the Dashboard must now be the compact
+    // glance (plan card, daily-plan table, 14-day chart, up-next /
+    // recent lists and how-it-works all moved out to their own tabs),
+    // and Pricing must be its own tab carrying the current plan, the
+    // comparison and the usage-based best-for-you marker.
+    const homeBtn = await waitFor(() => {
+      const els = [...window.document.querySelectorAll('button, a')]
+      return els.find((el) => el.textContent.trim() === 'Home')
+    }, 'Home nav control')
+    homeBtn.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }))
+    await waitFor(() => root.textContent.includes('Today at a glance'), 'compact dashboard glance to render')
+    const dashTxt = root.textContent
+    if (dashTxt.includes('Daily plan — today')) fail('daily-plan table still on the dashboard')
+    if (dashTxt.includes('Last 14 days')) fail('14-day chart still on the dashboard')
+    if (dashTxt.includes('My Plan —')) fail('My Plan card still on the dashboard')
+    if (dashTxt.includes('How it works')) fail('how-it-works section still on the dashboard')
+    if (dashTxt.includes('Recent activity')) fail('recent-activity list still on the dashboard')
+    if (!dashTxt.includes('Needs attention')) fail('glance problems tile missing on the dashboard')
+    if (!dashTxt.includes('YouTube ·')) fail('connection strip YouTube chip missing on the dashboard')
+    const pricingBtn = await waitFor(() => {
+      const els = [...window.document.querySelectorAll('button, a')]
+      return els.find((el) => el.textContent.trim() === 'Pricing')
+    }, 'Pricing nav control')
+    pricingBtn.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }))
+    await waitFor(() => root.textContent.includes('My plan') && root.textContent.includes('₹499'), 'pricing tab to render')
+    const priceTxt = root.textContent
+    if (!priceTxt.includes('Most popular')) fail('Max is not marked most popular on the Pricing tab')
+    if (!priceTxt.includes('Best for you')) fail('best-for-you marker missing on the Pricing tab (seeded usage is over the Free account limit, so a recommendation must show)')
+    if (!priceTxt.includes('Your numbers')) fail('stats card missing from the Pricing tab')
+    if (!priceTxt.includes('Current plan')) fail('current-plan marker missing on the Pricing tab')
+    console.log('render-smoke scenario B: PASS (dashboard + queue + calendar + media + connections + studio render, scheduled-first order holds, tracker platform wording correct, YouTube visibility pre-fills from the saved default, compact glance + pricing tab render)')
   } else if (scenario === 'C') {
     await waitFor(() => root.innerHTML.length > 0, 'app shell to render')
     const skip = [...window.document.querySelectorAll('button, a')].find((el) => el.textContent.trim() === 'Skip setup')
