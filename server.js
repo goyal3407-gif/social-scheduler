@@ -5102,6 +5102,26 @@ app.get(`/api/${ADMIN_SLUG}/audit`, ah(async (req, res) => {
   res.json({ ok: true, entries: await db.listAdminAudit({ limit: 100 }) });
 }));
 
+// Owner backup export: the app-side replacement for the blocked
+// mongodump plan. The production MONGODB_URI is a write-only Vercel
+// Secret — nothing outside this process can ever read the database
+// back — so the app exports ITSELF and the owner's backup server pulls
+// the result. Gated by a dedicated env token (BACKUP_TOKEN) sent as
+// the `x-backup-token` header, NOT by the console session/PIN: the
+// caller is a machine, not a browser. Doctrine matches the console:
+// EVERY failure — env var unset, header missing, token wrong — is the
+// plain API 404, so the route's existence is never admitted. The
+// export is full-fidelity (password hashes and connection tokens
+// included — a backup without them cannot be restored) and read-only.
+app.get(`/api/${ADMIN_SLUG}/backup-export`, ah(async (req, res) => {
+  const expected = process.env.BACKUP_TOKEN || '';
+  const given = req.get('x-backup-token') || '';
+  const a = Buffer.from(given, 'utf8'); const b = Buffer.from(expected, 'utf8');
+  if (!expected || !given || a.length !== b.length || !crypto.timingSafeEqual(a, b)) return adminApi404(res);
+  const collections = await db.exportDatabase();
+  res.json({ exportedAt: new Date().toISOString(), app: 'kiluaai', collections });
+}));
+
 // The console page itself: served ONLY to the owner's session; every
 // other visitor gets the plain 404 below. All data loads through the
 // PIN-gated API above — the page shell alone contains nothing about

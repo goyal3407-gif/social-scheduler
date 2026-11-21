@@ -1397,8 +1397,44 @@ async function deleteExpiredUploadSessions() {
   return expired.length;
 }
 
+// ---------- full-database export (owner backup) ----------
+// Returns { <collectionName>: <docs> } for the WHOLE app database, for
+// the owner backup export endpoint in server.js. Read-only by design:
+// it never writes. Mongo mode: enumerate the live database's
+// collections and dump every document raw through the native driver —
+// full fidelity, including mediafiles Buffers (they JSON-serialise as
+// {type:'Buffer',data:[...]} and can be restored from that). JSON mode
+// (dev/tests): the same collection names over the JSON stores, so the
+// export shape never depends on the backend.
+const JSON_COLLECTION_NAMES = {
+  users: 'users', sessions: 'sessions', posts: 'posts', media: 'media',
+  mediaFiles: 'mediafiles', templates: 'templates', settings: 'settings',
+  hashtagGroups: 'hashtaggroups', passwordResets: 'passwordresets',
+  youtube: 'youtube', drafts: 'drafts', bios: 'bios', instagram: 'instagram',
+  importJobs: 'importjobs', notifications: 'notifications',
+  uploadSessions: 'uploadsessions', adminAudit: 'adminaudits',
+  teamInvites: 'teaminvites',
+};
+async function exportDatabase() {
+  if (await ensureMongo()) {
+    const native = mongoose.connection.db;
+    const cols = await native.listCollections({}, { nameOnly: true }).toArray();
+    const out = {};
+    for (const c of cols) {
+      if (c.name.startsWith('system.')) continue;
+      out[c.name] = await native.collection(c.name).find({}).toArray();
+    }
+    return out;
+  }
+  const out = {};
+  for (const [fileKey, colName] of Object.entries(JSON_COLLECTION_NAMES)) {
+    out[colName] = load(JSON_FILES[fileKey], []);
+  }
+  return out;
+}
+
 module.exports = {
-  connect, ensureMongo, isMongo, getStatus, getLastError: () => lastError,
+  connect, ensureMongo, isMongo, getStatus, getLastError: () => lastError, exportDatabase,
   DB_NAME, load, save,
   encryptToken, decryptToken, isTokenEncryptionAvailable,
   listUsers, getUserByEmail, getUserById, saveUser, updateUser, deleteUserData, countUsers, ownerId,
