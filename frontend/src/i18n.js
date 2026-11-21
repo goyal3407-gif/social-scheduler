@@ -1,134 +1,70 @@
-// KiluaAI UI language: a dictionary for the app UI — nav, main
-// screens (Home, Queue, Studio, Media, Calendar, Bulk, Connections,
-// Settings), plan + stats cards, the first-run guide and the team
-// screens. Post content (captions, hashtags) is never translated.
-// Default EN; the choice persists per user (settings.uiLanguage) +
-// locally. Hindi here is the easy Hinglish style the app already
-// used, so a first-time Indian creator can follow every screen.
-export const STRINGS = {
+// KiluaAI UI language. Two layers (batch 5):
+//  - CORE below: the small set the app shell (top bar, nav, account
+//    menu) needs before anything else loads — it ships in the main
+//    bundle.
+//  - DICT in ./i18n-dict.js: the full dictionary for every screen,
+//    loaded lazily via loadDict() so the main bundle stays inside
+//    its size budget no matter how many strings the screens gain.
+// trFor resolves dict -> core -> English dict -> English core -> the
+// key itself, so a missing entry degrades to English, never a crash.
+// Post content (captions, hashtags) is never translated. The choice
+// persists per user (settings.uiLanguage) + locally (ss-lang). Hindi
+// here is the easy Roman-Hinglish style, so a first-time Indian
+// creator can follow every screen.
+export const CORE = {
   en: {
     home: 'Home', create: 'Create', queue: 'Queue', calendar: 'Calendar', media: 'Media',
     aiStudio: 'AI Studio', bulk: 'Bulk', tools: 'Tools', connections: 'Connections',
-    settings: 'Settings', contact: 'Contact', logout: 'Log out', createPost: 'Create Post',
-    scheduled: 'Scheduled', published: 'Published', totalPosts: 'Total posts', upNext: 'Up next',
-    searchPlaceholder: 'Search posts & media…',
-    homeSearchPlaceholder: 'Search posts, media…',
-    goodMorning: 'Good morning', goodAfternoon: 'Good afternoon', goodEvening: 'Good evening',
-    // Queue + post rows (batch 3)
-    failed: 'Failed', partial: 'Partial', drafts: 'Drafts', all: 'All',
-    retry: 'Retry', publish: 'Publish', edit: 'Edit', delete: 'Delete',
-    duplicate: 'Duplicate', reschedule: 'Reschedule', publishDue: 'Publish due',
-    retrying: 'Retrying…', retryDone: 'Retried — check the post status.',
-    // Studio (batch 3)
-    captionLibrary: 'Caption library', saveCaptionSet: 'Save caption as a set',
-    useSet: 'Use', aiAssistant: 'AI caption assistant', aiSuggest: 'Suggest a caption',
-    aiTopicHint: 'What is this post about?',
-    // Dashboard cards + guide (batch 3)
-    yourNumbers: 'Your numbers', basicStats: 'Basic stats',
-    gettingStarted: 'Getting started', guideTitle: 'Your first post in 2 minutes',
-    next: 'Next', back: 'Back', skip: 'Skip', finish: 'Done',
-    successRate: 'Went fully live', perAccount: 'Per account',
-    // Team (batch 3)
-    team: 'Team', inviteMember: 'Invite a team member', invite: 'Invite',
-    roleScheduler: 'Scheduler — can create & schedule posts',
-    roleViewer: 'Viewer — can only look',
-    remove: 'Remove', workspace: 'Workspace', myWorkspace: 'My workspace',
-    // Common
-    save: 'Save', cancel: 'Cancel', close: 'Close', loading: 'Loading…',
-    // Batch 4: compact Dashboard glance + Pricing tab
-    pricing: 'Pricing', myPlan: 'My plan',
-    todayGlance: 'Today at a glance', publishedToday: 'Published today',
-    problems: 'Needs attention', allGood: 'All good',
-    connected: 'Connected', notConnected: 'Not connected',
-    connectionBroken: 'Connection broken', reconnect: 'Reconnect',
-    openConnections: 'Open Connections', reviewInQueue: 'Review in Queue',
-    nothingScheduled: 'Nothing scheduled',
-    monthly: 'Monthly', yearly: 'Yearly', twoMonthsFree: '2 months free',
-    mostPopular: 'Most popular', bestForYou: 'Best for you',
-    currentPlan: 'Current plan', perMonth: '/month', perYear: '/year',
-    postsToday: 'Posts today', postsThisMonth: 'Posts this month',
-    accountsConnected: 'Accounts connected', aiCaptionsToday: 'AI captions today',
-    lifetime: 'Lifetime — comp plan, free forever. No expiry.',
-    activeUntil: 'Active until', upgrade: 'Upgrade',
-    paymentSoon: 'Online payment is not live yet',
-    recHitting: 'You have reached a limit on your current plan — {plan} is best for you now.',
-    recNear: 'You are close to a limit on your current plan — {plan} gives you room to grow.',
-    recFits: 'Your usage fits your current plan — no need to spend more.',
-    recTop: 'You are on the top plan — everything is unlimited.',
-    recComp: 'You have a Lifetime comp plan — everything is already yours, free forever.',
-    featAccounts: '{n} connected accounts', featAccountsUnlimited: 'Unlimited accounts',
-    featPostsMonth: '{n} posts a month', featPostsMonthUnlimited: 'Unlimited posts',
-    featPostsDay: '{n} posts a day',
-    featServerReadyAll: 'Every post server-ready — publishes even with your phone off',
-    featServerReadyNext: 'Next post server-ready — publishes right on time',
-    featCrossPostBulk: 'YouTube cross-post + bulk scheduling',
-    featPriority: 'Priority publishing — first in line',
-    featMultiAccount: 'Post to many accounts at once',
-    featTeam: 'Team / agency mode', featAnalytics: 'Analytics',
-    featSupportFirst: 'First-in-line support',
-    featAi: '{n} AI captions a day', featAiUnlimited: 'Unlimited AI captions',
-    pricingSub: 'Your plan, your usage, and every plan side by side — upgrades charge only the difference.',
-    upgradeYearlyLine: '{name} for a full year costs only ₹{charge} more than your current plan’s year — and it starts fresh from the upgrade day.',
-    probPosts: 'posts', probOverdue: 'overdue', probConnection: 'connection',
+    settings: 'Settings', pricing: 'Pricing', contact: 'Contact', logout: 'Log out',
+    createPost: 'Create Post', workspace: 'Workspace', myWorkspace: 'My workspace',
+    loading: 'Loading…', searchPlaceholder: 'Search posts & media…',
+    scheduled: 'Scheduled', published: 'Published', failed: 'Failed', partial: 'Partial', drafts: 'Drafts',
+    retry: 'Retry', dismiss: 'Dismiss',
+    freeForever: 'Free forever',
+    igChecking: 'IG checking…', igBrokenShort: 'IG connection broken',
+    igConnectedWord: 'connected', igNotConnected: 'IG not connected',
+    planBadge: '{name} plan', language: 'Language', switchWord: 'Switch',
+    lightTheme: 'Light theme', darkTheme: 'Dark theme',
   },
   hi: {
     home: 'Home', create: 'Banayein', queue: 'Queue List', calendar: 'Calendar', media: 'Media',
     aiStudio: 'AI Studio', bulk: 'Bulk', tools: 'Tools', connections: 'Connections',
-    settings: 'Settings', contact: 'Contact', logout: 'Log out', createPost: 'Post Banayein',
-    scheduled: 'Tay posts', published: 'Publish hue', totalPosts: 'Kul posts', upNext: 'Aane wale posts',
-    searchPlaceholder: 'Posts aur media search karein…',
-    homeSearchPlaceholder: 'Posts, media search karein…',
-    goodMorning: 'Suprabhat', goodAfternoon: 'Namaskar', goodEvening: 'Shubh sandhya',
-    failed: 'Fail hue', partial: 'Aadhe publish', drafts: 'Drafts', all: 'Sab',
-    retry: 'Dobara koshish', publish: 'Publish karein', edit: 'Badlein', delete: 'Hatayein',
-    duplicate: 'Copy banayein', reschedule: 'Samay badlein', publishDue: 'Due posts publish karein',
-    retrying: 'Koshish ho rahi hai…', retryDone: 'Dobara koshish ho gayi — post ka status dekhein.',
-    captionLibrary: 'Caption library', saveCaptionSet: 'Caption set ki tarah save karein',
-    useSet: 'Use karein', aiAssistant: 'AI caption sahayak', aiSuggest: 'Caption sujhayein',
-    aiTopicHint: 'Ye post kis baare mein hai?',
-    yourNumbers: 'Aapke numbers', basicStats: 'Basic stats',
-    gettingStarted: 'Shuruaat karein', guideTitle: 'Pehli post sirf 2 minute mein',
-    next: 'Aage', back: 'Peeche', skip: 'Skip karein', finish: 'Ho gaya',
-    successRate: 'Poori tarah live hue', perAccount: 'Har account ke hisaab se',
-    team: 'Team', inviteMember: 'Team member ko bulayein', invite: 'Bulayein',
-    roleScheduler: 'Scheduler — post bana aur schedule kar sakta hai',
-    roleViewer: 'Viewer — sirf dekh sakta hai',
-    remove: 'Hatayein', workspace: 'Workspace', myWorkspace: 'Mera workspace',
-    save: 'Save karein', cancel: 'Cancel', close: 'Band karein', loading: 'Load ho raha hai…',
-    pricing: 'Plans ke daam', myPlan: 'Mera plan',
-    todayGlance: 'Aaj ek nazar mein', publishedToday: 'Aaj publish hue',
-    problems: 'Dhyaan chahiye', allGood: 'Sab theek hai',
-    connected: 'Juda hua', notConnected: 'Juda nahi hai',
-    connectionBroken: 'Connection toota hai', reconnect: 'Dobara jodein',
-    openConnections: 'Connections kholein', reviewInQueue: 'Queue mein dekhein',
-    nothingScheduled: 'Kuch schedule nahi hai',
-    monthly: 'Mahine wala', yearly: 'Saal wala', twoMonthsFree: '2 mahine free',
-    mostPopular: 'Sabse lokpriya', bestForYou: 'Tumhare liye best',
-    currentPlan: 'Abhi ka plan', perMonth: '/mahina', perYear: '/saal',
-    postsToday: 'Aaj ki posts', postsThisMonth: 'Is mahine ki posts',
-    accountsConnected: 'Jude hue accounts', aiCaptionsToday: 'Aaj ke AI captions',
-    lifetime: 'Lifetime — comp plan, hamesha free. Koi expiry nahi.',
-    activeUntil: 'Tak active', upgrade: 'Upgrade karein',
-    paymentSoon: 'Online payment abhi live nahi hai',
-    recHitting: 'Tum apne plan ki ek limit tak pahunch gaye ho — ab {plan} tumhare liye best hai.',
-    recNear: 'Tum apne plan ki limit ke kareeb ho — {plan} tumhe aaram dega.',
-    recFits: 'Tumhara usage abhi ke plan mein aaram se fit hai — zyada kharcha karne ki zaroorat nahi.',
-    recTop: 'Tum sabse upar wale plan par ho — sab kuch unlimited hai.',
-    recComp: 'Tumhara Lifetime comp plan hai — sab kuch pehle se mila hua hai, hamesha free.',
-    featAccounts: '{n} jude hue accounts', featAccountsUnlimited: 'Unlimited accounts',
-    featPostsMonth: 'Mahine mein {n} posts', featPostsMonthUnlimited: 'Unlimited posts',
-    featPostsDay: 'Roz {n} posts',
-    featServerReadyAll: 'Saari posts server par ready — phone band ho tab bhi publish',
-    featServerReadyNext: 'Agli post server par ready — samay par publish',
-    featCrossPostBulk: 'YouTube cross-post + bulk scheduling',
-    featPriority: 'Priority publishing — line mein sabse aage',
-    featMultiAccount: 'Kai accounts par ek saath post',
-    featTeam: 'Team / agency mode', featAnalytics: 'Analytics',
-    featSupportFirst: 'Sabse pehle support',
-    featAi: 'Roz {n} AI captions', featAiUnlimited: 'Unlimited AI captions',
-    pricingSub: 'Tumhara plan, tumhara usage, aur saare plans ek saath — upgrade par sirf farak lagega.',
-    upgradeYearlyLine: '{name} ka poora saal tumhare abhi wale plan ke saal se sirf ₹{charge} zyada hai — aur ye upgrade wale din se fresh shuru hoga.',
-    probPosts: 'posts', probOverdue: 'overdue', probConnection: 'connection',
+    settings: 'Settings', pricing: 'Plans ke daam', contact: 'Contact', logout: 'Log out',
+    createPost: 'Post Banayein', workspace: 'Workspace', myWorkspace: 'Mera workspace',
+    loading: 'Load ho raha hai…', searchPlaceholder: 'Posts aur media search karein…',
+    scheduled: 'Tay posts', published: 'Publish hue', failed: 'Fail hue', partial: 'Aadhe publish', drafts: 'Drafts',
+    retry: 'Dobara koshish', dismiss: 'Hatayein',
+    freeForever: 'Hamesha free',
+    igChecking: 'IG check ho raha hai…', igBrokenShort: 'IG connection toota hai',
+    igConnectedWord: 'juda hua', igNotConnected: 'IG juda nahi hai',
+    planBadge: '{name} ka plan', language: 'Bhasha', switchWord: 'Badlein',
+    lightTheme: 'Light theme', darkTheme: 'Dark theme',
   },
 }
-export const trFor = (lang) => (key) => (STRINGS[lang] && STRINGS[lang][key]) || STRINGS.en[key] || key
+
+let cachedDict = null
+let dictPromise = null
+// The loaded full dictionary, or null while it is still in flight
+// (shared.jsx reads this for components that receive no tr prop).
+export function dictSync() { return cachedDict }
+// Loads the full dictionary chunk once; resolves to the dict, or to
+// an empty shell if the chunk cannot load (the UI then runs on CORE
+// + English fallbacks instead of breaking).
+export function loadDict() {
+  if (cachedDict) return Promise.resolve(cachedDict)
+  if (!dictPromise) {
+    dictPromise = import('./i18n-dict.js')
+      .then((m) => { cachedDict = m.DICT || { en: {}, hi: {} }; return cachedDict })
+      .catch(() => { cachedDict = { en: {}, hi: {} }; return cachedDict })
+  }
+  return dictPromise
+}
+
+export const trFor = (lang, dict) => (key) => {
+  const d = dict || cachedDict
+  if (lang === 'hi') {
+    const v = (d && d.hi && d.hi[key]) || CORE.hi[key]
+    if (v) return v
+  }
+  return (d && d.en && d.en[key]) || CORE.en[key] || key
+}

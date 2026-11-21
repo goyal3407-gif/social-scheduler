@@ -47,7 +47,8 @@ const withYouTubeFields = (base, ytDefault) => {
 const isSeedTemplate = (t) => /^tpl-\d+$/.test(String(t?.id || '')) || /^pack-/.test(String(t?.id || ''))
 const isPackTemplate = (t) => /^pack-/.test(String(t?.id || ''))
 
-export default function Studio({ editing, seed, media, templates, hashtagGroups, onCreateTemplate, onDeleteTemplate, onCreateHashtagGroup, onDeleteHashtagGroup, drafts, onSaveLibraryDraft, onDeleteLibraryDraft, onSave, onCancel, saving, posts, igAccounts, defaultIgUserId, settings, onNavigate }) {
+export default function Studio({ editing, seed, media, templates, hashtagGroups, onCreateTemplate, onDeleteTemplate, onCreateHashtagGroup, onDeleteHashtagGroup, drafts, onSaveLibraryDraft, onDeleteLibraryDraft, onSave, onCancel, saving, posts, igAccounts, defaultIgUserId, settings, onNavigate, tr }) {
+  const t = tr || ((k) => k)
   const [form, setForm] = useState(EMPTY)
   const [step, setStep] = useState(1)
   const [width, setWidth] = useState('')
@@ -261,7 +262,7 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
       const r = await api.preflightPost({ ...buildPayload(form.status || 'scheduled'), ...(editing?.id ? { excludePostId: editing.id } : {}) })
       setPreflight(r)
     } catch (e) {
-      setPreflight({ ok: false, checks: [{ id: 'preflight', ok: false, message: e.message || 'The check could not run.', fix: 'Try again in a moment.' }] })
+      setPreflight({ ok: false, checks: [{ id: 'preflight', ok: false, message: e.message || t('errPreflight'), fix: t('errPreflightFix') }] })
     }
     setPreflightBusy(false)
   }
@@ -270,18 +271,18 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
   const submit = async (statusOverride) => {
     setError('')
     const status = statusOverride || form.status || 'scheduled'
-    if (!form.mediaUrl.trim()) { setError('Add a media URL or pick one from your library first (Step 1).'); setStep(1); return }
+    if (!form.mediaUrl.trim()) { setError(t('errAddMedia')); setStep(1); return }
     // Platform picker: at least one platform must be ticked.
-    if (!igTicked && !(form.youtubeEnabled && ytStatus?.connected)) { setError('Tick at least one platform in Step 3 — Instagram, YouTube, or both.'); setStep(3); return }
+    if (!igTicked && !(form.youtubeEnabled && ytStatus?.connected)) { setError(t('errTickPlatform')); setStep(3); return }
     // Drafts need no time; scheduled posts do.
-    if (status !== 'draft' && !form.scheduleTime) { setError('Pick a date and time to schedule (Step 3).'); setStep(3); return }
+    if (status !== 'draft' && !form.scheduleTime) { setError(t('errPickTime')); setStep(3); return }
     const payload = buildPayload(status)
     try {
       await onSave(payload, Boolean(editing?.id))
       if (!editing?.id) clearDrafts()
-      setSavedNote(statusOverride === 'draft' ? 'Saved as draft.' : 'Scheduled — it is now in your queue.')
+      setSavedNote(statusOverride === 'draft' ? t('noteSavedDraft') : t('noteScheduled'))
     } catch (e) {
-      setError(e.message || 'Could not save this post.')
+      setError(e.message || t('errSavePost'))
     }
   }
 
@@ -301,13 +302,13 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
 
   const saveAsTemplate = async () => {
     setBankMsg('')
-    if (!form.caption.trim()) { setBankMsg('Write a caption first, then save it as a set.'); return }
-    if (!tplName.trim()) { setBankMsg('Give the set a name first.'); return }
+    if (!form.caption.trim()) { setBankMsg(t('bankWriteCaption')); return }
+    if (!tplName.trim()) { setBankMsg(t('bankNameSet')); return }
     try {
       await onCreateTemplate({ name: tplName.trim(), text: form.caption.trim(), hashtags: form.hashtags.trim(), cta: form.cta.trim() })
       setTplName(''); setShowTplSave(false)
-      setBankMsg('Caption set saved — find it in the library above.')
-    } catch (e) { setBankMsg(e.message || 'Could not save the caption set.') }
+      setBankMsg(t('bankSetSaved'))
+    } catch (e) { setBankMsg(e.message || t('bankSaveSetFail')) }
   }
 
   // AI caption assistant (batch 3): one suggestion from a topic the
@@ -320,14 +321,14 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
   const [aiRemaining, setAiRemaining] = useState(null)
   const runAiSuggest = async () => {
     const topic = (aiTopic || '').trim() || (form.caption || '').trim()
-    if (topic.length < 3) { setAiMsg('Write a few words about your post first — in the box above or as your caption.'); return }
+    if (topic.length < 3) { setAiMsg(t('aiWriteFirst')); return }
     setAiBusy(true); setAiMsg('')
     try {
       const r = await api.aiCaption(topic)
       setForm((f) => ({ ...f, caption: r.caption || f.caption, hashtags: r.hashtags || f.hashtags, cta: r.cta || f.cta }))
       if (r.remaining != null) setAiRemaining(r.remaining)
-      setAiMsg('Suggestion added — edit it freely before you schedule.')
-    } catch (e) { setAiMsg(e.message || 'The AI assistant could not answer just now.') }
+      setAiMsg(t('aiAdded'))
+    } catch (e) { setAiMsg(e.message || t('aiFail')) }
     finally { setAiBusy(false) }
   }
 
@@ -338,13 +339,13 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
 
   const saveAsHashtagGroup = async () => {
     setBankMsg('')
-    if (!form.hashtags.trim()) { setBankMsg('Add some hashtags first, then save them as a group.'); return }
-    if (!tagName.trim()) { setBankMsg('Give the hashtag group a name first.'); return }
+    if (!form.hashtags.trim()) { setBankMsg(t('bankAddTags')); return }
+    if (!tagName.trim()) { setBankMsg(t('bankNameGroup')); return }
     try {
       await onCreateHashtagGroup({ name: tagName.trim(), tags: form.hashtags.trim() })
       setTagName(''); setShowTagSave(false)
-      setBankMsg('Hashtag group saved.')
-    } catch (e) { setBankMsg(e.message || 'Could not save the hashtag group.') }
+      setBankMsg(t('bankGroupSaved'))
+    } catch (e) { setBankMsg(e.message || t('bankSaveGroupFail')) }
   }
 
   // First comment from a hashtag group (Phase C2): the group's tags,
@@ -353,7 +354,7 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
     if (!g) return
     const tags = String(g.tags || '').split(/[\s,]+/).filter(Boolean).map((t) => (t.startsWith('#') ? t : `#${t}`)).join(' ')
     setForm((f) => ({ ...f, firstComment: tags }))
-    setBankMsg(`First comment set from “${g.name}”.`)
+    setBankMsg(t('firstCommentSet').replace('{name}', g.name))
   }
 
   // Drafts library (Phase C3): save the current composer as a named
@@ -361,7 +362,7 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
   const saveToDraftsLibrary = async () => {
     setDraftLibMsg('')
     if (!onSaveLibraryDraft) return
-    if (!draftLibName.trim()) { setDraftLibMsg('Give the draft a name first.'); return }
+    if (!draftLibName.trim()) { setDraftLibMsg(t('draftNameFirst')); return }
     try {
       await onSaveLibraryDraft({
         name: draftLibName.trim(),
@@ -376,15 +377,15 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
         repeat: form.repeatWeekly ? 'weekly' : '',
       })
       setDraftLibName('')
-      setDraftLibMsg('Saved to your Drafts library.')
-    } catch (e) { setDraftLibMsg(e.message || 'Could not save the draft.') }
+      setDraftLibMsg(t('draftSavedLib'))
+    } catch (e) { setDraftLibMsg(e.message || t('draftSaveFail')) }
   }
 
   const loadDraft = (d) => {
     if (!d) return
     setForm(withYouTubeFields({ ...d, scheduleTime: '', status: 'scheduled' }, settings?.ytDefaultVisibility))
     setStep(1); setError('')
-    setDraftLibMsg(`Loaded “${d.name}” — pick a time in Step 3 when you're ready. Nothing is scheduled yet.`)
+    setDraftLibMsg(t('draftLoaded').replace('{name}', d.name))
   }
 
   const pickMedia = (m) => {
@@ -404,15 +405,15 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
 
   return (
     <div>
-      <h2 className="section-title">{editing ? 'Edit post' : 'Studio — create a post'}</h2>
-      <p className="section-sub">Three steps: media, caption, schedule. The preview updates live as you type.</p>
+      <h2 className="section-title">{editing ? t('studioEditTitle') : t('studioTitle')}</h2>
+      <p className="section-sub">{t('studioSub')}</p>
       {onSaveLibraryDraft && (
         <div className="card" style={{ marginBottom: 16 }}>
-          <h3>Drafts library</h3>
-          <p className="muted small" style={{ marginTop: 6 }}>Save this composer setup under a name and load it back any time. Loading a draft never schedules anything.</p>
+          <h3>{t('draftsLibrary')}</h3>
+          <p className="muted small" style={{ marginTop: 6 }}>{t('draftsLibrarySub')}</p>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
-            <input placeholder="Draft name, e.g. Salon offer post" value={draftLibName} onChange={(e) => setDraftLibName(e.target.value)} style={{ flex: 1, minWidth: 180 }} aria-label="Draft name" />
-            <button type="button" className="btn small" onClick={saveToDraftsLibrary}>Save to Drafts library</button>
+            <input placeholder={t('draftNamePh')} value={draftLibName} onChange={(e) => setDraftLibName(e.target.value)} style={{ flex: 1, minWidth: 180 }} aria-label={t('draftNameAria')} />
+            <button type="button" className="btn small" onClick={saveToDraftsLibrary}>{t('saveToDrafts')}</button>
           </div>
           {draftLibMsg && <p className="small mt">{draftLibMsg}</p>}
           {(drafts || []).length > 0 && (
@@ -420,7 +421,7 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
               {drafts.map((d) => (
                 <span key={d.id} className="chip" style={{ marginRight: 6, marginBottom: 6 }}>
                   <button type="button" onClick={() => loadDraft(d)} style={{ border: 'none', background: 'transparent', fontWeight: 700, padding: 0, color: 'var(--ink)' }} title={d.caption || ''}>{d.name}</button>
-                  {onDeleteLibraryDraft && <button type="button" aria-label={`Delete draft ${d.name}`} onClick={() => onDeleteLibraryDraft(d)} style={{ border: 'none', background: 'transparent', color: 'var(--red)', fontWeight: 700, padding: 0, marginLeft: 2 }}>✕</button>}
+                  {onDeleteLibraryDraft && <button type="button" aria-label={t('deleteDraftAria').replace('{name}', d.name)} onClick={() => onDeleteLibraryDraft(d)} style={{ border: 'none', background: 'transparent', color: 'var(--red)', fontWeight: 700, padding: 0, marginLeft: 2 }}>✕</button>}
                 </span>
               ))}
             </div>
@@ -429,10 +430,10 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
       )}
 
       <div className="steps" aria-label="Composer steps">
-        {['Media', 'Caption & hashtags', 'Schedule & publish'].map((label, i) => (
+        {[t('stepMedia'), t('stepCaption'), t('stepSchedule')].map((label, i) => (
           <button key={label} type="button" className={`step ${step === i + 1 ? 'active' : ''}`} onClick={() => setStep(i + 1)}>
             <b><span className="step-num">{i + 1}</span>{label}</b>
-            <span className="muted small">{['Video or image link', 'Score, hashtags, CTA', 'Format, time, status'][i]}</span>
+            <span className="muted small">{[t('stepMediaSub'), t('stepCaptionSub'), t('stepScheduleSub')][i]}</span>
           </button>
         ))}
       </div>
@@ -441,20 +442,20 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
         <div className="card">
           {step === 1 && (
             <div>
-              <h2>Step 1 — Media</h2>
-              <p className="muted small mb">Paste a direct media link, or pick from your library.</p>
-              <label htmlFor="mediaUrl">Media URL</label>
+              <h2>{t('step1Title')}</h2>
+              <p className="muted small mb">{t('step1Sub')}</p>
+              <label htmlFor="mediaUrl">{t('mediaUrlLabel')}</label>
               <input id="mediaUrl" type="url" placeholder="https://…/video.mp4 or image.jpg" value={form.mediaUrl} onChange={(e) => set({ mediaUrl: e.target.value, mediaType: /\.(png|jpe?g|gif|webp|avif)(\?|$)/i.test(e.target.value) ? 'image' : 'video', posterUrl: '' })} />
               <div className="two-col mt">
                 <div>
-                  <label htmlFor="mediaType">Media type</label>
+                  <label htmlFor="mediaType">{t('mediaTypeLabel')}</label>
                   <select id="mediaType" value={form.mediaType} onChange={(e) => set({ mediaType: e.target.value })}>
-                    <option value="video">Video</option>
-                    <option value="image">Image</option>
+                    <option value="video">{t('videoWord')}</option>
+                    <option value="image">{t('imageWord')}</option>
                   </select>
                 </div>
                 <div>
-                  <label htmlFor="platform">Platform</label>
+                  <label htmlFor="platform">{t('platformLabel')}</label>
                   <select id="platform" value={form.platform} onChange={(e) => set({ platform: e.target.value })}>
                     {PLATFORMS.map((p) => <option key={p} value={p}>{p}</option>)}
                   </select>
@@ -462,29 +463,29 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
               </div>
 
               <div className="mt2">
-                <label>Reel-safety check <span className="muted">(auto-detected when the media loads — or enter manually)</span></label>
+                <label>{t('reelSafety')} <span className="muted">{t('reelSafetyNote')}</span></label>
                 <div className="two-col">
-                  <input type="number" placeholder="Width, e.g. 1080" value={width} onChange={(e) => setWidth(e.target.value)} aria-label="Video width in pixels" />
-                  <input type="number" placeholder="Height, e.g. 1920" value={height} onChange={(e) => setHeight(e.target.value)} aria-label="Video height in pixels" />
+                  <input type="number" placeholder={t('widthPh')} value={width} onChange={(e) => setWidth(e.target.value)} aria-label={t('widthAria')} />
+                  <input type="number" placeholder={t('heightPh')} value={height} onChange={(e) => setHeight(e.target.value)} aria-label={t('heightAria')} />
                 </div>
                 {ratio !== null && (
                   <div className={`warn ${reelSafe ? 'green' : feedVerticalWarn ? 'red' : 'blue'}`}>
                     {reelSafe ? <IconCheck size={17} /> : <IconWarn size={17} />}
-                    <div>Ratio <b>{ratio.toFixed(2)}</b>{isVertical ? ' — 1080×1920 vertical. Safe for Reels.' : ' — not vertical 9:16.'}{feedVerticalWarn && ' Warning: a vertical video as a FEED post may be cropped or rejected — switch format to REELS.'}</div>
+                    <div>Ratio <b>{ratio.toFixed(2)}</b>{isVertical ? t('ratioSafe') : t('ratioNotVertical')}{feedVerticalWarn && ` ${t('ratioFeedWarn')}`}</div>
                   </div>
                 )}
                 {form.format === 'FEED' && form.mediaType === 'video' && !width && (
-                  <div className="warn amber"><IconWarn size={17} /><div>Vertical video + FEED format is the most common publish failure. If this is 1080×1920, choose REELS in Step 3.</div></div>
+                  <div className="warn amber"><IconWarn size={17} /><div>{t('feedVideoWarn')}</div></div>
                 )}
               </div>
 
               <div className="mt2">
-                <label>From your library</label>
-                {(!media || media.length === 0) ? <p className="muted small">No media yet — upload some in Media Library first.</p> : (
+                <label>{t('fromLibrary')}</label>
+                {(!media || media.length === 0) ? <p className="muted small">{t('noMediaYet')}</p> : (
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', maxHeight: 180, overflow: 'auto' }}>
                     {media.slice(0, 12).map((m) => m.serverCopyRemoved ? (
-                      <button key={m.id} type="button" disabled title="This file was published and its server copy was removed to save space — upload it again in Media Library to reuse it" style={{ border: '1px dashed var(--line)', borderRadius: 10, padding: 6, width: 72, height: 96, background: 'var(--surface-2)', color: 'var(--muted)', fontSize: 10, lineHeight: 1.4, cursor: 'not-allowed' }}>
-                        Published ✓<br />Re-upload to reuse
+                      <button key={m.id} type="button" disabled title={t('removedCopyTitle')} style={{ border: '1px dashed var(--line)', borderRadius: 10, padding: 6, width: 72, height: 96, background: 'var(--surface-2)', color: 'var(--muted)', fontSize: 10, lineHeight: 1.4, cursor: 'not-allowed' }}>
+                        {t('publishedMark')}<br />{t('reuploadReuse')}
                       </button>
                     ) : (
                       <button key={m.id} type="button" onClick={() => pickMedia(m)} style={{ border: form.mediaUrl === m.url ? '2px solid var(--brand)' : '1px solid var(--line)', borderRadius: 10, padding: 0, overflow: 'hidden', width: 72, height: 96, background: 'var(--surface-2)' }} title={m.title || m.url}>
@@ -494,147 +495,147 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
                   </div>
                 )}
               </div>
-              <button type="button" className="btn primary mt" onClick={() => setStep(2)}>Continue to caption →</button>
+              <button type="button" className="btn primary mt" onClick={() => setStep(2)}>{t('continueCaption')}</button>
             </div>
           )}
 
           {step === 2 && (
             <div>
-              <h2>Step 2 — Caption &amp; hashtags</h2>
-              <p className="muted small mb">Write like you talk. The score updates live.</p>
+              <h2>{t('step2Title')}</h2>
+              <p className="muted small mb">{t('step2Sub')}</p>
               {templates && templates.length > 0 && (
                 <div className="mb">
-                  <label htmlFor="tpl">Caption library — one tap fills caption, hashtags &amp; CTA</label>
-                  <select id="tpl" value="" onChange={(e) => { const t = templates.find((x) => String(x.id) === e.target.value); if (t) applyTemplate(t) }}>
-                    <option value="">Choose a saved set…</option>
-                    {templates.map((t) => <option key={t.id} value={t.id}>{t.name}{isPackTemplate(t) ? ' · KiluaAI pack' : ''}</option>)}
+                  <label htmlFor="tpl">{t('tplLabel')}</label>
+                  <select id="tpl" value="" onChange={(e) => { const tpl = templates.find((x) => String(x.id) === e.target.value); if (tpl) applyTemplate(tpl) }}>
+                    <option value="">{t('chooseSet')}</option>
+                    {templates.map((tpl) => <option key={tpl.id} value={tpl.id}>{tpl.name}{isPackTemplate(tpl) ? t('kiluaaiPack') : ''}</option>)}
                   </select>
                   <div style={{ marginTop: 8 }}>
-                    {templates.filter((t) => !isSeedTemplate(t)).map((t) => (
-                      <span key={t.id} className="chip" style={{ marginRight: 6, marginBottom: 6 }}>
-                        <button type="button" onClick={() => applyTemplate(t)} style={{ border: 'none', background: 'transparent', fontWeight: 700, padding: 0, color: 'var(--ink)' }} title="Use this set">{t.name}</button>
-                        {onDeleteTemplate && <button type="button" aria-label={`Delete caption set ${t.name}`} onClick={() => onDeleteTemplate(t)} style={{ border: 'none', background: 'transparent', color: 'var(--red)', fontWeight: 700, padding: 0, marginLeft: 2 }}>✕</button>}
+                    {templates.filter((tpl) => !isSeedTemplate(tpl)).map((tpl) => (
+                      <span key={tpl.id} className="chip" style={{ marginRight: 6, marginBottom: 6 }}>
+                        <button type="button" onClick={() => applyTemplate(tpl)} style={{ border: 'none', background: 'transparent', fontWeight: 700, padding: 0, color: 'var(--ink)' }} title={t('useSetTitle')}>{tpl.name}</button>
+                        {onDeleteTemplate && <button type="button" aria-label={t('deleteSetAria').replace('{name}', tpl.name)} onClick={() => onDeleteTemplate(tpl)} style={{ border: 'none', background: 'transparent', color: 'var(--red)', fontWeight: 700, padding: 0, marginLeft: 2 }}>✕</button>}
                       </span>
                     ))}
                   </div>
                 </div>
               )}
-              <label htmlFor="caption">Caption</label>
-              <textarea id="caption" rows={5} placeholder="Write your caption…" value={form.caption} onChange={(e) => set({ caption: e.target.value })} />
-              <p className="muted small" style={{ textAlign: 'right' }}>{form.caption.length} characters</p>
+              <label htmlFor="caption">{t('captionLabel')}</label>
+              <textarea id="caption" rows={5} placeholder={t('captionPh')} value={form.caption} onChange={(e) => set({ caption: e.target.value })} />
+              <p className="muted small" style={{ textAlign: 'right' }}>{t('characters').replace('{n}', form.caption.length)}</p>
               {onCreateTemplate && (
                 <div className="mb">
                   {!showTplSave ? (
-                    <button type="button" className="btn ghost small" onClick={() => setShowTplSave(true)}>Save caption as a set</button>
+                    <button type="button" className="btn ghost small" onClick={() => setShowTplSave(true)}>{t('saveCaptionSet')}</button>
                   ) : (
                     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                      <input placeholder="Set name, e.g. Product launch" value={tplName} onChange={(e) => setTplName(e.target.value)} style={{ flex: 1, minWidth: 180 }} aria-label="Caption set name" />
-                      <button type="button" className="btn small" onClick={saveAsTemplate}>Save set</button>
-                      <button type="button" className="btn ghost small" onClick={() => setShowTplSave(false)}>Cancel</button>
+                      <input placeholder={t('setNamePh')} value={tplName} onChange={(e) => setTplName(e.target.value)} style={{ flex: 1, minWidth: 180 }} aria-label={t('setNameAria')} />
+                      <button type="button" className="btn small" onClick={saveAsTemplate}>{t('saveSetBtn')}</button>
+                      <button type="button" className="btn ghost small" onClick={() => setShowTplSave(false)}>{t('cancel')}</button>
                     </div>
                   )}
                 </div>
               )}
               <div className="mb" style={{ border: '1px solid var(--line)', borderRadius: 12, padding: 12 }}>
-                <label htmlFor="aiTopic">AI caption assistant <span className="muted">(a suggestion — you edit before anything is used)</span></label>
+                <label htmlFor="aiTopic">{t('aiAssistant')} <span className="muted">{t('aiBoxNote')}</span></label>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  <input id="aiTopic" placeholder="What is this post about? e.g. New Diwali collection launch" value={aiTopic} onChange={(e) => setAiTopic(e.target.value)} style={{ flex: 1, minWidth: 200 }} />
-                  <button type="button" className="btn small" disabled={aiBusy} onClick={runAiSuggest}>{aiBusy ? 'Thinking…' : 'Suggest a caption'}</button>
+                  <input id="aiTopic" placeholder={t('aiTopicPh')} value={aiTopic} onChange={(e) => setAiTopic(e.target.value)} style={{ flex: 1, minWidth: 200 }} />
+                  <button type="button" className="btn small" disabled={aiBusy} onClick={runAiSuggest}>{aiBusy ? t('aiThinking') : t('aiSuggest')}</button>
                 </div>
-                {aiRemaining != null && <p className="muted small" style={{ margin: '6px 0 0' }}>{aiRemaining} AI suggestions left today.</p>}
+                {aiRemaining != null && <p className="muted small" style={{ margin: '6px 0 0' }}>{t('aiLeftToday').replace('{n}', aiRemaining)}</p>}
                 {aiMsg && <p className="small" role="status" style={{ margin: '6px 0 0' }}>{aiMsg}</p>}
               </div>
-              <label htmlFor="hashtags">Hashtags <span className="muted">(space or comma separated)</span></label>
+              <label htmlFor="hashtags">{t('hashtagsLabel')} <span className="muted">{t('hashtagsNote')}</span></label>
               <input id="hashtags" placeholder="#social #creator #reels" value={form.hashtags} onChange={(e) => set({ hashtags: e.target.value })} />
-              <p className="small mt" style={{ color: nTags > 30 ? 'var(--red)' : 'var(--muted)' }}>{nTags} / 30 hashtags{nTags > 30 ? ' — over the Instagram limit of 30. Remove some before publishing.' : ''}</p>
-              {nTags > 30 && <div className="warn red"><IconWarn size={17} /><div><b>30-hashtag limit:</b> Instagram allows at most 30 hashtags per post. This post has {nTags}.</div></div>}
+              <p className="small mt" style={{ color: nTags > 30 ? 'var(--red)' : 'var(--muted)' }}>{t('hashtagsCount').replace('{n}', nTags)}{nTags > 30 ? ` ${t('hashtagsOver')}` : ''}</p>
+              {nTags > 30 && <div className="warn red"><IconWarn size={17} /><div><b>{t('hashtagLimitTitle')}</b> {t('hashtagLimitBody').replace('{n}', nTags)}</div></div>}
               <div className="mt">
-                <label>Hashtag bank <span className="muted">(tap a group to add its tags)</span></label>
+                <label>{t('hashtagBank')} <span className="muted">{t('hashtagBankNote')}</span></label>
                 {(!hashtagGroups || hashtagGroups.length === 0) ? (
-                  <p className="muted small">No saved groups yet — save the hashtags above as a group and reuse them in one tap.</p>
+                  <p className="muted small">{t('noGroupsYet')}</p>
                 ) : (
                   <div>
                     {hashtagGroups.map((g) => (
                       <span key={g.id} className="chip" style={{ marginRight: 6, marginBottom: 6 }}>
                         <button type="button" onClick={() => appendHashtagGroup(g)} style={{ border: 'none', background: 'transparent', fontWeight: 700, padding: 0, color: 'var(--ink)' }} title={g.tags}>{g.name} +</button>
-                        <button type="button" onClick={() => useGroupAsFirstComment(g)} style={{ border: 'none', background: 'transparent', fontWeight: 700, padding: 0, marginLeft: 4, color: 'var(--gold, #b98a1c)' }} title="Use this group as the first comment">→ 1st comment</button>
-                        {onDeleteHashtagGroup && <button type="button" aria-label={`Delete hashtag group ${g.name}`} onClick={() => onDeleteHashtagGroup(g)} style={{ border: 'none', background: 'transparent', color: 'var(--red)', fontWeight: 700, padding: 0, marginLeft: 2 }}>✕</button>}
+                        <button type="button" onClick={() => useGroupAsFirstComment(g)} style={{ border: 'none', background: 'transparent', fontWeight: 700, padding: 0, marginLeft: 4, color: 'var(--gold, #b98a1c)' }} title={t('firstCommentUse')}>{t('firstCommentMark')}</button>
+                        {onDeleteHashtagGroup && <button type="button" aria-label={t('deleteGroupAria').replace('{name}', g.name)} onClick={() => onDeleteHashtagGroup(g)} style={{ border: 'none', background: 'transparent', color: 'var(--red)', fontWeight: 700, padding: 0, marginLeft: 2 }}>✕</button>}
                       </span>
                     ))}
                   </div>
                 )}
                 {onCreateHashtagGroup && (
                   !showTagSave ? (
-                    <button type="button" className="btn ghost small" onClick={() => setShowTagSave(true)}>Save hashtags as group</button>
+                    <button type="button" className="btn ghost small" onClick={() => setShowTagSave(true)}>{t('saveHashtagsGroup')}</button>
                   ) : (
                     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                      <input placeholder="Group name, e.g. Reels basics" value={tagName} onChange={(e) => setTagName(e.target.value)} style={{ flex: 1, minWidth: 180 }} aria-label="Hashtag group name" />
-                      <button type="button" className="btn small" onClick={saveAsHashtagGroup}>Save group</button>
-                      <button type="button" className="btn ghost small" onClick={() => setShowTagSave(false)}>Cancel</button>
+                      <input placeholder={t('groupNamePh')} value={tagName} onChange={(e) => setTagName(e.target.value)} style={{ flex: 1, minWidth: 180 }} aria-label={t('groupNameAria')} />
+                      <button type="button" className="btn small" onClick={saveAsHashtagGroup}>{t('saveGroupBtn')}</button>
+                      <button type="button" className="btn ghost small" onClick={() => setShowTagSave(false)}>{t('cancel')}</button>
                     </div>
                   )
                 )}
                 {bankMsg && <p className="small mt" role="status">{bankMsg}</p>}
               </div>
-              <label htmlFor="firstComment" style={{ marginTop: 14 }}>First comment <span className="muted">(posted automatically right after publishing — a good place for hashtags)</span></label>
+              <label htmlFor="firstComment" style={{ marginTop: 14 }}>{t('firstCommentLabel')} <span className="muted">{t('firstCommentNote')}</span></label>
               <textarea id="firstComment" rows={2} maxLength={2200} placeholder="#your #hashtags #here" value={form.firstComment} onChange={(e) => set({ firstComment: e.target.value })} />
-              <p className="muted small" style={{ textAlign: 'right' }}>{(form.firstComment || '').length} / 2200 characters</p>
-              <label htmlFor="cta" style={{ marginTop: 14 }}>Call to action</label>
-              <input id="cta" placeholder="e.g. Comment GUIDE and I'll send it" value={form.cta} onChange={(e) => set({ cta: e.target.value })} />
+              <p className="muted small" style={{ textAlign: 'right' }}>{(form.firstComment || '').length} / 2200 {t('charactersWord')}</p>
+              <label htmlFor="cta" style={{ marginTop: 14 }}>{t('ctaLabel')}</label>
+              <input id="cta" placeholder={t('ctaPh')} value={form.cta} onChange={(e) => set({ cta: e.target.value })} />
               <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
-                <button type="button" className="btn ghost" onClick={() => setStep(1)}>← Back</button>
-                <button type="button" className="btn primary" onClick={() => setStep(3)}>Continue to schedule →</button>
+                <button type="button" className="btn ghost" onClick={() => setStep(1)}>{t('backArrow')}</button>
+                <button type="button" className="btn primary" onClick={() => setStep(3)}>{t('continueSchedule')}</button>
               </div>
             </div>
           )}
 
           {step === 3 && (
             <div>
-              <h2>Step 3 — Schedule &amp; publish</h2>
-              <p className="muted small mb">Pick a format and a time. Save as a draft if you&apos;re not ready.</p>
+              <h2>{t('step3Title')}</h2>
+              <p className="muted small mb">{t('step3Sub')}</p>
               <div className="two-col">
                 <div>
-                  <label htmlFor="format">Format</label>
+                  <label htmlFor="format">{t('formatLabel')}</label>
                   <select id="format" value={form.format} onChange={(e) => set({ format: e.target.value })}>
                     {FORMATS.map((f) => <option key={f} value={f}>{f}</option>)}
                   </select>
                 </div>
                 <div>
-                  <label htmlFor="status">Status</label>
+                  <label htmlFor="status">{t('statusLabel')}</label>
                   <select id="status" value={form.status} onChange={(e) => set({ status: e.target.value })}>
-                    <option value="scheduled">Scheduled</option>
-                    <option value="draft">Draft</option>
+                    <option value="scheduled">{t('statusOptScheduled')}</option>
+                    <option value="draft">{t('statusOptDraft')}</option>
                   </select>
                 </div>
               </div>
               <div style={{ marginTop: 16, borderTop: '1px solid var(--line)', paddingTop: 14 }}>
-                <label>Publish to <span className="muted">(tick where this post goes — it publishes to every ticked account and platform at the same time)</span></label>
+                <label>{t('publishToLabel')} <span className="muted">{t('publishToNote')}</span></label>
                 {hasAccounts ? (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
                     {igAccounts.map((a) => (
                       <label key={a.igUserId} style={{ display: 'flex', gap: 8, alignItems: 'center', cursor: 'pointer', border: '1px solid var(--line)', borderRadius: 12, padding: '9px 14px' }}>
                         <input type="checkbox" checked={(form.igTargets || []).includes(a.igUserId)} onChange={() => toggleTarget(a.igUserId)} style={{ width: 'auto' }} />
-                        <b>Instagram</b> <span>@{a.username || a.igUserId}{a.isDefault ? ' (default)' : ''}</span>
+                        <b>Instagram</b> <span>@{a.username || a.igUserId}{a.isDefault ? ` ${t('defaultMark')}` : ''}</span>
                       </label>
                     ))}
                     {(form.igTargets || []).filter((id) => !igAccounts.some((a) => a.igUserId === id)).map((id) => (
                       <label key={id} style={{ display: 'flex', gap: 8, alignItems: 'center', cursor: 'pointer', border: '1px solid var(--line)', borderRadius: 12, padding: '9px 14px' }}>
                         <input type="checkbox" checked onChange={() => toggleTarget(id)} style={{ width: 'auto' }} />
-                        <b>Instagram</b> <span>@{id} (disconnected)</span>
+                        <b>Instagram</b> <span>@{id} {t('disconnectedMark')}</span>
                       </label>
                     ))}
                     {ytStatus?.connected ? (
                       <label style={{ display: 'flex', gap: 8, alignItems: 'center', cursor: 'pointer', border: '1px solid var(--line)', borderRadius: 12, padding: '9px 14px' }}>
                         <input type="checkbox" checked={Boolean(form.youtubeEnabled)} onChange={(e) => set({ youtubeEnabled: e.target.checked })} style={{ width: 'auto' }} />
-                        <b>YouTube</b> <span className="muted small">{ytStatus.channelTitle || 'your channel'}</span>
+                        <b>YouTube</b> <span className="muted small">{ytStatus.channelTitle || t('yourChannel')}</span>
                       </label>
                     ) : (
                       <span style={{ display: 'flex', gap: 8, alignItems: 'center', border: '1px solid var(--line)', borderRadius: 12, padding: '9px 14px', opacity: 0.75 }}>
                         <input type="checkbox" checked={false} disabled readOnly style={{ width: 'auto' }} />
                         <b>YouTube</b>
                         {ytStatus && !ytStatus.configured
-                          ? <span className="muted small">not set up on the server yet</span>
-                          : <button type="button" className="btn ghost small" onClick={() => { if (onNavigate) onNavigate('connections') }}>Connect YouTube</button>}
+                          ? <span className="muted small">{t('ytNotSetup')}</span>
+                          : <button type="button" className="btn ghost small" onClick={() => { if (onNavigate) onNavigate('connections') }}>{t('connectYouTube')}</button>}
                       </span>
                     )}
                   </div>
@@ -647,36 +648,36 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
                   {ytStatus?.connected ? (
                     <label style={{ display: 'inline-flex', gap: 8, alignItems: 'center', cursor: 'pointer', border: '1px solid var(--line)', borderRadius: 999, padding: '8px 14px' }}>
                       <input type="checkbox" checked={Boolean(form.youtubeEnabled)} onChange={(e) => set({ youtubeEnabled: e.target.checked })} style={{ width: 'auto' }} />
-                      <b>YouTube</b> <span className="muted small">{ytStatus.channelTitle || 'your channel'}</span>
+                      <b>YouTube</b> <span className="muted small">{ytStatus.channelTitle || t('yourChannel')}</span>
                     </label>
                   ) : (
                     <span style={{ display: 'inline-flex', gap: 8, alignItems: 'center', border: '1px solid var(--line)', borderRadius: 999, padding: '8px 14px', opacity: 0.75 }}>
                       <input type="checkbox" checked={false} disabled readOnly style={{ width: 'auto' }} />
                       <b>YouTube</b>
                       {ytStatus && !ytStatus.configured
-                        ? <span className="muted small">not set up on the server yet</span>
-                        : <button type="button" className="btn ghost small" onClick={() => { if (onNavigate) onNavigate('connections') }}>Connect YouTube</button>}
+                        ? <span className="muted small">{t('ytNotSetup')}</span>
+                        : <button type="button" className="btn ghost small" onClick={() => { if (onNavigate) onNavigate('connections') }}>{t('connectYouTube')}</button>}
                     </span>
                   )}
                 </div>
                 )}
                 {form.youtubeEnabled && ytStatus?.connected && (
                   <div style={{ marginTop: 12 }}>
-                    <label htmlFor="youtubeTitle">YouTube title <span className="muted">(blank = first line of the caption)</span></label>
-                    <input id="youtubeTitle" maxLength={100} placeholder="Title viewers will see on YouTube" value={form.youtubeTitle} onChange={(e) => set({ youtubeTitle: e.target.value })} />
+                    <label htmlFor="youtubeTitle">{t('ytTitleLabel')} <span className="muted">{t('ytTitleNote')}</span></label>
+                    <input id="youtubeTitle" maxLength={100} placeholder={t('ytTitlePh')} value={form.youtubeTitle} onChange={(e) => set({ youtubeTitle: e.target.value })} />
                     <div className="two-col" style={{ marginTop: 12 }}>
                       <div>
-                        <label htmlFor="ytVisibility">YouTube visibility</label>
+                        <label htmlFor="ytVisibility">{t('ytVisibilityLabel')}</label>
                         <select id="ytVisibility" value={form.ytVisibility} onChange={(e) => { ytVisTouchedRef.current = true; set({ ytVisibility: e.target.value }) }}>
-                          <option value="public">Public — everyone can watch</option>
-                          <option value="unlisted">Unlisted — only people with the link</option>
-                          <option value="private">Private — only you</option>
+                          <option value="public">{t('ytVisPublic')}</option>
+                          <option value="unlisted">{t('ytVisUnlisted')}</option>
+                          <option value="private">{t('ytVisPrivate')}</option>
                         </select>
                       </div>
                       <div>
-                        <label>Made for Kids <span className="muted">(YouTube asks for every video)</span></label>
+                        <label>{t('madeForKids')} <span className="muted">{t('madeForKidsNote')}</span></label>
                         <div style={{ display: 'flex', gap: 8, marginTop: 2 }}>
-                          {[{ v: false, label: 'No' }, { v: true, label: 'Yes' }].map((o) => (
+                          {[{ v: false, label: t('noWord') }, { v: true, label: t('yesWord') }].map((o) => (
                             <label key={o.label} style={{ display: 'inline-flex', gap: 6, alignItems: 'center', cursor: 'pointer', border: '1px solid var(--line)', borderRadius: 999, padding: '7px 14px' }}>
                               <input type="radio" name="ytMadeForKids" checked={Boolean(form.ytMadeForKids) === o.v} onChange={() => set({ ytMadeForKids: o.v })} style={{ width: 'auto' }} />
                               <b>{o.label}</b>
@@ -685,54 +686,54 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
                         </div>
                       </div>
                     </div>
-                    <p className="muted small" style={{ marginTop: 6 }}>The caption + hashtags become the YouTube description automatically. Videos only — an image post skips YouTube. Until Google approves the app, YouTube keeps every upload Private — the visibility you choose here takes effect automatically once the approval passes.</p>
+                    <p className="muted small" style={{ marginTop: 6 }}>{t('ytApprovalNote')}</p>
                   </div>
                 )}
                 {!igTicked && form.youtubeEnabled && ytStatus?.connected && (
-                  <p className="muted small" style={{ marginTop: 8 }}>YouTube only — this post will not go to Instagram.</p>
+                  <p className="muted small" style={{ marginTop: 8 }}>{t('ytOnlyNote')}</p>
                 )}
                 {!igTicked && !form.youtubeEnabled && (
-                  <p className="small" style={{ marginTop: 8, color: 'var(--red)' }}>Tick at least one platform — Instagram, YouTube, or both.</p>
+                  <p className="small" style={{ marginTop: 8, color: 'var(--red)' }}>{t('tickOnePlatform')}</p>
                 )}
               </div>
-              <label htmlFor="scheduleTime" style={{ marginTop: 14 }}>Schedule time</label>
+              <label htmlFor="scheduleTime" style={{ marginTop: 14 }}>{t('scheduleTimeLabel')}</label>
               <input id="scheduleTime" type="datetime-local" value={form.scheduleTime && form.scheduleTime.length > 16 ? toLocalInputValue(form.scheduleTime) : form.scheduleTime} onChange={(e) => set({ scheduleTime: e.target.value })} />
               {suggestion && (
                 <div className="warn blue">
                   <IconCheck size={17} />
                   <div>
-                    <b>Suggested time: {suggestionLabel}.</b> This is the next free 7:00 PM slot in your own schedule — no post is scheduled then. It is a suggestion from your saved posts, not audience data.
+                    <b>{t('suggestedTime').replace('{label}', suggestionLabel)}</b> {t('suggestedBody')}
                     <div style={{ marginTop: 8 }}>
-                      <button type="button" className="btn ghost small" onClick={() => set({ scheduleTime: toLocalInputValue(suggestion) })}>Use {suggestionLabel}</button>
+                      <button type="button" className="btn ghost small" onClick={() => set({ scheduleTime: toLocalInputValue(suggestion) })}>{t('useSlot').replace('{label}', suggestionLabel)}</button>
                     </div>
                   </div>
                 </div>
               )}
-              <p className="muted small mt">Evenings 7–9 PM usually perform best — a general guide, not your audience data. Your own suggested slot above comes from your schedule.</p>
+              <p className="muted small mt">{t('eveningsNote')}</p>
               <label style={{ display: 'flex', gap: 8, alignItems: 'center', cursor: 'pointer', marginTop: 14 }}>
                 <input type="checkbox" checked={Boolean(form.repeatWeekly)} onChange={(e) => set({ repeatWeekly: e.target.checked })} style={{ width: 'auto' }} />
-                <span><b>Repeat weekly</b> <span className="muted small">— when this post publishes, the next one is scheduled automatically for the same day &amp; time next week. Untick it on any occurrence to stop the chain.</span></span>
+                <span><b>{t('repeatWeeklyLabel')}</b> <span className="muted small">{t('repeatWeeklyNote')}</span></span>
               </label>
-              {duplicateOf && <div className="warn amber"><IconWarn size={17} /><div>This same media is already in your queue ({duplicateOf.status}, {duplicateOf.scheduleTime ? new Date(duplicateOf.scheduleTime).toLocaleString() : 'no time'}). Scheduling it again will post the same video twice.</div></div>}
-              {collision && <div className="warn amber"><IconWarn size={17} /><div>Another post is scheduled within 30 minutes of this time ({collision.caption ? collision.caption.slice(0, 60) : 'untitled'}). Consider spacing posts at least an hour apart.</div></div>}
-              {feedVerticalWarn && <div className="warn red"><IconWarn size={17} /><div>Vertical video (ratio {ratio?.toFixed(2)}) with FEED format — this is likely to fail or crop. Switch to REELS above.</div></div>}
+              {duplicateOf && <div className="warn amber"><IconWarn size={17} /><div>{t('duplicateWarn').replace('{status}', duplicateOf.status).replace('{time}', duplicateOf.scheduleTime ? new Date(duplicateOf.scheduleTime).toLocaleString() : t('noTimeWord'))}</div></div>}
+              {collision && <div className="warn amber"><IconWarn size={17} /><div>{t('collisionWarn').replace('{caption}', collision.caption ? collision.caption.slice(0, 60) : t('untitledWord'))}</div></div>}
+              {feedVerticalWarn && <div className="warn red"><IconWarn size={17} /><div>{t('feedCropWarn').replace('{ratio}', ratio?.toFixed(2))}</div></div>}
               {error && <div className="alert error">{error}</div>}
               {savedNote && <div className="alert success">{savedNote}</div>}
               <div style={{ border: '1px solid var(--line)', borderRadius: 12, padding: '12px 14px', marginTop: 16 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                  <b>Pre-flight check</b>
-                  <button type="button" className="btn ghost small" disabled={preflightBusy} onClick={runPreflight}>{preflightBusy ? 'Checking…' : 'Re-check'}</button>
+                  <b>{t('preflightTitle')}</b>
+                  <button type="button" className="btn ghost small" disabled={preflightBusy} onClick={runPreflight}>{preflightBusy ? t('checkingWord') : t('recheckBtn')}</button>
                 </div>
-                <p className="muted small" style={{ margin: '4px 0 6px' }}>Connection, media and plan limits — checked now, so nothing surprises you at publish time.</p>
-                {preflightBusy && !preflight && <p className="muted small">Checking…</p>}
+                <p className="muted small" style={{ margin: '4px 0 6px' }}>{t('preflightSub')}</p>
+                {preflightBusy && !preflight && <p className="muted small">{t('checkingWord')}</p>}
                 {preflight && (preflight.checks || []).map((c) => (
                   <div key={c.id} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginTop: 6 }}>
                     {c.ok ? <IconCheck size={17} /> : <IconWarn size={17} />}
                     <div>
-                      <span style={{ color: c.ok ? '#4caf7d' : 'var(--red)', fontWeight: 600 }}>{c.ok ? 'Good: ' : 'Problem: '}</span>{c.message}
+                      <span style={{ color: c.ok ? '#4caf7d' : 'var(--red)', fontWeight: 600 }}>{c.ok ? t('goodWord') : t('problemWord')}</span>{c.message}
                       {!c.ok && c.fix && (
-                        <div className="muted small">Fix: {c.fix}
-                          {c.id === 'connection' && onNavigate ? <> <button type="button" className="btn ghost small" onClick={() => onNavigate('connections')}>Open Connections</button></> : null}
+                        <div className="muted small">{t('fixWord')}{c.fix}
+                          {c.id === 'connection' && onNavigate ? <> <button type="button" className="btn ghost small" onClick={() => onNavigate('connections')}>{t('openConnections')}</button></> : null}
                         </div>
                       )}
                     </div>
@@ -740,23 +741,23 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
                 ))}
                 {preflight && (
                   <p className="small" style={{ marginTop: 8, fontWeight: 600, color: preflight.ok ? '#4caf7d' : 'var(--red)' }}>
-                    {preflight.ok ? 'All checks passed — this post is ready to save.' : 'Fix the problems above — plan problems block saving, and connection problems would stop the publish.'}
+                    {preflight.ok ? t('preflightOk') : t('preflightBad')}
                   </p>
                 )}
               </div>
               <div style={{ display: 'flex', gap: 8, marginTop: 16, flexWrap: 'wrap' }}>
-                <button type="button" className="btn ghost" onClick={() => setStep(2)}>← Back</button>
-                <button type="button" className="btn ghost" disabled={!canSaveDraft || saving} onClick={() => submit('draft')}>Save draft</button>
-                <button type="button" className="btn primary" disabled={!canSave || saving} onClick={() => submit('scheduled')}>{saving ? 'Saving…' : editing ? 'Save changes' : 'Schedule post'}</button>
+                <button type="button" className="btn ghost" onClick={() => setStep(2)}>{t('backArrow')}</button>
+                <button type="button" className="btn ghost" disabled={!canSaveDraft || saving} onClick={() => submit('draft')}>{t('saveDraftBtn')}</button>
+                <button type="button" className="btn primary" disabled={!canSave || saving} onClick={() => submit('scheduled')}>{saving ? t('savingWord') : editing ? t('saveChangesBtn') : t('schedulePostBtn')}</button>
               </div>
-              {!canSave && <p className="muted small mt">{canSaveDraft ? 'Add a schedule time to schedule this post — or save it as a draft for now.' : 'Add a media URL (Step 1) and a schedule time to enable saving.'}</p>}
+              {!canSave && <p className="muted small mt">{canSaveDraft ? t('canSaveHintDraft') : t('canSaveHintMedia')}</p>}
             </div>
           )}
         </div>
 
         <div>
           <div className="card preview-card">
-            <div className="card-head"><div><h2>{form.platform === 'Instagram' ? 'Instagram preview' : 'Live preview'}</h2><p>How it will look on {form.platform}.</p></div><span className="badge brand">{form.platform}</span></div>
+            <div className="card-head"><div><h2>{form.platform === 'Instagram' ? t('previewIg') : t('previewLive')}</h2><p>{t('previewHow').replace('{platform}', form.platform)}</p></div><span className="badge brand">{form.platform}</span></div>
             <div className="ig-preview" aria-label="Instagram post preview">
               <div className="ig-head">
                 {previewAccount.pic
@@ -772,14 +773,14 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
                     : form.mediaType === 'image'
                       ? <img src={form.mediaUrl} alt="Preview" />
                       : <video src={form.mediaUrl} muted playsInline preload="metadata" />)
-                  : <span className="ig-empty">Add media in Step 1 to see it here</span>}
+                  : <span className="ig-empty">{t('previewEmpty')}</span>}
               </div>
               <div className="ig-actions" aria-hidden="true">
                 <span className="ig-actions-left"><IconHeart size={21} /><IconComment size={21} /><IconSend size={21} /></span>
                 <IconBookmark size={21} />
               </div>
               <div className="ig-caption">
-                <p><b>{previewAccount.username || 'youraccount'}</b> {form.caption || <span className="muted">Your caption will appear here…</span>}</p>
+                <p><b>{previewAccount.username || 'youraccount'}</b> {form.caption || <span className="muted">{t('previewCaptionPh')}</span>}</p>
                 {form.hashtags && <p className="ig-tags">{form.hashtags}</p>}
                 {form.cta && <p className="ig-cta">{form.cta}</p>}
               </div>
@@ -787,21 +788,21 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
             <div className="score-wrap mt">
               <div className="score-ring" style={{ '--p': `${score}%` }}><i>{score}</i></div>
               <div>
-                <b>Caption score</b>
-                <p className="muted small">{score >= 80 ? 'Strong — ready to post.' : score >= 50 ? 'Good — add a hook, question or CTA to lift it.' : 'Needs work — add a hook, a CTA and a few hashtags.'}</p>
+                <b>{t('captionScore')}</b>
+                <p className="muted small">{score >= 80 ? t('scoreStrong') : score >= 50 ? t('scoreGood') : t('scoreWeak')}</p>
               </div>
             </div>
-            <p className="muted small mt">{nTags} hashtags · {form.caption.length} chars · {form.format}{reelSafe ? ' · Reel-safe ✓' : ''}</p>
+            <p className="muted small mt">{t('scoreMeta').replace('{tags}', nTags).replace('{chars}', form.caption.length).replace('{format}', form.format)}{reelSafe ? t('reelSafeMark') : ''}</p>
           </div>
         </div>
       </div>
 
       <div className="sticky-bar">
-        <div><b>{editing ? 'Editing post' : 'New post'}</b> <span className="muted small">· {form.platform} · {form.format} · Score {score}/100</span></div>
+        <div><b>{editing ? t('editingPost') : t('newPostWord')}</b> <span className="muted small">· {form.platform} · {form.format} · {t('scoreOf').replace('{score}', score)}</span></div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          {onCancel && <button type="button" className="btn ghost small" onClick={onCancel}>Cancel</button>}
-          <button type="button" className="btn ghost small" disabled={!canSaveDraft || saving} onClick={() => submit('draft')}>Save draft</button>
-          <button type="button" className="btn primary small" disabled={!canSave || saving} onClick={() => submit('scheduled')}>{saving ? 'Saving…' : editing ? 'Save changes' : 'Schedule post'}</button>
+          {onCancel && <button type="button" className="btn ghost small" onClick={onCancel}>{t('cancel')}</button>}
+          <button type="button" className="btn ghost small" disabled={!canSaveDraft || saving} onClick={() => submit('draft')}>{t('saveDraftBtn')}</button>
+          <button type="button" className="btn primary small" disabled={!canSave || saving} onClick={() => submit('scheduled')}>{saving ? t('savingWord') : editing ? t('saveChangesBtn') : t('schedulePostBtn')}</button>
         </div>
       </div>
     </div>

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense } from 'react'
 import { api, nextBestTime, getWorkspaceId, setWorkspaceId } from './api.js'
-import { trFor } from './i18n.js'
+import { trFor, loadDict, dictSync } from './i18n.js'
 import { ResetPassword } from './components/Auth.jsx'
 import { IconHome, IconCal, IconQueue, IconPlus, IconMedia, IconBulk, IconTools, IconSpark, IconSettings, IconSun, IconMoon, IconMenu, IconX, IconBell, IconLink, IconSearch, IconTag } from './components/icons.jsx'
 import { Skeleton, isOwnMediaUrl } from './components/shared.jsx'
@@ -129,7 +129,16 @@ export default function App() {
   const [avatarMenuOpen, setAvatarMenuOpen] = useState(false)
   // Phase D: UI language (D10), offline state (D2), global search (D3).
   const [lang, setLangState] = useState(() => { try { return localStorage.getItem('ss-lang') || 'en' } catch { return 'en' } })
-  const tr = trFor(lang)
+  // Batch 5: the full dictionary is a lazy chunk (i18n-dict.js) so the
+  // main bundle stays small; until it lands, tr() serves the CORE set
+  // from i18n.js and the signed-in shell waits on the gate below.
+  const [dict, setDict] = useState(() => dictSync())
+  useEffect(() => { let on = true; loadDict().then((d) => { if (on) setDict(d) }); return () => { on = false } }, [])
+  const tr = trFor(lang, dict)
+  // Stable translator for callbacks/toasts (they must speak the
+  // language current at call time, not at definition time).
+  const trRef = useRef(tr); trRef.current = tr
+  const tt = useCallback((k) => trRef.current(k), [])
   const [offline, setOffline] = useState(() => typeof navigator !== 'undefined' && navigator.onLine === false)
   const [globalQ, setGlobalQ] = useState('')
   const [searchNonce, setSearchNonce] = useState(0)
@@ -171,7 +180,7 @@ export default function App() {
   // D2: offline banner state.
   useEffect(() => {
     const onOff = () => setOffline(true)
-    const onOn = () => { setOffline(false); showToastRef.current && showToastRef.current('Back online') }
+    const onOn = () => { setOffline(false); showToastRef.current && showToastRef.current(trRef.current('backOnline')) }
     window.addEventListener('offline', onOff)
     window.addEventListener('online', onOn)
     return () => { window.removeEventListener('offline', onOff); window.removeEventListener('online', onOn) }
@@ -377,11 +386,11 @@ export default function App() {
         const { processPendingSchedules } = await import('./autoBridge.js')
         const res = await processPendingSchedules()
         if (alive && res && res.ran && (res.results || []).some((r) => r.outcome === 'scheduled' || r.outcome === 'posted-late')) {
-          showToast('A post that was waiting for network is now scheduled.')
+          showToast(tt('toastWaitingScheduled'))
           loadAll()
         }
         if (alive && res && res.ran && (res.results || []).some((r) => r.outcome === 'failed')) {
-          showToast('A waiting post could not be created — open Media to see why.', 'error')
+          showToast(tt('toastWaitingFailed'), 'error')
         }
       } catch { /* device storage unavailable in this context — nothing waiting */ }
     }
@@ -458,11 +467,11 @@ export default function App() {
       if (isEdit && editing?.id) {
         const updated = await api.updatePost(editing.id, payload)
         setPosts((prev) => prev.map((p) => (p.id === editing.id ? { ...p, ...(updated || payload) } : p)))
-        showToast('Post updated.')
+        showToast(tt('toastPostUpdated'))
       } else {
         const created = await api.createPost(payload)
         setPosts((prev) => [created || { ...payload, id: `local-${Date.now()}` }, ...prev])
-        showToast(payload.status === 'draft' ? 'Draft saved.' : 'Post scheduled.')
+        showToast(payload.status === 'draft' ? tt('toastDraftSaved') : tt('toastPostScheduled'))
       }
       setEditing(null)
       refreshStats()
@@ -476,7 +485,7 @@ export default function App() {
       const copy = res?.post || res
       if (copy && copy.id) setPosts((prev) => [copy, ...prev])
       else { const fresh = await api.getPosts().catch(() => null); if (fresh) setPosts(fresh) }
-      showToast('Duplicated as a draft.')
+      showToast(tt('toastDuplicated'))
       refreshStats()
     } catch (e) { setError(e) }
   }, [refreshStats])
@@ -486,14 +495,14 @@ export default function App() {
       const res = await api.reschedulePost(post.id, patch)
       const updated = res?.post || res
       if (updated && updated.id) setPosts((prev) => prev.map((p) => (p.id === post.id ? { ...p, ...updated } : p)))
-      showToast('Rescheduled.')
+      showToast(tt('toastRescheduled'))
       refreshStats()
     } catch (e) { setError(e) }
   }, [refreshStats])
 
   const handleRescheduleNextBest = useCallback(async (post) => {
     const slot = nextBestTime(visiblePosts.filter((p) => p.id !== post.id))
-    if (!slot) { showToast('No free 7:00 PM slot in the next 14 days.'); return }
+    if (!slot) { showToast(tt('toastNoSlot')); return }
     await handleReschedule(post, { scheduleTime: slot })
   }, [visiblePosts, handleReschedule])
 
@@ -507,13 +516,13 @@ export default function App() {
         // Live on some ticked accounts, failed on others: refetch so
         // the row shows the real per-account state, and say so.
         try { const fresh = await api.posts(); if (fresh?.posts) setPosts(fresh.posts) } catch { /* the toast still explains */ }
-        showToast('Published to some accounts — the rest are still in the queue.')
+        showToast(tt('toastPublishedSome'))
         refreshStats()
         return
       }
       setPosts((prev) => prev.map((p) => (p.id === post.id ? { ...p, status: 'published', ...(liveUrl ? { liveUrl } : {}) } : p)))
-      if (liveUrl) pushToast({ message: 'Published live', actionLabel: 'View on Instagram', onAction: () => window.open(liveUrl, '_blank', 'noopener') })
-      else showToast('Published.')
+      if (liveUrl) pushToast({ message: tt('toastPublishedLive'), actionLabel: tt('toastViewOnInstagram'), onAction: () => window.open(liveUrl, '_blank', 'noopener') })
+      else showToast(tt('toastPublished'))
       refreshStats()
     } catch (e) {
       showToast(e.message || 'Publish failed.')
@@ -533,7 +542,7 @@ export default function App() {
     try {
       const res = await api.retryPost(post.id)
       if (res && res.ok === false) throw new Error(res.error || 'Retry failed.')
-      showToast(res?.partial ? 'Retried — published to some accounts; the rest are still in the queue.' : 'Retried and published.')
+      showToast(res?.partial ? tt('toastRetriedSome') : tt('toastRetried'))
       refreshStats()
     } catch (e) {
       showToast(e.message || 'Retry failed.')
@@ -556,7 +565,7 @@ export default function App() {
         setPosts((prev) => prev.filter((p) => !ids.has(p.id)))
       }
       else { await api.deleteMedia(item.id); setMedia((prev) => prev.filter((m) => m.id !== item.id)) }
-      showToast('Deleted.')
+      showToast(tt('toastDeleted'))
       refreshStats()
     } catch (e) { setError(e) }
   }, [confirmDelete, refreshStats])
@@ -581,8 +590,8 @@ export default function App() {
     setPendingDeleteIds((prev) => new Set(prev).add(post.id))
     pendingDeleteTimers.current.set(post.id, setTimeout(() => flushDeletePost(post.id), 6000))
     pushToast({
-      message: 'Post deleted',
-      actionLabel: 'Undo',
+      message: tt('toastPostDeleted'),
+      actionLabel: tt('toastUndo'),
       duration: 6000,
       onAction: () => {
         const t = pendingDeleteTimers.current.get(post.id)
@@ -614,8 +623,8 @@ export default function App() {
       const n = res?.published?.length || 0
       const f = res?.failed?.length || 0
       const r = res?.retrying?.length || 0
-      if (n === 0 && f === 0 && r === 0) showToast('Nothing due right now — your queue is up to date.')
-      else showToast(`Published ${n}${f ? `, ${f} failed` : ''}${r ? `, ${r} still processing` : ''}.`)
+      if (n === 0 && f === 0 && r === 0) showToast(tt('toastNothingDue'))
+      else showToast(`${tt('toastDuePublished').replace('{n}', n)}${f ? tt('toastDueFailed').replace('{n}', f) : ''}${r ? tt('toastDueRetrying').replace('{n}', r) : ''}.`)
       const fresh = await api.getPosts().catch(() => null)
       if (fresh) setPosts(fresh)
       refreshStats()
@@ -632,7 +641,7 @@ export default function App() {
     const created = await api.createPost({ ...post, status: 'draft' })
     if (created && created.id) setPosts((prev) => [created, ...prev])
     else { const fresh = await api.getPosts().catch(() => null); if (fresh) setPosts(fresh) }
-    showToast('Saved as a draft — find it in your Queue.')
+    showToast(tt('toastDraftInQueue'))
     refreshStats()
     return created
   }, [refreshStats])
@@ -642,7 +651,7 @@ export default function App() {
     const fresh = await api.getPosts().catch(() => null)
     if (fresh) setPosts(fresh)
     refreshStats()
-    showToast(`Added ${res?.imported ?? postsToSave.length} draft${(res?.imported ?? postsToSave.length) === 1 ? '' : 's'} to your Queue.`)
+    showToast(tt((res?.imported ?? postsToSave.length) === 1 ? 'toastDraftsAddedOne' : 'toastDraftsAddedMany').replace('{n}', res?.imported ?? postsToSave.length))
     return res
   }, [refreshStats])
 
@@ -714,7 +723,7 @@ export default function App() {
     try {
       await api.deleteTemplate(tpl.id)
       setTemplates((prev) => prev.filter((t) => t.id !== tpl.id))
-      showToast('Template deleted.')
+      showToast(tt('toastTemplateDeleted'))
     } catch (e) { setError(e) }
   }, [])
 
@@ -729,7 +738,7 @@ export default function App() {
     try {
       await api.deleteHashtagGroup(group.id)
       setHashtagGroups((prev) => prev.filter((g) => g.id !== group.id))
-      showToast('Hashtag group deleted.')
+      showToast(tt('toastHashtagGroupDeleted'))
     } catch (e) { setError(e) }
   }, [])
 
@@ -747,7 +756,7 @@ export default function App() {
     try {
       await api.deleteDraft(d.id)
       setDrafts((prev) => prev.filter((x) => x.id !== d.id))
-      showToast('Draft deleted.')
+      showToast(tt('toastDraftDeleted'))
     } catch (e) { setError(e) }
   }, [])
 
@@ -790,7 +799,7 @@ export default function App() {
     setStudioKey((k) => k + 1)
     setTab('studio')
     window.scrollTo({ top: 0 })
-    if (mediaGone) showToast('That post’s media file is no longer in your library — pick the media again to post it again.')
+    if (mediaGone) showToast(tt('toastMediaGone'))
   }, [media])
 
   // Getting-started checklist dismissal lives in the user's settings
@@ -798,13 +807,6 @@ export default function App() {
   const handleDismissChecklist = useCallback(async () => {
     setSettings((prev) => (prev ? { ...prev, checklistDismissed: true } : prev))
     try { await api.saveSettings({ checklistDismissed: true }) } catch { /* hidden locally either way */ }
-  }, [])
-
-  // First-run guide dismissal (batch 3): same settings-backed pattern
-  // as the checklist — once dismissed it never pops up again.
-  const handleDismissGuide = useCallback(async () => {
-    setSettings((prev) => (prev ? { ...prev, guideDismissed: true } : prev))
-    try { await api.saveSettings({ guideDismissed: true }) } catch { /* hidden locally either way */ }
   }, [])
 
   const useInStudio = useCallback((seed) => {
@@ -853,12 +855,18 @@ export default function App() {
     )
   }
 
+  // --- Dictionary gate: the signed-in shell waits for the lazy
+  // dictionary chunk so no screen can flash untranslated strings.
+  if (dict === null) {
+    return <div className="app"><div className="wrap" style={{ paddingTop: 60, textAlign: 'center' }}><p className="muted">{tr('loading')}</p></div></div>
+  }
+
   // --- Setup wizard: first login only, until it is finished or skipped.
   if (settings && settings.setupDone !== true) {
     return (
       <div className="app">
         <Suspense fallback={<TabFallback />}>
-          <SetupWizard settings={settings} onDone={refreshAll} onInstagramChanged={refreshAll} />
+          <SetupWizard settings={settings} onDone={refreshAll} onInstagramChanged={refreshAll} tr={tr} onCreateFirst={() => goStudio(null)} />
         </Suspense>
       </div>
     )
@@ -869,14 +877,14 @@ export default function App() {
       <a className="skip-link" href="#main">Skip to content</a>
       {updateAvailable && (
         <div className="update-bar" role="status">
-          <span>A new version of KiluaAI is available</span>
-          <button type="button" className="update-refresh" onClick={() => window.location.reload()}>Refresh</button>
-          <button type="button" className="update-close" aria-label="Dismiss" onClick={() => setUpdateAvailable(false)}>✕</button>
+          <span>{tr('updateAvailable')}</span>
+          <button type="button" className="update-refresh" onClick={() => window.location.reload()}>{tr('refreshWord')}</button>
+          <button type="button" className="update-close" aria-label={tr('dismiss')} onClick={() => setUpdateAvailable(false)}>✕</button>
         </div>
       )}
       {offline && (
         <div className="update-bar" role="status" style={{ background: '#3a3f52' }}>
-          <span>You&rsquo;re offline — changes will sync when you&rsquo;re back</span>
+          <span>{tr('offlineMsg')}</span>
         </div>
       )}
       <header className="topbar">
@@ -888,7 +896,7 @@ export default function App() {
             <div className="logo-mark" aria-hidden="true"><img src="/icon-192.png" alt="" width="40" height="40" /></div>
             <div>
               <b>KiluaAI</b>
-              <span>Free forever</span>
+              <span>{tr('freeForever')}</span>
             </div>
           </div>
           <nav className="topnav" aria-label="Main navigation">
@@ -903,27 +911,23 @@ export default function App() {
             {!wsId && <button type="button" className={tab === 'connections' ? 'active' : ''} onClick={() => setTab('connections')}>{tr('connections')}</button>}
             {!wsId && <button type="button" className={tab === 'pricing' ? 'active' : ''} onClick={() => setTab('pricing')}>{tr('pricing')}</button>}
           </nav>
-          <form className="topnav-search" role="search" onSubmit={(e) => { e.preventDefault(); runGlobalSearch(globalQ) }} style={{ marginRight: 8 }}>
-            <input type="search" value={globalQ} onChange={(e) => setGlobalQ(e.target.value)} placeholder={tr('searchPlaceholder')} aria-label="Search posts and media" />
-          </form>
           <div className="top-actions">
             <button type="button" className="icon-btn search-toggle-btn" onClick={() => setMobileSearchOpen((o) => !o)} aria-label="Search" aria-expanded={mobileSearchOpen}>
               <IconSearch size={18} />
             </button>
             {!wsId && (
-              <span className="pill" title={!settings ? 'Checking Instagram connection' : igBroken ? 'Instagram connection broken — reconnect needed' : settings.instagramConnected ? 'Instagram connected' : 'Instagram not connected'}>
+              <span className="pill ig-pill" title={!settings ? tr('igChecking') : igBroken ? tr('igBrokenShort') : settings.instagramConnected ? `IG ${settings.instagramHandle || tr('igConnectedWord')}` : tr('igNotConnected')}>
                 <span className={`dot ${!settings ? 'amber' : igBroken ? 'off' : settings.instagramConnected ? '' : 'off'}`} />
-                {!settings ? 'IG checking…' : igBroken ? 'IG connection broken' : settings.instagramConnected ? `IG ${settings.instagramHandle || 'connected'}` : 'IG not connected'}
+                {!settings ? tr('igChecking') : igBroken ? tr('igBrokenShort') : settings.instagramConnected ? `IG ${settings.instagramHandle || tr('igConnectedWord')}` : tr('igNotConnected')}
               </span>
             )}
             {!wsId && (
-              <button type="button" className="pill" title={user.comp ? 'Your plan — comp, free forever' : 'Your current plan — open Pricing'} onClick={() => setTab('pricing')}>
+              <button type="button" className="pill" title={user.comp ? tr('planTitleComp') : tr('planTitle')} onClick={() => setTab('pricing')}>
                 <span className="dot" />
-                {user.planName || 'Free'} plan
+                {tr('planBadge').replace('{name}', user.planName || 'Free')}
               </button>
             )}
-            <button type="button" className="btn topnav-create" onClick={() => goStudio(null)}>{tr('createPost')}</button>
-            <button type="button" className="icon-btn bell-btn" onClick={openNotifications} aria-label={unread ? `Notifications — ${unread} unread` : 'Notifications'}>
+            <button type="button" className="icon-btn bell-btn" onClick={openNotifications} aria-label={unread ? `${tr('notificationsTitle')} — ${unread} unread` : tr('notificationsTitle')}>
               <IconBell size={18} />
               {unread > 0 && <span className="bell-badge">{unread > 9 ? '9+' : unread}</span>}
             </button>
@@ -942,14 +946,14 @@ export default function App() {
                         <p className="muted small" style={{ padding: '6px 10px 2px' }}>{tr('workspace')}</p>
                         <button type="button" role="menuitem" onClick={() => { setAvatarMenuOpen(false); switchWorkspace('') }}>{!wsId ? '✓ ' : ''}{tr('myWorkspace')}</button>
                         {memberships.map((m) => (
-                          <button key={m.ownerId} type="button" role="menuitem" onClick={() => { setAvatarMenuOpen(false); switchWorkspace(m.ownerId) }}>{wsId === m.ownerId ? '✓ ' : ''}{m.ownerEmail} · {m.role === 'viewer' ? 'Viewer' : 'Scheduler'}</button>
+                          <button key={m.ownerId} type="button" role="menuitem" onClick={() => { setAvatarMenuOpen(false); switchWorkspace(m.ownerId) }}>{wsId === m.ownerId ? '✓ ' : ''}{m.ownerEmail} · {m.role === 'viewer' ? tr('roleViewerShort') : tr('roleSchedulerShort')}</button>
                         ))}
                       </>
                     )}
                     {!wsId && <button type="button" role="menuitem" onClick={() => { setAvatarMenuOpen(false); setTab('settings') }}>{tr('settings')}</button>}
                     <a role="menuitem" href="/contact.html" onClick={() => setAvatarMenuOpen(false)}>{tr('contact')}</a>
-                    <button type="button" role="menuitem" onClick={() => { setAvatarMenuOpen(false); setTheme(theme === 'dark' ? 'light' : 'dark') }}>{theme === 'dark' ? 'Light theme' : 'Dark theme'}</button>
-                    <button type="button" role="menuitem" onClick={() => { setAvatarMenuOpen(false); setLang(lang === 'hi' ? 'en' : 'hi') }}>{lang === 'hi' ? 'Language: English' : 'Language: Hinglish'}</button>
+                    <button type="button" role="menuitem" onClick={() => { setAvatarMenuOpen(false); setTheme(theme === 'dark' ? 'light' : 'dark') }}>{theme === 'dark' ? tr('lightTheme') : tr('darkTheme')}</button>
+                    <button type="button" role="menuitem" onClick={() => { setAvatarMenuOpen(false); setLang(lang === 'hi' ? 'en' : 'hi') }}>{tr('language')}: {lang === 'hi' ? 'Hinglish' : 'English'} · {tr('switchWord')}</button>
                     <button type="button" role="menuitem" onClick={() => { setAvatarMenuOpen(false); handleLogout() }}>{tr('logout')}</button>
                   </div>
                 </>
@@ -977,7 +981,7 @@ export default function App() {
                 <div className="logo-mark" aria-hidden="true"><img src="/icon-192.png" alt="" width="40" height="40" /></div>
                 <div>
                   <b>KiluaAI</b>
-                  <span>Free forever</span>
+                  <span>{tr('freeForever')}</span>
                 </div>
               </div>
               <button type="button" className="icon-btn" onClick={() => setMenuOpen(false)} aria-label="Close menu" autoFocus>
@@ -999,28 +1003,28 @@ export default function App() {
               </button>
             </nav>
             <div className="drawer-foot">
-              <span className="pill" title={!settings ? 'Checking Instagram connection' : igBroken ? 'Instagram connection broken — reconnect needed' : settings.instagramConnected ? 'Instagram connected' : 'Instagram not connected'}>
+              <span className="pill" title={!settings ? tr('igChecking') : igBroken ? tr('igBrokenShort') : settings.instagramConnected ? `IG ${settings.instagramHandle || tr('igConnectedWord')}` : tr('igNotConnected')}>
                 <span className={`dot ${!settings ? 'amber' : igBroken ? 'off' : settings.instagramConnected ? '' : 'off'}`} />
-                {!settings ? 'IG checking…' : igBroken ? 'IG connection broken' : settings.instagramConnected ? `IG ${settings.instagramHandle || 'connected'}` : 'IG not connected'}
+                {!settings ? tr('igChecking') : igBroken ? tr('igBrokenShort') : settings.instagramConnected ? `IG ${settings.instagramHandle || tr('igConnectedWord')}` : tr('igNotConnected')}
               </span>
               {wsId ? (
-                <span className="pill" title={user.comp ? 'Your plan — comp, free forever' : 'Your current plan'} style={{ marginLeft: 8 }}>
+                <span className="pill" title={user.comp ? tr('planTitleComp') : tr('planTitleShort')} style={{ marginLeft: 8 }}>
                   <span className="dot" />
-                  {user.planName || 'Free'} plan
+                  {tr('planBadge').replace('{name}', user.planName || 'Free')}
                 </span>
               ) : (
-                <button type="button" className="pill" title={user.comp ? 'Your plan — comp, free forever' : 'Your current plan — open Pricing'} style={{ marginLeft: 8 }} onClick={() => { setTab('pricing'); setMenuOpen(false); window.scrollTo({ top: 0 }) }}>
+                <button type="button" className="pill" title={user.comp ? tr('planTitleComp') : tr('planTitle')} style={{ marginLeft: 8 }} onClick={() => { setTab('pricing'); setMenuOpen(false); window.scrollTo({ top: 0 }) }}>
                   <span className="dot" />
-                  {user.planName || 'Free'} plan
+                  {tr('planBadge').replace('{name}', user.planName || 'Free')}
                 </button>
               )}
               <p className="muted small" style={{ marginTop: 10 }}>{user.email}</p>
-              <p style={{ marginTop: 8 }}><a href="/contact.html" className="small">Contact</a></p>
+              <p style={{ marginTop: 8 }}><a href="/contact.html" className="small">{tr('contact')}</a></p>
               <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
                 <button type="button" className="btn ghost small" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
-                  {theme === 'dark' ? 'Light theme' : 'Dark theme'}
+                  {theme === 'dark' ? tr('lightTheme') : tr('darkTheme')}
                 </button>
-                <button type="button" className="btn ghost small" onClick={() => { setMenuOpen(false); handleLogout() }}>Log out</button>
+                <button type="button" className="btn ghost small" onClick={() => { setMenuOpen(false); handleLogout() }}>{tr('logout')}</button>
               </div>
             </div>
           </aside>
@@ -1034,9 +1038,9 @@ export default function App() {
           <div className="wrap" style={{ paddingBottom: 0 }}>
             <div className="warn amber nudge" role="status">
               <div style={{ flex: 1 }}>
-                <b>You are working in {m.ownerEmail}&rsquo;s workspace</b> — {m.role === 'viewer' ? 'view only: you can look, but not change anything.' : 'as a Scheduler: you can create and schedule posts here.'} Nothing here touches your own account.
+                <b>{tr('wsBannerTitle').replace('{email}', m.ownerEmail)}</b> — {m.role === 'viewer' ? tr('wsViewerNote') : tr('wsSchedulerNote')} {tr('wsSafeNote')}
               </div>
-              <button type="button" className="btn small" onClick={() => switchWorkspace('')}>Back to my workspace</button>
+              <button type="button" className="btn small" onClick={() => switchWorkspace('')}>{tr('backToMyWorkspace')}</button>
             </div>
           </div>
         )
@@ -1046,14 +1050,14 @@ export default function App() {
         {error && tab !== 'home' && (
           <div className="alert error" role="alert" style={{ marginTop: 16 }}>
             <div style={{ flex: 1 }}>{String(error.message || error)}</div>
-            <button type="button" className="btn ghost small" onClick={() => { setError(null); loadAll() }}>Retry</button>
-            <button type="button" className="btn ghost small" onClick={() => setError(null)}>Dismiss</button>
+            <button type="button" className="btn ghost small" onClick={() => { setError(null); loadAll() }}>{tr('retry')}</button>
+            <button type="button" className="btn ghost small" onClick={() => setError(null)}>{tr('dismiss')}</button>
           </div>
         )}
 
         {tab === 'home' && (
           <Suspense fallback={<TabFallback />}>
-          <Dashboard tr={tr} onSearch={runGlobalSearch} posts={visiblePosts} media={media} user={user} stats={statsFallback} loading={loading} error={error} onRetry={loadAll}
+          <Dashboard tr={tr} posts={visiblePosts} media={media} user={user} stats={statsFallback} loading={loading} error={error} onRetry={loadAll}
             onCreate={() => goStudio(null)} onGoQueue={() => setTab('queue')} onNavigate={setTab}
             onEdit={goStudio} onDelete={requestDeletePost}
             onPublish={handlePublish} publishingId={publishingId} settings={settings}
@@ -1061,7 +1065,7 @@ export default function App() {
             onReconnect={handleReconnect}
             onDismissChecklist={handleDismissChecklist}
             onRetryPost={handleRetry} retryingId={retryingId}
-            onDismissGuide={handleDismissGuide} inWorkspace={!!wsId}
+            inWorkspace={!!wsId}
             overdue={overdue} onPublishDue={handlePublishDue} notifications={notifications} />
           </Suspense>
         )}
@@ -1074,12 +1078,12 @@ export default function App() {
         )}
         {tab === 'studio' && (
           <div className="section">
-            <Studio key={`${studioKey}-${editing?.id || 'new'}`} editing={editing} seed={templateSeed ? { caption: templateSeed.text || templateSeed.caption || '', hashtags: templateSeed.hashtags || '', cta: templateSeed.cta || '', mediaUrl: templateSeed.mediaUrl || '', mediaType: templateSeed.mediaType || 'video', posterUrl: templateSeed.posterUrl || '', scheduleTime: templateSeed.scheduleTime || '', platform: templateSeed.platform || 'Instagram', format: templateSeed.format || 'REELS', igTargets: Array.isArray(templateSeed.igTargets) ? templateSeed.igTargets : (templateSeed.igAccountId ? [templateSeed.igAccountId] : []), youtube: templateSeed.youtube || null, igEnabled: templateSeed.igEnabled, firstComment: templateSeed.firstComment || '', repeat: templateSeed.repeat || '' } : null} media={media} templates={templates} hashtagGroups={hashtagGroups} onCreateTemplate={handleCreateTemplate} onDeleteTemplate={handleDeleteTemplate} onCreateHashtagGroup={handleCreateHashtagGroup} onDeleteHashtagGroup={handleDeleteHashtagGroup} drafts={drafts} onSaveLibraryDraft={handleCreateDraft} onDeleteLibraryDraft={handleDeleteDraft} onSave={handleSavePost} onCancel={() => setTab('queue')} saving={saving} posts={visiblePosts} igAccounts={settings?.instagramAccounts || []} defaultIgUserId={settings?.defaultIgUserId || ''} settings={settings} onNavigate={setTab} />
+            <Studio tr={tr} key={`${studioKey}-${editing?.id || 'new'}`} editing={editing} seed={templateSeed ? { caption: templateSeed.text || templateSeed.caption || '', hashtags: templateSeed.hashtags || '', cta: templateSeed.cta || '', mediaUrl: templateSeed.mediaUrl || '', mediaType: templateSeed.mediaType || 'video', posterUrl: templateSeed.posterUrl || '', scheduleTime: templateSeed.scheduleTime || '', platform: templateSeed.platform || 'Instagram', format: templateSeed.format || 'REELS', igTargets: Array.isArray(templateSeed.igTargets) ? templateSeed.igTargets : (templateSeed.igAccountId ? [templateSeed.igAccountId] : []), youtube: templateSeed.youtube || null, igEnabled: templateSeed.igEnabled, firstComment: templateSeed.firstComment || '', repeat: templateSeed.repeat || '' } : null} media={media} templates={templates} hashtagGroups={hashtagGroups} onCreateTemplate={handleCreateTemplate} onDeleteTemplate={handleDeleteTemplate} onCreateHashtagGroup={handleCreateHashtagGroup} onDeleteHashtagGroup={handleDeleteHashtagGroup} drafts={drafts} onSaveLibraryDraft={handleCreateDraft} onDeleteLibraryDraft={handleDeleteDraft} onSave={handleSavePost} onCancel={() => setTab('queue')} saving={saving} posts={visiblePosts} igAccounts={settings?.instagramAccounts || []} defaultIgUserId={settings?.defaultIgUserId || ''} settings={settings} onNavigate={setTab} />
           </div>
         )}
         {tab === 'bulk' && <div className="section"><Bulk onImport={handleBulkImport} posts={visiblePosts} onUploadFile={handleUpload} igAccounts={settings?.instagramAccounts || []} defaultIgUserId={settings?.defaultIgUserId || ''} hashtagGroups={hashtagGroups} /></div>}
         {tab === 'media' && (
-          <div className="section"><MediaLibrary searchSeed={globalQ} searchNonce={searchNonce} media={media} loading={loading} error={error} onRetry={loadAll}
+          <div className="section"><MediaLibrary tr={tr} searchSeed={globalQ} searchNonce={searchNonce} media={media} loading={loading} error={error} onRetry={loadAll}
             onAddLink={handleAddLink} onUpload={handleUpload}
             onToggleFav={async (m) => { const u = await api.updateMedia(m.id, { favorite: !m.favorite }); setMedia((prev) => prev.map((x) => (x.id === m.id ? { ...x, ...(u || {}), favorite: !m.favorite } : x))) }}
             onDelete={(m) => setConfirmDelete({ type: 'media', item: m })}
@@ -1095,7 +1099,7 @@ export default function App() {
           <div className="section"><Settings settings={settings} dbStatus={dbStatus} saving={saving} onSave={async (s) => { setSaving(true); try { const u = await api.saveSettings(s); setSettings(u || s) } finally { setSaving(false) } }} onInstagramChanged={refreshSettings} user={user} onAccountDeleted={handleLogout} onNavigate={setTab} lang={lang} onLangChange={setLang} tr={tr} /></div>
         )}
         {tab === 'connections' && (
-          <div className="section"><Connections settings={settings} onInstagramChanged={refreshSettings} /></div>
+          <div className="section"><Connections tr={tr} settings={settings} onInstagramChanged={refreshSettings} /></div>
         )}
         {tab === 'pricing' && !wsId && (
           <div className="section"><Pricing tr={tr} /></div>
@@ -1103,9 +1107,9 @@ export default function App() {
         </Suspense>
 
         <footer className="footer">
-          <b>KiluaAI</b> — free forever, for every creator.<br />
-          Schedule Reels, Feed posts &amp; Stories for Instagram, YouTube, Facebook and TikTok.<br />
-          <span className="muted small">v1.1.0{dbStatus?.db ? ` · storage: ${dbStatus.db}` : ''} · <a href="/contact.html">Contact</a></span>
+          <b>KiluaAI</b> — {tr('footerTag')}<br />
+          {tr('footerLine')}<br />
+          <span className="muted small">v1.1.0{dbStatus?.db ? ` · storage: ${dbStatus.db}` : ''} · <a href="/contact.html">{tr('contact')}</a></span>
         </footer>
       </main>
 
@@ -1115,18 +1119,18 @@ export default function App() {
           {toast.actionLabel && (
             <button type="button" className="toast-action" onClick={() => { const fn = toast.onAction; if (toastTimer.current) clearTimeout(toastTimer.current); setToast(null); if (fn) fn() }}>{toast.actionLabel}</button>
           )}
-          <button type="button" className="toast-close" aria-label="Dismiss" onClick={() => setToast(null)}>✕</button>
+          <button type="button" className="toast-close" aria-label={tr('dismiss')} onClick={() => setToast(null)}>✕</button>
         </div>
       )}
 
       {confirmDelete && (
         <div className="modal-bg" role="dialog" aria-modal="true" aria-label="Confirm delete" onClick={() => setConfirmDelete(null)}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <h2>Delete {confirmDelete.type === 'posts' ? `${(confirmDelete.items || []).length} posts` : confirmDelete.type === 'post' ? 'this post' : 'this media file'}?</h2>
-            <p className="muted mt">{confirmDelete.type === 'posts' ? 'These posts will be permanently deleted.' : confirmDelete.type === 'post' ? (confirmDelete.item.caption || 'This post') : (confirmDelete.item.title || confirmDelete.item.url)} — this cannot be undone.</p>
+            <h2>{confirmDelete.type === 'posts' ? tr('deletePostsTitle').replace('{n}', (confirmDelete.items || []).length) : confirmDelete.type === 'post' ? tr('deletePostTitle') : tr('deleteMediaTitle')}</h2>
+            <p className="muted mt">{confirmDelete.type === 'posts' ? tr('deletePostsBody') : confirmDelete.type === 'post' ? (confirmDelete.item.caption || tr('untitledPost')) : (confirmDelete.item.title || confirmDelete.item.url)} — {tr('deleteNoUndo')}</p>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 20 }}>
-              <button type="button" className="btn ghost" autoFocus onClick={() => setConfirmDelete(null)}>Cancel</button>
-              <button type="button" className="btn danger" onClick={doDelete}>Delete</button>
+              <button type="button" className="btn ghost" autoFocus onClick={() => setConfirmDelete(null)}>{tr('cancel')}</button>
+              <button type="button" className="btn danger" onClick={doDelete}>{tr('delete')}</button>
             </div>
           </div>
         </div>

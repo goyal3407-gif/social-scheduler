@@ -1,9 +1,25 @@
 import { useEffect, useRef, useState } from 'react'
 import { fmtDateTime } from '../api.js'
+import { trFor, dictSync } from '../i18n.js'
 import { IconPlay } from './icons.jsx'
 
+// These shared pieces receive no tr prop (they render inside Queue,
+// Calendar and Dashboard alike), so they translate from the same
+// sources App uses: the persisted language + the lazily loaded full
+// dictionary (dictSync is warm by the time any row renders; the CORE
+// set covers the badge words even before it lands).
+function localTr() {
+  let lang = 'en'
+  try { lang = localStorage.getItem('ss-lang') || 'en' } catch { /* storage unavailable */ }
+  return trFor(lang, dictSync())
+}
+
+const STATUS_KEYS = { scheduled: 'scheduled', draft: 'drafts', published: 'published', partial: 'partial', failed: 'failed' }
+
 export function StatusBadge({ status }) {
-  return <span className={`badge ${status || 'draft'}`}>{status || 'draft'}</span>
+  const t = localTr()
+  const s = status || 'draft'
+  return <span className={`badge ${s}`}>{STATUS_KEYS[s] ? t(STATUS_KEYS[s]) : s}</span>
 }
 
 export function PlatformBadge({ platform }) {
@@ -80,13 +96,14 @@ export function Skeleton({ rows = 3, variant = 'rows' }) {
 }
 
 export function ErrorBox({ error, onRetry }) {
+  const t = localTr()
   if (!error) return null
   return (
     <div className="alert error" role="alert">
       <span style={{ flex: 'none', marginTop: 1, fontWeight: 800 }}>!</span>
       <div style={{ flex: 1 }}>
-        <b>Couldn&apos;t load this.</b> {String(error.message || error)}
-        {onRetry && <div style={{ marginTop: 8 }}><button type="button" className="btn ghost small" onClick={onRetry}>Retry</button></div>}
+        <b>{t('errorBoxTitle')}</b> {String(error.message || error)}
+        {onRetry && <div style={{ marginTop: 8 }}><button type="button" className="btn ghost small" onClick={onRetry}>{t('retry')}</button></div>}
       </div>
     </div>
   )
@@ -116,13 +133,14 @@ export function Empty({ title, body, action }) {
 // server.js; keep the two in step). fix: 'reconnect' when reconnecting
 // Instagram is the remedy.
 export function friendlyFailure(error) {
+  const t = localTr()
   const s = String(error || '')
-  if (/not connected|no longer connected|connect Instagram/i.test(s)) return { text: 'The Instagram account for this post is not connected.', fix: 'reconnect' }
-  if (/token|session|OAuth|expired|revoked|authoriz/i.test(s)) return { text: 'Instagram ended the login for this account.', fix: 'reconnect' }
-  if (/permission|scope|not authorized|does not have/i.test(s)) return { text: 'Instagram did not give this app permission for that action.', fix: 'reconnect' }
-  if (/rate|too many|throttl|limit/i.test(s)) return { text: 'Instagram is rate-limiting right now — wait a while, then publish again.', fix: '' }
-  if (/could not be prepared|not reachable|unreachable|fetch|network|reach Instagram/i.test(s)) return { text: 'The media file could not be reached or prepared — re-upload it from the Media Library.', fix: '' }
-  if (/format|process this media|H\.264|codec/i.test(s)) return { text: 'Instagram could not process this media file — a standard MP4 (H.264) or JPG works best.', fix: '' }
+  if (/not connected|no longer connected|connect Instagram/i.test(s)) return { text: t('ffNotConnected'), fix: 'reconnect' }
+  if (/token|session|OAuth|expired|revoked|authoriz/i.test(s)) return { text: t('ffLoginEnded'), fix: 'reconnect' }
+  if (/permission|scope|not authorized|does not have/i.test(s)) return { text: t('ffPermission'), fix: 'reconnect' }
+  if (/rate|too many|throttl|limit/i.test(s)) return { text: t('ffRate'), fix: '' }
+  if (/could not be prepared|not reachable|unreachable|fetch|network|reach Instagram/i.test(s)) return { text: t('ffMediaReach'), fix: '' }
+  if (/format|process this media|H\.264|codec/i.test(s)) return { text: t('ffFormat'), fix: '' }
   return { text: '', fix: '' }
 }
 
@@ -142,6 +160,7 @@ export function targetsOfPost(post) {
 }
 
 export function StatusTracker({ post, publishing, onReconnect }) {
+  const t = localTr()
   if (!post) return null
   if (post.status === 'failed' && !post.retryPending) {
     const friendly = friendlyFailure(post.lastPublishError)
@@ -149,13 +168,13 @@ export function StatusTracker({ post, publishing, onReconnect }) {
       <div className="post-tracker failed">
         <span className="trk-fail-dot" aria-hidden="true" />
         <span>
-          Failed{friendly.text ? ` — ${friendly.text}` : ''}
+          {t('failed')}{friendly.text ? ` — ${friendly.text}` : ''}
           {friendly.fix === 'reconnect' && onReconnect && (
-            <button type="button" className="btn ghost small" style={{ marginLeft: 8 }} onClick={() => onReconnect()}>Reconnect Instagram</button>
+            <button type="button" className="btn ghost small" style={{ marginLeft: 8 }} onClick={() => onReconnect()}>{t('reconnectInstagram')}</button>
           )}
           {post.lastPublishError && (
             <details style={{ display: 'inline-block', marginLeft: 8 }}>
-              <summary className="small" style={{ cursor: 'pointer', display: 'inline' }}>Details</summary>
+              <summary className="small" style={{ cursor: 'pointer', display: 'inline' }}>{t('detailsWord')}</summary>
               <span className="small" style={{ display: 'block', marginTop: 4 }}>{post.lastPublishError}</span>
             </details>
           )}
@@ -166,7 +185,7 @@ export function StatusTracker({ post, publishing, onReconnect }) {
   const published = post.status === 'published'
   const inFlight = Boolean(publishing || post.containerId || post.retryPending)
   const step = published ? 3 : inFlight ? 2 : 1
-  const steps = ['Scheduled', 'Publishing', 'Live']
+  const steps = [t('trkScheduled'), t('trkPublishing'), t('trkLive')]
   // The wording follows the platforms the post actually used: a
   // YouTube-only post (Instagram unticked) went live on YouTube — its
   // liveUrl IS the watch URL — so it gets YouTube wording and no
@@ -177,12 +196,12 @@ export function StatusTracker({ post, publishing, onReconnect }) {
   const ytNote = ytOn && !ytOnly ? (
     <span className="trk-note" title={post.youtubeError || undefined}>
       {post.youtubeStatus === 'uploaded' && post.youtubeVideoId
-        ? <>· also on YouTube: <a className="trk-live" href={`https://www.youtube.com/watch?v=${post.youtubeVideoId}`} target="_blank" rel="noreferrer">watch (private)</a></>
+        ? <>{t('ytAlsoOn')} <a className="trk-live" href={`https://www.youtube.com/watch?v=${post.youtubeVideoId}`} target="_blank" rel="noreferrer">{t('ytWatchPrivate')}</a></>
         : post.youtubeStatus === 'failed'
-          ? '· YouTube: upload failed — Instagram is live'
+          ? t('ytUploadFailed')
           : post.youtubeStatus === 'skipped'
-            ? '· YouTube: skipped (videos only)'
-            : '· also on YouTube: posting'}
+            ? t('ytSkipped')
+            : t('ytPosting')}
     </span>
   ) : null
   // Partial (multi-target): live on some ticked accounts, failed on
@@ -196,11 +215,11 @@ export function StatusTracker({ post, publishing, onReconnect }) {
     const names = (list) => list.map((t) => `@${t.username || t.igUserId || 'account'}`).join(', ')
     return (
       <div className="post-tracker" aria-label="Status: live on some accounts">
-        <span className="trk done"><span className="trk-dot" aria-hidden="true" />Live</span>
+        <span className="trk done"><span className="trk-dot" aria-hidden="true" />{t('trkLive')}</span>
         <span className="trk-note">
-          Partial — live on {names(live)}; failed on {names(failedT)}{retrying ? ' — auto-retry pending for the failed account.' : ''}
+          {t('partialLine').replace('{live}', names(live)).replace('{failed}', names(failedT))}{retrying ? ` ${t('partialRetryNote')}` : ''}
         </span>
-        {live[0]?.liveUrl && <a className="trk-live" href={live[0].liveUrl} target="_blank" rel="noreferrer">View on Instagram</a>}
+        {live[0]?.liveUrl && <a className="trk-live" href={live[0].liveUrl} target="_blank" rel="noreferrer">{t('viewOnInstagram')}</a>}
         {ytNote}
       </div>
     )
@@ -217,14 +236,15 @@ export function StatusTracker({ post, publishing, onReconnect }) {
           </span>
         )
       })}
-      {post.status === 'failed' && post.retryPending && <span className="trk-note">auto-retry pending</span>}
-      {published && post.liveUrl && <a className="trk-live" href={post.liveUrl} target="_blank" rel="noreferrer">{ytOnly ? 'View on YouTube' : 'View on Instagram'}</a>}
+      {post.status === 'failed' && post.retryPending && <span className="trk-note">{t('autoRetryPending')}</span>}
+      {published && post.liveUrl && <a className="trk-live" href={post.liveUrl} target="_blank" rel="noreferrer">{ytOnly ? t('viewOnYouTube') : t('viewOnInstagram')}</a>}
       {ytNote}
     </div>
   )
 }
 
 export function PostRow({ post, onEdit, onDelete, onPublish, publishing, onDuplicate, onPostAgain, onReschedule, onRescheduleNextBest, onReconnect, onRetry, retrying }) {
+  const t = localTr()
   const [menuOpen, setMenuOpen] = useState(false)
   const menuRef = useRef(null)
   useEffect(() => {
@@ -251,8 +271,8 @@ export function PostRow({ post, onEdit, onDelete, onPublish, publishing, onDupli
           <StatusBadge status={post.status} />
           <PlatformBadge platform={post.platform} />
           <span className="badge brand">{post.format || 'REELS'}</span>
-          {post.repeat === 'weekly' && <span className="badge neutral" title="This post repeats weekly — publishing it schedules the next one automatically">Repeats weekly</span>}
-          {post.liveUrl && <a className="badge neutral" href={post.liveUrl} target="_blank" rel="noreferrer">Live ↗</a>}
+          {post.repeat === 'weekly' && <span className="badge neutral" title={t('repeatsWeeklyTitle')}>{t('repeatsWeekly')}</span>}
+          {post.liveUrl && <a className="badge neutral" href={post.liveUrl} target="_blank" rel="noreferrer">{t('liveBadge')}</a>}
           {targets.length > 1 && targets.map((t) => {
             const mark = t.status === 'published' ? '✓' : t.status === 'failed' ? '✗' : t.status === 'publishing' ? '…' : '•'
             const label = `@${t.username || t.igUserId || 'account'} ${mark}`
@@ -261,7 +281,7 @@ export function PostRow({ post, onEdit, onDelete, onPublish, publishing, onDupli
               : <span key={t.igUserId || label} className="badge neutral">{label}</span>
           })}
         </div>
-        <p>{post.caption || <span className="muted">No caption</span>}</p>
+        <p>{post.caption || <span className="muted">{t('noCaption')}</span>}</p>
         <div className="post-meta">
           <span>{fmtDateTime(post.scheduleTime)}</span>
           {post.hashtags && <span>{post.hashtags}</span>}
@@ -271,25 +291,25 @@ export function PostRow({ post, onEdit, onDelete, onPublish, publishing, onDupli
         <div className="post-foot">
           {post.status !== 'published' && (
             <button type="button" className="btn primary small" disabled={publishing} onClick={() => onPublish && onPublish(post)}>
-              {publishing ? 'Publishing…' : 'Publish now'}
+              {publishing ? t('publishingWord') : t('publishNow')}
             </button>
           )}
           {onRetry && (post.status === 'failed' || post.status === 'partial') && (
-            <button type="button" className="btn ghost small" disabled={retrying} onClick={() => onRetry(post)} title="Re-checks the connection, media and plan first, then publishes again">
-              {retrying ? 'Retrying…' : 'Retry'}
+            <button type="button" className="btn ghost small" disabled={retrying} onClick={() => onRetry(post)} title={t('retryTitle')}>
+              {retrying ? t('retrying') : t('retry')}
             </button>
           )}
           {hasMenu && (
             <div className="post-menu-wrap" ref={menuRef}>
-              <button type="button" className="btn ghost small post-menu-btn" aria-label="More actions" aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => setMenuOpen((o) => !o)}>⋯</button>
+              <button type="button" className="btn ghost small post-menu-btn" aria-label={t('moreActions')} aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => setMenuOpen((o) => !o)}>⋯</button>
               {menuOpen && (
                 <div className="post-menu" role="menu">
-                  {onPostAgain && <button type="button" role="menuitem" onClick={act(onPostAgain)}>Post again</button>}
-                  {onDuplicate && <button type="button" role="menuitem" onClick={act(onDuplicate)}>Duplicate</button>}
-                  {onReschedule && post.status !== 'published' && <button type="button" role="menuitem" onClick={act(onReschedule, { addDays: 1 })}>+1 day</button>}
-                  {onRescheduleNextBest && post.status !== 'published' && <button type="button" role="menuitem" onClick={act(onRescheduleNextBest)}>Next best time</button>}
-                  {onEdit && <button type="button" role="menuitem" onClick={act(onEdit)}>Edit</button>}
-                  {onDelete && <button type="button" role="menuitem" className="danger" onClick={act(onDelete)}>Delete</button>}
+                  {onPostAgain && <button type="button" role="menuitem" onClick={act(onPostAgain)}>{t('postAgain')}</button>}
+                  {onDuplicate && <button type="button" role="menuitem" onClick={act(onDuplicate)}>{t('duplicate')}</button>}
+                  {onReschedule && post.status !== 'published' && <button type="button" role="menuitem" onClick={act(onReschedule, { addDays: 1 })}>{t('plusOneDay')}</button>}
+                  {onRescheduleNextBest && post.status !== 'published' && <button type="button" role="menuitem" onClick={act(onRescheduleNextBest)}>{t('nextBestTimeBtn')}</button>}
+                  {onEdit && <button type="button" role="menuitem" onClick={act(onEdit)}>{t('edit')}</button>}
+                  {onDelete && <button type="button" role="menuitem" className="danger" onClick={act(onDelete)}>{t('delete')}</button>}
                 </div>
               )}
             </div>

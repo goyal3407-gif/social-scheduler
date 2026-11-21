@@ -75,58 +75,58 @@ export default function Queue({ posts, loading, onEdit, onDelete, onPublish, pub
   return (
     <div>
       <h2 className="section-title">{t('queue')}</h2>
-      <p className="section-sub">Everything you&apos;ve planned — drag-free, but organised. Switch to Kanban to see it by status.</p>
+      <p className="section-sub">{t('queueSub')}</p>
 
       {overdue && overdue.length > 0 && (
         <div className="alert error" role="alert" style={{ marginTop: 0 }}>
-          <div style={{ flex: 1 }}><b>{overdue.length} overdue</b> — scheduled time passed. Publish them now or move them.</div>
-          <button type="button" className="btn primary small" disabled={publishingId === 'due'} onClick={onPublishDue}>{publishingId === 'due' ? 'Publishing…' : 'Publish due'}</button>
+          <div style={{ flex: 1 }}><b>{t('queueOverdueTitle').replace('{n}', overdue.length)}</b> — {t('queueOverdueBody')}</div>
+          <button type="button" className="btn primary small" disabled={publishingId === 'due'} onClick={onPublishDue}>{publishingId === 'due' ? t('publishingWord') : t('publishDue')}</button>
         </div>
       )}
 
       <div className="toolbar">
         <div className="tabs" role="tablist" aria-label="Queue view">
-          <button type="button" className={`tab ${view === 'list' ? 'active' : ''}`} onClick={() => setView('list')}>List</button>
-          <button type="button" className={`tab ${view === 'kanban' ? 'active' : ''}`} onClick={() => setView('kanban')}>Kanban</button>
+          <button type="button" className={`tab ${view === 'list' ? 'active' : ''}`} onClick={() => setView('list')}>{t('listView')}</button>
+          <button type="button" className={`tab ${view === 'kanban' ? 'active' : ''}`} onClick={() => setView('kanban')}>{t('kanbanView')}</button>
         </div>
         <select value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="Filter by status">
-          <option value="all">All statuses</option>
+          <option value="all">{t('allStatuses')}</option>
           {STATUSES.map((s) => <option key={s} value={s}>{LABELS[s]}</option>)}
         </select>
         <select value={platform} onChange={(e) => setPlatform(e.target.value)} aria-label="Filter by platform">
-          <option value="all">All platforms</option>
+          <option value="all">{t('allPlatforms')}</option>
           {['Instagram', 'YouTube', 'Facebook', 'TikTok'].map((p) => <option key={p} value={p}>{p}</option>)}
         </select>
-        <input type="search" placeholder="Search captions, hashtags…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search queue" />
-        <button type="button" className="btn ghost" onClick={exportCsv}>Export CSV</button>
-        <button type="button" className="btn primary" onClick={onCreate}>+ New post</button>
+        <input type="search" placeholder={t('searchQueuePh')} value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search queue" />
+        <button type="button" className="btn ghost" onClick={exportCsv}>{t('exportCsv')}</button>
+        <button type="button" className="btn primary" onClick={onCreate}>{t('newPostBtn')}</button>
       </div>
 
       {selected.size > 0 && (
         <div className="toolbar" role="region" aria-label="Bulk actions">
-          <span className="pill">{selected.size} selected</span>
-          <button type="button" className="btn ghost small" onClick={async () => { if (!onReschedule) return; const items = selectedItems.filter((p) => p.status === 'scheduled'); for (const p of items) { await onReschedule(p, { addDays: 1 }) } setSelected(new Set()) }}>Move +1 day</button>
-          <button type="button" className="btn danger small" onClick={() => { onDeleteMany && onDeleteMany(selectedItems); setSelected(new Set()) }}>Delete selected</button>
-          <button type="button" className="btn ghost small" onClick={() => setSelected(new Set())}>Clear selection</button>
+          <span className="pill">{t('selectedCount').replace('{n}', selected.size)}</span>
+          <button type="button" className="btn ghost small" onClick={async () => { if (!onReschedule) return; const items = selectedItems.filter((p) => p.status === 'scheduled'); for (const p of items) { await onReschedule(p, { addDays: 1 }) } setSelected(new Set()) }}>{t('movePlusDay')}</button>
+          <button type="button" className="btn danger small" onClick={() => { onDeleteMany && onDeleteMany(selectedItems); setSelected(new Set()) }}>{t('deleteSelected')}</button>
+          <button type="button" className="btn ghost small" onClick={() => setSelected(new Set())}>{t('clearSelection')}</button>
         </div>
       )}
 
       {loading ? <div className="card"><Skeleton variant="posts" rows={4} /></div> : filtered.length === 0 ? (
         (posts || []).length === 0 ? (
-          <div className="card"><Empty title="Nothing scheduled yet" body="Your queue is empty. Schedule your first post and it will appear here, soonest first." action={<button type="button" className="btn primary small" onClick={onCreate}>Schedule your first post</button>} /></div>
+          <div className="card"><Empty title={t('emptyQueueTitle')} body={t('emptyQueueBody')} action={<button type="button" className="btn primary small" onClick={onCreate}>{t('scheduleFirstPost')}</button>} /></div>
         ) : (
-          <div className="card"><Empty title="Nothing matches" body="Try clearing a filter, or create a post — scheduled posts land here first." action={<button type="button" className="btn primary small" onClick={onCreate}>Create a post</button>} /></div>
+          <div className="card"><Empty title={t('noMatchTitle')} body={t('noMatchBody')} action={<button type="button" className="btn primary small" onClick={onCreate}>{t('createAPost')}</button>} /></div>
         )
       ) : view === 'list' ? (
         <div className="card">
           <label className="small muted" style={{ display: 'flex', gap: 6, alignItems: 'center', paddingBottom: 10, cursor: 'pointer' }}>
             <input type="checkbox" style={{ width: 16, height: 16 }} checked={filtered.length > 0 && filtered.every((p) => selected.has(p.id))} onChange={(e) => setSelected(e.target.checked ? new Set(filtered.map((p) => p.id)) : new Set())} />
-            Select all {filtered.length} shown
+            {t('selectAllShown').replace('{n}', filtered.length)}
           </label>
           {filtered.map((p) => (
             <div key={p.id} style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}
               onTouchStart={(e) => swipeStart(e, p)} onTouchEnd={(e) => swipeEnd(e, p)}>
-              <input type="checkbox" aria-label={`Select post: ${(p.caption || 'No caption').slice(0, 40)}`} checked={selected.has(p.id)} onChange={() => toggleSelect(p.id)} style={{ width: 18, height: 18, marginTop: 16, flex: 'none' }} />
+              <input type="checkbox" aria-label={t('selectPostAria').replace('{caption}', (p.caption || t('noCaption')).slice(0, 40))} checked={selected.has(p.id)} onChange={() => toggleSelect(p.id)} style={{ width: 18, height: 18, marginTop: 16, flex: 'none' }} />
               <div style={{ flex: 1, minWidth: 0 }}><PostRow post={p} onEdit={onEdit} onDelete={onDelete} onPublish={onPublish} publishing={publishingId === p.id} onDuplicate={onDuplicate} onPostAgain={onPostAgain} onReschedule={onReschedule} onRescheduleNextBest={onRescheduleNextBest} onReconnect={onReconnect} onRetry={onRetry} retrying={retryingId === p.id} /></div>
             </div>
           ))}
@@ -138,7 +138,7 @@ export default function Queue({ posts, loading, onEdit, onDelete, onPublish, pub
             return (
               <div key={status} className="kan-col">
                 <h3><span>{LABELS[status]}</span><span className="badge neutral">{col.length}</span></h3>
-                {col.length === 0 && <p className="muted small">No {LABELS[status].toLowerCase()}.</p>}
+                {col.length === 0 && <p className="muted small">{t('noColPosts')}</p>}
                 {col.map((p) => (
                   <article key={p.id} className="kan-card">
                     {(p.mediaUrl || p.posterUrl) && <div className="kan-thumb"><Thumb post={p} /></div>}
@@ -146,17 +146,17 @@ export default function Queue({ posts, loading, onEdit, onDelete, onPublish, pub
                       <StatusBadge status={p.status} />
                       <PlatformBadge platform={p.platform} />
                     </div>
-                    <p>{p.caption || 'No caption'}</p>
+                    <p>{p.caption || t('noCaption')}</p>
                     <div className="post-meta"><span>{fmtDateTime(p.scheduleTime)}</span></div>
                     <div style={{ display: 'flex', gap: 6, marginTop: 9, flexWrap: 'wrap' }}>
-                      {p.status !== 'published' && <button type="button" className="btn primary small" disabled={publishingId === p.id} onClick={() => onPublish(p)}>Publish</button>}
-                      {onRetry && (p.status === 'failed' || p.status === 'partial') && <button type="button" className="btn ghost small" disabled={retryingId === p.id} onClick={() => onRetry(p)} title="Re-checks the connection, media and plan first, then publishes again">{retryingId === p.id ? t('retrying') : t('retry')}</button>}
-                      {onPostAgain && <button type="button" className="btn ghost small" onClick={() => onPostAgain(p)}>Post again</button>}
-                      {onDuplicate && <button type="button" className="btn ghost small" onClick={() => onDuplicate(p)}>Duplicate</button>}
-                      {onReschedule && p.status !== 'published' && <button type="button" className="btn ghost small" onClick={() => onReschedule(p, { addDays: 1 })}>+1 day</button>}
-                      {onRescheduleNextBest && p.status !== 'published' && <button type="button" className="btn ghost small" onClick={() => onRescheduleNextBest(p)} title="Move to the next free 7:00 PM slot in your schedule">Next best time</button>}
-                      <button type="button" className="btn ghost small" onClick={() => onEdit(p)}>Edit</button>
-                      <button type="button" className="btn danger small" onClick={() => onDelete(p)}>Delete</button>
+                      {p.status !== 'published' && <button type="button" className="btn primary small" disabled={publishingId === p.id} onClick={() => onPublish(p)}>{t('publish')}</button>}
+                      {onRetry && (p.status === 'failed' || p.status === 'partial') && <button type="button" className="btn ghost small" disabled={retryingId === p.id} onClick={() => onRetry(p)} title={t('retryTitle')}>{retryingId === p.id ? t('retrying') : t('retry')}</button>}
+                      {onPostAgain && <button type="button" className="btn ghost small" onClick={() => onPostAgain(p)}>{t('postAgain')}</button>}
+                      {onDuplicate && <button type="button" className="btn ghost small" onClick={() => onDuplicate(p)}>{t('duplicate')}</button>}
+                      {onReschedule && p.status !== 'published' && <button type="button" className="btn ghost small" onClick={() => onReschedule(p, { addDays: 1 })}>{t('plusOneDay')}</button>}
+                      {onRescheduleNextBest && p.status !== 'published' && <button type="button" className="btn ghost small" onClick={() => onRescheduleNextBest(p)} title={t('nextBestTitle')}>{t('nextBestTimeBtn')}</button>}
+                      <button type="button" className="btn ghost small" onClick={() => onEdit(p)}>{t('edit')}</button>
+                      <button type="button" className="btn danger small" onClick={() => onDelete(p)}>{t('delete')}</button>
                     </div>
                   </article>
                 ))}

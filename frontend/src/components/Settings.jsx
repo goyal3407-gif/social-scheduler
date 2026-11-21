@@ -9,7 +9,8 @@ async function copyText(text, setCopied) {
 }
 
 // D6: link-in-bio page — slug + on/off + up to 10 links.
-function BioCard() {
+function BioCard({ tr }) {
+  const t = tr || ((k) => k)
   const [slug, setSlug] = useState('')
   const [enabled, setEnabled] = useState(false)
   const [links, setLinks] = useState([])
@@ -29,47 +30,48 @@ function BioCard() {
     setBusy(true); setError(''); setNote('')
     try {
       const r = await api.saveBio({ slug: slug.trim().toLowerCase(), enabled, links })
-      setNote(enabled ? 'Your page is live.' : 'Saved — your page is switched off.')
+      setNote(enabled ? t('bioLive') : t('bioSavedOff'))
       if (r && r.bio) { setSlug(r.bio.slug || ''); setLinks(r.bio.links || []) }
-    } catch (e) { setError(e.message || 'Could not save your page.') }
+    } catch (e) { setError(e.message || t('bioSaveFail')) }
     finally { setBusy(false) }
   }
   const pageUrl = slug ? `${window.location.origin}/bio/${slug}` : ''
   return (
     <section className="card" style={{ marginTop: 16 }}>
-      <h2>Link-in-bio page</h2>
-      <p className="muted small" style={{ marginTop: 8 }}>One public page with your links and your latest published posts — put it in your Instagram bio. No login needed to view it.</p>
-      <label htmlFor="bioSlug" style={{ marginTop: 12 }}>Page name</label>
+      <h2>{t('bioTitle')}</h2>
+      <p className="muted small" style={{ marginTop: 8 }}>{t('bioSub')}</p>
+      <label htmlFor="bioSlug" style={{ marginTop: 12 }}>{t('bioPageName')}</label>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
         <span className="muted small">/bio/</span>
         <input id="bioSlug" placeholder="yourname" value={slug} onChange={(e) => setSlug(e.target.value)} style={{ flex: 1 }} />
       </div>
       <label style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 12, cursor: 'pointer' }}>
         <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} style={{ width: 18, height: 18 }} />
-        <span><b>Page is on</b> <span className="muted small">(off = the link shows “not available”)</span></span>
+        <span><b>{t('bioPageOn')}</b> <span className="muted small">{t('bioOffNote')}</span></span>
       </label>
-      <h3 style={{ marginTop: 16 }}>Your links</h3>
+      <h3 style={{ marginTop: 16 }}>{t('bioYourLinks')}</h3>
       {links.map((l, i) => (
         <div key={i} style={{ display: 'flex', gap: 6, marginTop: 8 }}>
-          <input placeholder="Title (e.g. My shop)" value={l.title} onChange={(e) => setLinks(links.map((x, j) => (j === i ? { ...x, title: e.target.value } : x)))} style={{ flex: 1 }} />
+          <input placeholder={t('bioLinkTitlePh')} value={l.title} onChange={(e) => setLinks(links.map((x, j) => (j === i ? { ...x, title: e.target.value } : x)))} style={{ flex: 1 }} />
           <input placeholder="https://…" value={l.url} onChange={(e) => setLinks(links.map((x, j) => (j === i ? { ...x, url: e.target.value } : x)))} style={{ flex: 1.4 }} />
-          <button type="button" className="btn ghost small" onClick={() => setLinks(links.filter((_, j) => j !== i))}>Remove</button>
+          <button type="button" className="btn ghost small" onClick={() => setLinks(links.filter((_, j) => j !== i))}>{t('remove')}</button>
         </div>
       ))}
-      {links.length < 10 && <button type="button" className="btn ghost small" style={{ marginTop: 10 }} onClick={() => setLinks([...links, { title: '', url: '' }])}>+ Add a link</button>}
+      {links.length < 10 && <button type="button" className="btn ghost small" style={{ marginTop: 10 }} onClick={() => setLinks([...links, { title: '', url: '' }])}>{t('bioAddLink')}</button>}
       {error && <div className="alert error" style={{ marginTop: 10 }}>{error}</div>}
       {note && <div className="alert success" style={{ marginTop: 10 }}>{note}</div>}
       <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
-        <button type="button" className="btn primary" disabled={busy} onClick={save}>{busy ? 'Saving…' : 'Save page'}</button>
-        {enabled && pageUrl && <button type="button" className="btn ghost" onClick={() => copyText(pageUrl, setCopied)}>{copied ? 'Copied!' : 'Copy page link'}</button>}
-        {enabled && pageUrl && <a className="btn ghost" href={pageUrl} target="_blank" rel="noreferrer">Open page</a>}
+        <button type="button" className="btn primary" disabled={busy} onClick={save}>{busy ? t('savingWord') : t('bioSavePage')}</button>
+        {enabled && pageUrl && <button type="button" className="btn ghost" onClick={() => copyText(pageUrl, setCopied)}>{copied ? t('copiedWord') : t('copyPageLink')}</button>}
+        {enabled && pageUrl && <a className="btn ghost" href={pageUrl} target="_blank" rel="noreferrer">{t('openPage')}</a>}
       </div>
     </section>
   )
 }
 
 // D8: preview / approval link — signed, read-only, revocable.
-function PreviewCard() {
+function PreviewCard({ tr }) {
+  const t = tr || ((k) => k)
   const [url, setUrl] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -82,23 +84,23 @@ function PreviewCard() {
   const run = async (fn) => {
     setBusy(true); setError('')
     try { const r = await fn(); setUrl((r && r.url) || '') }
-    catch (e) { setError(e.message || 'Could not update the preview link.') }
+    catch (e) { setError(e.message || t('previewFail')) }
     finally { setBusy(false) }
   }
   return (
     <section className="card" style={{ marginTop: 16 }}>
-      <h2>Client preview link</h2>
-      <p className="muted small" style={{ marginTop: 8 }}>Share a read-only page of your upcoming scheduled posts so a client can approve them — no login needed. Making a new link kills the old one.</p>
+      <h2>{t('previewTitle')}</h2>
+      <p className="muted small" style={{ marginTop: 8 }}>{t('previewSub')}</p>
       {url ? (
         <>
           <p className="small" style={{ marginTop: 10, wordBreak: 'break-all' }}>{url}</p>
           <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
-            <button type="button" className="btn ghost" onClick={() => copyText(url, setCopied)}>{copied ? 'Copied!' : 'Copy link'}</button>
-            <button type="button" className="btn ghost" disabled={busy} onClick={() => run(() => api.regeneratePreviewLink())}>Make a new link (old one stops working)</button>
+            <button type="button" className="btn ghost" onClick={() => copyText(url, setCopied)}>{copied ? t('copiedWord') : t('copyLink')}</button>
+            <button type="button" className="btn ghost" disabled={busy} onClick={() => run(() => api.regeneratePreviewLink())}>{t('previewNewLink')}</button>
           </div>
         </>
       ) : (
-        <button type="button" className="btn primary" style={{ marginTop: 12 }} disabled={busy} onClick={() => run(() => api.createPreviewLink())}>{busy ? 'Creating…' : 'Create preview link'}</button>
+        <button type="button" className="btn primary" style={{ marginTop: 12 }} disabled={busy} onClick={() => run(() => api.createPreviewLink())}>{busy ? t('creatingWord') : t('previewCreate')}</button>
       )}
       {error && <div className="alert error" style={{ marginTop: 10 }}>{error}</div>}
     </section>
@@ -106,7 +108,8 @@ function PreviewCard() {
 }
 
 // D11: referrals — code + link + joined count. No reward promises.
-function InviteCard() {
+function InviteCard({ tr }) {
+  const t = tr || ((k) => k)
   const [data, setData] = useState(null)
   const [copied, setCopied] = useState(false)
   useEffect(() => {
@@ -116,22 +119,23 @@ function InviteCard() {
   }, [])
   return (
     <section className="card" style={{ marginTop: 16 }}>
-      <h2>Invite friends</h2>
-      <p className="muted small" style={{ marginTop: 8 }}>Share your link — friends who sign up through it are counted here. Invites are tracked now; rewards arrive with Pro.</p>
+      <h2>{t('inviteTitle')}</h2>
+      <p className="muted small" style={{ marginTop: 8 }}>{t('inviteSub')}</p>
       {data ? (
         <>
-          <p style={{ marginTop: 12 }}><b>Your invites: {data.count} friend{data.count === 1 ? '' : 's'} joined</b></p>
+          <p style={{ marginTop: 12 }}><b>{t(data.count === 1 ? 'invitesCountOne' : 'invitesCountMany').replace('{n}', data.count)}</b></p>
           <p className="small" style={{ marginTop: 8, wordBreak: 'break-all' }}>{data.link}</p>
-          <button type="button" className="btn ghost" style={{ marginTop: 10 }} onClick={() => copyText(data.link, setCopied)}>{copied ? 'Copied!' : 'Copy invite link'}</button>
+          <button type="button" className="btn ghost" style={{ marginTop: 10 }} onClick={() => copyText(data.link, setCopied)}>{copied ? t('copiedWord') : t('copyInviteLink')}</button>
         </>
       ) : (
-        <p className="muted small" style={{ marginTop: 10 }}>Loading your invite link…</p>
+        <p className="muted small" style={{ marginTop: 10 }}>{t('inviteLoading')}</p>
       )}
     </section>
   )
 }
 
 export default function Settings({ settings, dbStatus, onSave, saving, onInstagramChanged, user, onAccountDeleted, onNavigate, lang, onLangChange, tr }) {
+  const t = tr || ((k) => k)
   const [handle, setHandle] = useState('')
   const [msg, setMsg] = useState('')
   const [err, setErr] = useState('')
@@ -147,13 +151,13 @@ export default function Settings({ settings, dbStatus, onSave, saving, onInstagr
   const changePassword = async (e) => {
     e.preventDefault()
     setPwErr(''); setPwMsg('')
-    if (newPw.length < 8) { setPwErr('The new password must be at least 8 characters long.'); return }
+    if (newPw.length < 8) { setPwErr(t('pwTooShort')); return }
     setPwBusy(true)
     try {
       await api.changePassword(currentPw, newPw)
-      setPwMsg('Password changed — other devices were logged out.')
+      setPwMsg(t('pwChanged'))
       setCurrentPw(''); setNewPw('')
-    } catch (e2) { setPwErr(e2.message || 'Could not change the password.') }
+    } catch (e2) { setPwErr(e2.message || t('pwChangeFail')) }
     finally { setPwBusy(false) }
   }
 
@@ -167,8 +171,8 @@ export default function Settings({ settings, dbStatus, onSave, saving, onInstagr
       a.download = 'social-scheduler-export.json'
       a.click()
       URL.revokeObjectURL(a.href)
-      setMsg('Your data was downloaded as social-scheduler-export.json.')
-    } catch (e2) { setErr(e2.message || 'Could not export your data.') }
+      setMsg(t('dataDownloaded'))
+    } catch (e2) { setErr(e2.message || t('exportFail')) }
     finally { setExporting(false) }
   }
 
@@ -178,7 +182,7 @@ export default function Settings({ settings, dbStatus, onSave, saving, onInstagr
       await api.deleteAccount()
       if (onAccountDeleted) onAccountDeleted()
     } catch (e2) {
-      setErr(e2.message || 'Could not delete the account.')
+      setErr(e2.message || t('deleteAccountFail'))
       setDeletingAccount(false)
       setConfirmDeleteAccount(false)
     }
@@ -196,9 +200,9 @@ export default function Settings({ settings, dbStatus, onSave, saving, onInstagr
     setErr(''); setMsg('')
     try {
       await onSave({ instagramHandle: handle.trim() })
-      setMsg('Settings saved.')
+      setMsg(t('settingsSaved'))
     } catch (e2) {
-      setErr(e2.message || 'Could not save settings.')
+      setErr(e2.message || t('settingsSaveFail'))
     }
   }
 
@@ -206,130 +210,130 @@ export default function Settings({ settings, dbStatus, onSave, saving, onInstagr
 
   return (
     <div className="settings-col">
-      <h2 className="section-title">Settings</h2>
-      <p className="section-sub">Your account, Instagram connection and preferences — all in one place.</p>
+      <h2 className="section-title">{t('settings')}</h2>
+      <p className="section-sub">{t('settingsSub')}</p>
       {dbStatus && (dbStatus.db !== 'mongodb' || !dbStatus.sessionSecretFromEnv) && (
         <div className="alert error" role="alert" style={{ marginBottom: 16 }}>
-          <b>Server setup needs attention.</b>{' '}
+          <b>{t('serverAttention')}</b>{' '}
           {dbStatus.db !== 'mongodb'
-            ? 'Accounts and posts are stored in temporary files right now and will disappear when the site redeploys. Set MONGODB_URI in Vercel → Project Settings → Environment Variables (all environments), then redeploy. '
+            ? `${t('dbTempBody')} `
             : ''}
           {!dbStatus.sessionSecretFromEnv
-            ? 'SESSION_SECRET is not set, so logins will not survive a restart or redeploy. Set SESSION_SECRET in Vercel → Project Settings → Environment Variables (all environments), then redeploy.'
+            ? t('sessionBody')
             : ''}
-          {dbStatus.lastError ? ` Last database error: ${dbStatus.lastError}` : ''}
+          {dbStatus.lastError ? ` ${t('lastDbError')} ${dbStatus.lastError}` : ''}
         </div>
       )}
       {dbStatus && dbStatus.db === 'mongodb' && dbStatus.sessionSecretFromEnv && (
         <div className="alert success" role="status" style={{ marginBottom: 16 }}>
-          Database connected (MongoDB) and logins survive redeploys.
+          {t('dbOk')}
         </div>
       )}
       <section className="card" style={{ marginBottom: 16 }}>
-        <h2>Account</h2>
-        <p className="muted small" style={{ marginTop: 8 }}>Signed in as <b style={{ color: 'var(--ink)' }}>{user?.email || '—'}</b>{user?.name ? ` · ${user.name}` : ''}{user?.role ? ` · ${user.role}` : ''}</p>
+        <h2>{t('accountTitle')}</h2>
+        <p className="muted small" style={{ marginTop: 8 }}>{t('signedInAs')} <b style={{ color: 'var(--ink)' }}>{user?.email || '—'}</b>{user?.name ? ` · ${user.name}` : ''}{user?.role ? ` · ${user.role}` : ''}</p>
         <form onSubmit={changePassword}>
-          <h3 style={{ marginTop: 18 }}>Change password</h3>
-          <p className="muted small" style={{ marginTop: 6 }}>Changing your password logs out your other devices.</p>
-          <label htmlFor="currentPw" style={{ marginTop: 12 }}>Current password</label>
+          <h3 style={{ marginTop: 18 }}>{t('changePassword')}</h3>
+          <p className="muted small" style={{ marginTop: 6 }}>{t('changePwNote')}</p>
+          <label htmlFor="currentPw" style={{ marginTop: 12 }}>{t('currentPassword')}</label>
           <input id="currentPw" type="password" autoComplete="current-password" value={currentPw} onChange={(e) => setCurrentPw(e.target.value)} />
-          <label htmlFor="newPw" style={{ marginTop: 12 }}>New password</label>
-          <input id="newPw" type="password" autoComplete="new-password" placeholder="At least 8 characters" value={newPw} onChange={(e) => setNewPw(e.target.value)} />
+          <label htmlFor="newPw" style={{ marginTop: 12 }}>{t('newPassword')}</label>
+          <input id="newPw" type="password" autoComplete="new-password" placeholder={t('pwPh')} value={newPw} onChange={(e) => setNewPw(e.target.value)} />
           {pwErr && <div className="alert error">{pwErr}</div>}
           {pwMsg && <div className="alert success">{pwMsg}</div>}
-          <button type="submit" className="btn primary mt" disabled={pwBusy || !currentPw || newPw.length < 8}>{pwBusy ? 'Changing…' : 'Change password'}</button>
+          <button type="submit" className="btn primary mt" disabled={pwBusy || !currentPw || newPw.length < 8}>{pwBusy ? t('changingWord') : t('changePassword')}</button>
         </form>
       </section>
 
       <form className="card" onSubmit={submitHandle} style={{ marginBottom: 16 }}>
-            <h2>Instagram handle</h2>
-            <label htmlFor="igHandle" style={{ marginTop: 12 }}>Instagram handle</label>
+            <h2>{t('igHandleTitle')}</h2>
+            <label htmlFor="igHandle" style={{ marginTop: 12 }}>{t('igHandleTitle')}</label>
             <input id="igHandle" placeholder="@yourhandle" value={handle} onChange={(e) => setHandle(e.target.value)} />
             {err && <div className="alert error">{err}</div>}
             {msg && <div className="alert success">{msg}</div>}
-            <button type="submit" className="btn primary mt" disabled={saving}>{saving ? 'Saving…' : 'Save settings'}</button>
+            <button type="submit" className="btn primary mt" disabled={saving}>{saving ? t('savingWord') : t('saveSettingsBtn')}</button>
           </form>
 
           <div className="card">
-            <h2>Connections</h2>
+            <h2>{t('connections')}</h2>
             <p className="muted small" style={{ marginTop: 8 }}>
-              Instagram: <b style={{ color: 'var(--ink)' }}>{connected ? `Connected${username ? ` as @${username}` : ''}${igAccountCount > 1 ? ` (${igAccountCount} accounts)` : ''}` : 'Not connected'}</b>
+              Instagram: <b style={{ color: 'var(--ink)' }}>{connected ? `${username ? t('statusConnectedAs').replace('{name}', username) : t('connected')}${igAccountCount > 1 ? ` ${t('accountsCountSuffix').replace('{n}', igAccountCount)}` : ''}` : t('notConnected')}</b>
             </p>
             <p className="muted small" style={{ marginTop: 8 }}>
-              Instagram and YouTube linking now lives on the Connections page — connect, set the default account, or disconnect there.
+              {t('settingsConnNote')}
             </p>
             <div style={{ marginTop: 14 }}>
-              <button type="button" className="btn primary" onClick={() => { if (onNavigate) onNavigate('connections') }}>Manage connections</button>
+              <button type="button" className="btn primary" onClick={() => { if (onNavigate) onNavigate('connections') }}>{t('manageConnections')}</button>
             </div>
           </div>
 
           <div className="card" style={{ marginTop: 16 }}>
-            <h2>Preferences</h2>
+            <h2>{t('preferencesTitle')}</h2>
             <p className="muted small" style={{ marginTop: 8 }}>
-              The server only holds an uploaded file until Instagram publishes it — after a successful post, the server copy is deleted automatically to save space (the post stays live on Instagram, and the library entry is marked “Published — server copy removed”). Files still needed by scheduled posts are never deleted, and media added by link is never touched.
+              {t('storageExplain')}
             </p>
             <label style={{ display: 'flex', gap: 10, alignItems: 'flex-start', marginTop: 12, cursor: 'pointer' }}>
               <input type="checkbox" checked={settings?.keepServerCopyAfterPublish === true} disabled={saving}
-                onChange={async (e) => { setErr(''); setMsg(''); try { await onSave({ keepServerCopyAfterPublish: e.target.checked }); setMsg('Storage setting saved.') } catch (e2) { setErr(e2.message || 'Could not save settings.') } }}
+                onChange={async (e) => { setErr(''); setMsg(''); try { await onSave({ keepServerCopyAfterPublish: e.target.checked }); setMsg(t('storageSaved')) } catch (e2) { setErr(e2.message || t('settingsSaveFail')) } }}
                 style={{ width: 18, height: 18, marginTop: 2, flex: 'none' }} />
-              <span><b>Keep a server copy after publishing</b><br /><span className="muted small">Off by default. Turn it on if you want to reuse the same file for more posts later — it uses more storage.</span></span>
+              <span><b>{t('keepCopyTitle')}</b><br /><span className="muted small">{t('keepCopyNote')}</span></span>
             </label>
-            <h3 style={{ marginTop: 18 }}>Default YouTube visibility</h3>
-            <p className="muted small" style={{ marginTop: 6 }}>New posts start with this YouTube visibility in the composer, so you don&apos;t have to choose it every time. You can still change it for any single post in Step 3.</p>
-            <select aria-label="Default YouTube visibility" value={settings?.ytDefaultVisibility || 'public'} disabled={saving} style={{ marginTop: 10, maxWidth: 320 }}
-              onChange={async (e) => { setErr(''); setMsg(''); try { await onSave({ ytDefaultVisibility: e.target.value }); setMsg('Default YouTube visibility saved.') } catch (e2) { setErr(e2.message || 'Could not save settings.') } }}>
-              <option value="public">Public — everyone can watch</option>
-              <option value="unlisted">Unlisted — only people with the link</option>
-              <option value="private">Private — only you</option>
+            <h3 style={{ marginTop: 18 }}>{t('ytDefaultTitle')}</h3>
+            <p className="muted small" style={{ marginTop: 6 }}>{t('ytDefaultNote')}</p>
+            <select aria-label={t('ytDefaultTitle')} value={settings?.ytDefaultVisibility || 'public'} disabled={saving} style={{ marginTop: 10, maxWidth: 320 }}
+              onChange={async (e) => { setErr(''); setMsg(''); try { await onSave({ ytDefaultVisibility: e.target.value }); setMsg(t('ytDefaultSaved')) } catch (e2) { setErr(e2.message || t('settingsSaveFail')) } }}>
+              <option value="public">{t('ytVisPublic')}</option>
+              <option value="unlisted">{t('ytVisUnlisted')}</option>
+              <option value="private">{t('ytVisPrivate')}</option>
             </select>
-            <p className="muted small" style={{ marginTop: 6 }}>Until Google approves the app, YouTube keeps every upload Private — your choice takes effect automatically once the approval passes.</p>
-            <p className="muted small" style={{ marginTop: 12 }}>Publish results — successes and failures with their reasons — appear under Notifications on the Home screen, and failures are also flagged on the post itself.</p>
-            <h3 style={{ marginTop: 18 }}>App language</h3>
-            <p className="muted small" style={{ marginTop: 6 }}>Switch the app&rsquo;s menus and headings between English and Hinglish. Your captions and posts are never changed.</p>
+            <p className="muted small" style={{ marginTop: 6 }}>{t('ytApprovalShort')}</p>
+            <p className="muted small" style={{ marginTop: 12 }}>{t('notifHomeNote')}</p>
+            <h3 style={{ marginTop: 18 }}>{t('appLanguage')}</h3>
+            <p className="muted small" style={{ marginTop: 6 }}>{t('appLanguageNote')}</p>
             <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-              <button type="button" className={`btn small ${lang !== 'hi' ? 'primary' : 'ghost'}`} onClick={() => onLangChange && onLangChange('en')}>English</button>
-              <button type="button" className={`btn small ${lang === 'hi' ? 'primary' : 'ghost'}`} onClick={() => onLangChange && onLangChange('hi')}>Hinglish</button>
+              <button type="button" className={`btn small ${lang !== 'hi' ? 'primary' : 'ghost'}`} onClick={() => onLangChange && onLangChange('en')}>{t('englishWord')}</button>
+              <button type="button" className={`btn small ${lang === 'hi' ? 'primary' : 'ghost'}`} onClick={() => onLangChange && onLangChange('hi')}>{t('hinglishWord')}</button>
             </div>
           </div>
 
-      <BioCard />
-      <PreviewCard />
-      <InviteCard />
+      <BioCard tr={t} />
+      <PreviewCard tr={t} />
+      <InviteCard tr={t} />
       <Suspense fallback={null}><TeamCard tr={tr} /></Suspense>
 
       <section className="card" style={{ marginTop: 16 }}>
-        <h2>Support</h2>
-        <p className="muted small" style={{ marginTop: 8 }}>Questions, feedback or a problem with your account?</p>
-        <p style={{ marginTop: 10 }}><a href="/contact.html">Contact us →</a></p>
+        <h2>{t('supportTitle')}</h2>
+        <p className="muted small" style={{ marginTop: 8 }}>{t('supportSub')}</p>
+        <p style={{ marginTop: 10 }}><a href="/contact.html">{t('contactUs')}</a></p>
       </section>
 
         <section className="card" style={{ marginTop: 16 }}>
-          <h2>Your data &amp; account</h2>
+          <h2>{t('yourDataTitle')}</h2>
           <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
-            <button type="button" className="btn ghost" disabled={exporting} onClick={exportData}>{exporting ? 'Exporting…' : 'Download my data (JSON)'}</button>
+            <button type="button" className="btn ghost" disabled={exporting} onClick={exportData}>{exporting ? t('exportingWord') : t('downloadData')}</button>
           </div>
-          <p className="muted small mt">The export contains your posts, media, templates and settings. Your Instagram connection details are never included.</p>
+          <p className="muted small mt">{t('exportNote')}</p>
           <hr style={{ border: 'none', borderTop: '1px solid var(--line)', margin: '18px 0' }} />
-          <h3 style={{ color: 'var(--red)' }}>Delete account</h3>
-          <p className="muted small" style={{ marginTop: 6 }}>Permanently deletes your account and everything in it — posts, media, templates, settings and your Instagram connection. This cannot be undone.</p>
+          <h3 style={{ color: 'var(--red)' }}>{t('deleteAccountTitle')}</h3>
+          <p className="muted small" style={{ marginTop: 6 }}>{t('deleteAccountBody')}</p>
           {!confirmDeleteAccount ? (
-            <button type="button" className="btn danger mt" onClick={() => setConfirmDeleteAccount(true)}>Delete my account…</button>
+            <button type="button" className="btn danger mt" onClick={() => setConfirmDeleteAccount(true)}>{t('deleteMyAccount')}</button>
           ) : (
             <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
-              <button type="button" className="btn danger" disabled={deletingAccount} onClick={deleteAccount}>{deletingAccount ? 'Deleting…' : 'Yes, delete everything'}</button>
-              <button type="button" className="btn ghost" onClick={() => setConfirmDeleteAccount(false)}>Cancel</button>
+              <button type="button" className="btn danger" disabled={deletingAccount} onClick={deleteAccount}>{deletingAccount ? t('deletingWord') : t('yesDeleteAll')}</button>
+              <button type="button" className="btn ghost" onClick={() => setConfirmDeleteAccount(false)}>{t('cancel')}</button>
             </div>
           )}
         </section>
 
         <section className="card" style={{ marginTop: 16 }}>
-          <h2>About this app</h2>
-          <p className="muted small" style={{ marginTop: 8 }}>KiluaAI is free forever. Schedule Reels, Feed posts and Stories for Instagram, YouTube, Facebook and TikTok from one calm place.</p>
+          <h2>{t('aboutTitle')}</h2>
+          <p className="muted small" style={{ marginTop: 8 }}>{t('aboutBody')}</p>
           <ul className="muted small" style={{ marginTop: 12, paddingLeft: 18, lineHeight: 1.9 }}>
-            <li>Free forever — no trial, no card</li>
-            <li>Your media, queue and templates are yours</li>
-            <li>Publish live via the Instagram Graph API</li>
-            <li>Works on phone and desktop</li>
+            <li>{t('aboutFree')}</li>
+            <li>{t('aboutYours')}</li>
+            <li>{t('aboutApi')}</li>
+            <li>{t('aboutDevices')}</li>
           </ul>
         </section>
     </div>

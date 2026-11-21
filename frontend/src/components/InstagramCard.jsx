@@ -5,7 +5,8 @@ import { api, openInstagramConnect, openInstagramDirectConnect } from '../api.js
 // connect / set-default / disconnect logic. Rendered on the
 // Connections page; Settings shows only a summary + link here so the
 // logic exists exactly once.
-export default function InstagramCard({ settings, onInstagramChanged }) {
+export default function InstagramCard({ settings, onInstagramChanged, tr }) {
+  const t = tr || ((k) => k)
   const [msg, setMsg] = useState('')
   const [err, setErr] = useState('')
   const [connectBusy, setConnectBusy] = useState(false)
@@ -48,7 +49,7 @@ export default function InstagramCard({ settings, onInstagramChanged }) {
       // browser and this screen stays put; in a web browser this tab
       // has navigated away. The focus/visibility refresh above updates
       // the status when the user returns.
-      setMsg('Instagram login opened — approve access there, then come back here. This screen updates itself when you return.')
+      setMsg(t('msgIgOpened'))
     } finally { setConnectBusy(false) }
   }
 
@@ -57,7 +58,7 @@ export default function InstagramCard({ settings, onInstagramChanged }) {
     setConnectBusy(true)
     try {
       await openInstagramConnect()
-      setMsg('Facebook login opened — approve access there, then come back here. This screen updates itself when you return.')
+      setMsg(t('msgFbOpened'))
     } finally { setConnectBusy(false) }
   }
 
@@ -67,11 +68,11 @@ export default function InstagramCard({ settings, onInstagramChanged }) {
     try {
       const res = await api.disconnectInstagram(igUserId)
       setMsg(res.instagramConnected
-        ? `@${uname || 'That account'} disconnected. Your other Instagram accounts stay connected.`
-        : 'Instagram disconnected.')
+        ? t('msgDisconnectedOne').replace('{name}', uname || t('msgDisconnectedThat'))
+        : t('msgDisconnected'))
       if (onInstagramChanged) onInstagramChanged()
     } catch (e2) {
-      setErr(e2.message || 'Could not disconnect.')
+      setErr(e2.message || t('errDisconnect'))
     } finally { setDisconnecting(false) }
   }
 
@@ -79,10 +80,10 @@ export default function InstagramCard({ settings, onInstagramChanged }) {
     setErr(''); setMsg('')
     try {
       await api.setDefaultInstagramAccount(igUserId)
-      setMsg('Default Instagram account updated — new posts will use it.')
+      setMsg(t('msgDefaultUpdated'))
       if (onInstagramChanged) onInstagramChanged()
     } catch (e2) {
-      setErr(e2.message || 'Could not set the default account.')
+      setErr(e2.message || t('errSetDefault'))
     }
   }
 
@@ -90,60 +91,60 @@ export default function InstagramCard({ settings, onInstagramChanged }) {
     <div className="card">
       <h2>Instagram</h2>
       <p className="muted small" style={{ marginTop: 8 }}>
-        Status: <b style={{ color: 'var(--ink)' }}>{connected ? `Connected${username ? ` as @${username}` : ''}` : 'Not connected'}</b>
+        {t('statusWord')} <b style={{ color: 'var(--ink)' }}>{connected ? (username ? t('statusConnectedAs').replace('{name}', username) : t('connected')) : t('notConnected')}</b>
       </p>
       {connected && health && !health.needsReconnect && (
         <p className="muted small" style={{ marginTop: 8 }}>
           {health.tokenNeverExpires
-            ? 'This connection does not expire — no renewal needed, ever.'
+            ? t('healthNever')
             : healthUntil
-              ? <>Valid until <b style={{ color: 'var(--ink)' }}>{healthUntil}</b>{health.daysRemaining !== null ? ` (${health.daysRemaining} days)` : ''} — and it <b style={{ color: 'var(--ink)' }}>renews itself automatically</b> before that date. You never need to reconnect.</>
-              : 'This connection renews itself automatically — you never need to reconnect.'}
-          {healthRenewed ? ` Last auto-renewed ${healthRenewed}.` : ''}
+              ? <>{t('healthValidUntil')} <b style={{ color: 'var(--ink)' }}>{healthUntil}</b>{health.daysRemaining !== null ? ` ${t('healthDaysPart').replace('{n}', health.daysRemaining)}` : ''} {t('healthRenews')}</>
+              : t('healthAuto')}
+          {healthRenewed ? ` ${t('healthLastRenewed').replace('{date}', healthRenewed)}` : ''}
         </p>
       )}
       {connected && health?.needsReconnect && (
-        <div className="alert error" style={{ marginTop: 12 }}><b>Instagram ended this connection.</b> Meta revoked it (for example a password change, or access removed in your Meta settings), so automatic renewal can&apos;t save it. Use the Connect Instagram button below to log in again — that&apos;s the only time you ever need to reconnect.</div>
+        <div className="alert error" style={{ marginTop: 12 }}><b>{t('igEndedTitle')}</b> {t('igEndedBody')}</div>
       )}
       {connected && health?.refreshBlocked && !health.needsReconnect && (
-        <div className="warn amber" style={{ marginTop: 12 }}><div><b>Automatic renewal could not run for this connection.</b> The app will keep checking, but if it reaches its expiry date you will need to reconnect once with the button below.{(health.lastDebugError || health.lastRefreshError) ? <> Meta&apos;s reason: <i>{health.lastRefreshError || health.lastDebugError}</i></> : ''}</div></div>
+        <div className="warn amber" style={{ marginTop: 12 }}><div><b>{t('renewalBlockedTitle')}</b> {t('renewalBlockedBody')}{(health.lastDebugError || health.lastRefreshError) ? <> {t('metaReason')} <i>{health.lastRefreshError || health.lastDebugError}</i></> : ''}</div></div>
       )}
       <p className="muted small" style={{ marginTop: 14 }}>
-        One login with Instagram. Instagram opens its own login page, you approve access once, and from then on the connection <b style={{ color: 'var(--ink)' }}>renews itself automatically</b>. Your Instagram must be a Business or Creator account — no Facebook account needed.
+        {t('igExplainA')} <b style={{ color: 'var(--ink)' }}>{t('igExplainBold')}</b>{t('igExplainB')}
       </p>
       <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
         <button type="button" className="btn primary" disabled={connectBusy} onClick={startConnect}>
-          {connectBusy ? 'Opening Instagram login…' : connected ? 'Connect another Instagram account' : 'Connect Instagram'}
+          {connectBusy ? t('openingIgLogin') : connected ? t('connectAnother') : t('checkConnect')}
         </button>
         <button type="button" className="btn ghost" disabled={connectBusy} onClick={startFacebookConnect}>
-          or connect via Facebook
+          {t('connectViaFb')}
         </button>
       </div>
       <p className="muted small" style={{ marginTop: 10 }}>
-        Connecting via Facebook uses Meta&apos;s Facebook login instead, and needs your Instagram linked to a Facebook Page.
+        {t('fbExplain')}
       </p>
       {igAccounts.length > 0 && (
         <div style={{ marginTop: 16 }}>
-          <h3 style={{ marginBottom: 8 }}>Connected accounts</h3>
+          <h3 style={{ marginBottom: 8 }}>{t('connectedAccounts')}</h3>
           {igAccounts.map((a) => {
             const broken = !!a.health?.needsReconnect
             return (
             <div key={a.igUserId} style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', padding: '10px 0', borderTop: '1px solid var(--line)', ...(broken ? { background: 'var(--red-soft)', borderRadius: 10, padding: '10px 12px', borderTop: 'none', marginTop: 6 } : {}) }}>
               <b style={{ color: 'var(--ink)' }}>@{a.username || a.igUserId}</b>
               {a.isDefault
-                ? <span className="badge brand">Default</span>
-                : <button type="button" className="btn ghost small" onClick={() => makeDefault(a.igUserId)}>Set as default</button>}
+                ? <span className="badge brand">{t('defaultBadge')}</span>
+                : <button type="button" className="btn ghost small" onClick={() => makeDefault(a.igUserId)}>{t('setAsDefault')}</button>}
               {broken
-                ? <span className="small" style={{ color: 'var(--red)', fontWeight: 700 }}>Connection broken — posts for this account can&apos;t publish</span>
-                : <span className="muted small">{a.health?.tokenNeverExpires ? 'Never expires' : 'Auto-renews'}</span>}
-              {broken && <button type="button" className="btn primary small" disabled={connectBusy} onClick={startConnect}>{connectBusy ? 'Opening…' : 'Reconnect'}</button>}
+                ? <span className="small" style={{ color: 'var(--red)', fontWeight: 700 }}>{t('accountBrokenNote')}</span>
+                : <span className="muted small">{a.health?.tokenNeverExpires ? t('neverExpires') : t('autoRenews')}</span>}
+              {broken && <button type="button" className="btn primary small" disabled={connectBusy} onClick={startConnect}>{connectBusy ? t('openingShort') : t('reconnect')}</button>}
               <button type="button" className="btn danger small" disabled={disconnecting} onClick={() => disconnect(a.igUserId, a.username)} style={{ marginLeft: 'auto' }}>
-                {disconnecting ? 'Disconnecting…' : 'Disconnect'}
+                {disconnecting ? t('disconnectingWord') : t('disconnectWord')}
               </button>
             </div>
             )
           })}
-          <p className="muted small" style={{ marginTop: 8 }}>Each post publishes to the account you pick in the Studio. Disconnecting one account never touches the others — posts scheduled for a disconnected account fail with a clear message instead of posting to the wrong profile.</p>
+          <p className="muted small" style={{ marginTop: 8 }}>{t('accountsNote')}</p>
         </div>
       )}
       {err && <div className="alert error">{err}</div>}

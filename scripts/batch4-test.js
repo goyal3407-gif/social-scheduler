@@ -51,14 +51,18 @@ function makeClient(base) {
 async function main() {
   // ---- 1. i18n parity ----
   const i18n = await import(pathToFileURL(path.join(__dirname, '..', 'frontend', 'src', 'i18n.js')).href);
-  const en = Object.keys(i18n.STRINGS.en).sort();
-  const hi = Object.keys(i18n.STRINGS.hi).sort();
+  const dictMod = await import(pathToFileURL(path.join(__dirname, '..', 'frontend', 'src', 'i18n-dict.js')).href);
+  // Batch 5: the dictionary is split — CORE in i18n.js, the full dict in
+  // the lazily loaded i18n-dict.js. Parity is checked on the MERGED set.
+  const STRINGS = { en: { ...i18n.CORE.en, ...dictMod.DICT.en }, hi: { ...i18n.CORE.hi, ...dictMod.DICT.hi } };
+  const en = Object.keys(STRINGS.en).sort();
+  const hi = Object.keys(STRINGS.hi).sort();
   check('i18n EN/HI exact key parity', JSON.stringify(en) === JSON.stringify(hi), `en=${en.length} hi=${hi.length}`);
   const batch4Keys = ['pricing', 'myPlan', 'todayGlance', 'publishedToday', 'problems', 'allGood', 'connected', 'notConnected', 'connectionBroken', 'reconnect', 'openConnections', 'reviewInQueue', 'nothingScheduled', 'monthly', 'yearly', 'twoMonthsFree', 'mostPopular', 'bestForYou', 'currentPlan', 'perMonth', 'perYear', 'postsToday', 'postsThisMonth', 'accountsConnected', 'aiCaptionsToday', 'lifetime', 'activeUntil', 'upgrade', 'paymentSoon', 'recHitting', 'recNear', 'recFits', 'recTop', 'recComp', 'featAccounts', 'featAccountsUnlimited', 'featPostsMonth', 'featPostsMonthUnlimited', 'featPostsDay', 'featServerReadyAll', 'featServerReadyNext', 'featCrossPostBulk', 'featPriority', 'featMultiAccount', 'featTeam', 'featAnalytics', 'featSupportFirst', 'featAi', 'featAiUnlimited', 'pricingSub', 'upgradeYearlyLine', 'probPosts', 'probOverdue', 'probConnection'];
-  check('all batch-4 keys present in both languages', batch4Keys.every((k) => i18n.STRINGS.en[k] && i18n.STRINGS.hi[k]),
-    batch4Keys.filter((k) => !i18n.STRINGS.en[k] || !i18n.STRINGS.hi[k]).join(','));
+  check('all batch-4 keys present in both languages', batch4Keys.every((k) => STRINGS.en[k] && STRINGS.hi[k]),
+    batch4Keys.filter((k) => !STRINGS.en[k] || !STRINGS.hi[k]).join(','));
   check('recommendation strings carry the {plan} placeholder in both languages',
-    ['recHitting', 'recNear'].every((k) => i18n.STRINGS.en[k].includes('{plan}') && i18n.STRINGS.hi[k].includes('{plan}')));
+    ['recHitting', 'recNear'].every((k) => STRINGS.en[k].includes('{plan}') && STRINGS.hi[k].includes('{plan}')));
 
   // ---- 2. Pricing data contract ----
   const port = 3241;
@@ -98,6 +102,13 @@ async function main() {
     check('pro limits (3 accounts, 100/month, no daily cap)', by.pro?.limits?.accounts === 3 && by.pro?.limits?.postsPerMonth === 100 && by.pro?.limits?.postsPerDay === null);
     check('max is full-bridge with unlimited posts', by.max?.fullBridge === true && by.max?.limits?.postsPerMonth === null && by.max?.limits?.accounts === 10);
     check('ultra is full-bridge, unlimited accounts + AI', by.ultra?.fullBridge === true && by.ultra?.limits?.accounts === null && by.ultra?.aiPerDay === null);
+    // ITEM 6 (owner decision 2026-11-21): pin the decided plan numbers
+    // so any future drift fails loudly — Free AI 5/day · Pro AI 25/day ·
+    // Max AI 100/day, and Max/Ultra carry no post caps at all.
+    check('ITEM-6 decided limits pinned (AI 5/25/100, max+ultra no post caps)',
+      by.free?.aiPerDay === 5 && by.pro?.aiPerDay === 25 && by.max?.aiPerDay === 100
+      && by.max?.limits?.postsPerDay === null && by.ultra?.limits?.postsPerDay === null && by.ultra?.limits?.postsPerMonth === null,
+      JSON.stringify(opts.map((o) => [o.plan, o.aiPerDay, o.limits?.postsPerDay, o.limits?.postsPerMonth])));
     check('free user kinds: free=current, rest=upgrade, charge = full price',
       by.free?.kind === 'current' && ['pro', 'max', 'ultra'].every((k) => by[k]?.kind === 'upgrade' && by[k]?.chargeInr === by[k]?.priceInr));
     check('usage block still present for the meters', !!u.data?.usage && 'postsThisMonth' in u.data.usage && 'accountsConnected' in u.data.usage);
@@ -118,13 +129,13 @@ async function main() {
     const mainSrc = main ? read(main) : '';
     const pricingSrc = pricingChunk ? read(pricingChunk) : '';
     const allSrc = files.map(read).join('\n');
-    check('Pricing-only copy lives in the Pricing chunk, not the main chunk',
-      pricingSrc.includes('whole queue server-ready') && !mainSrc.includes('whole queue server-ready'));
+    check('Pricing-only copy lives outside the main chunk (batch 5: lazy dict chunk)',
+      allSrc.includes('whole queue server-ready') && !mainSrc.includes('whole queue server-ready'));
     check('removed Dashboard sections are gone from every chunk',
       !allSrc.includes('Daily plan — today') && !allSrc.includes('Last 14 days') && !allSrc.includes('Recent activity'));
     check('old PlanCard heading literal is gone', !allSrc.includes('My Plan —'));
     check('new dictionary strings shipped in both languages',
-      mainSrc.includes('Today at a glance') && mainSrc.includes('Tumhare liye best') && mainSrc.includes('Plans ke daam'));
+      allSrc.includes('Today at a glance') && allSrc.includes('Tumhare liye best') && allSrc.includes('Plans ke daam'));
     check('MyStats moved, not deleted (its honest note still ships)', allSrc.includes('Your numbers') || allSrc.includes('Aapke numbers'));
     check('prices use Indian digit grouping (en-IN) in the Pricing chunk', pricingSrc.includes('en-IN'));
   }

@@ -45,7 +45,8 @@ function fmtSize(bytes) {
 // background (autoBridge.js); the original stays on the phone. Offline
 // schedule requests wait in the pending list below with a visible
 // status and finish themselves when the app is back online.
-function DeviceLibrary({ onUploaded, onUpload }) {
+function DeviceLibrary({ onUploaded, onUpload, tr }) {
+  const t = tr || ((k) => k)
   const [items, setItems] = useState([])
   const [pending, setPending] = useState([])
   const [importing, setImporting] = useState(false)
@@ -79,11 +80,11 @@ function DeviceLibrary({ onUploaded, onUpload }) {
     setErr(''); setMsg(''); setImporting(true)
     let ok = 0
     for (const f of list) {
-      if (f.size > 200 * 1024 * 1024) { setErr(`"${f.name}" is over the 200 MB per-file limit and was skipped.`); continue }
-      try { await importDeviceFile(f); ok++ } catch (e) { setErr(e.message || 'Could not save that file on this device.') }
+      if (f.size > 200 * 1024 * 1024) { setErr(t('errOverLimit').replace('{name}', f.name)); continue }
+      try { await importDeviceFile(f); ok++ } catch (e) { setErr(e.message || t('devErrSave')) }
     }
     setImporting(false)
-    if (ok) setMsg(`Saved ${ok} file${ok === 1 ? '' : 's'} on this phone — nothing was uploaded.`)
+    if (ok) setMsg(t(ok === 1 ? 'devMsgSavedOne' : 'devMsgSavedMany').replace('{n}', ok))
     refresh()
   }
 
@@ -92,29 +93,29 @@ function DeviceLibrary({ onUploaded, onUpload }) {
     try {
       const file = await readDeviceFile(item)
       await onUpload(file, { folder: 'Uploads', title: item.title })
-      setMsg('Copy uploaded to your library — the original stays on this phone.')
-    } catch (e) { setErr(e.message || 'Upload failed — the original is still on this phone.') }
+      setMsg(t('devMsgUploaded'))
+    } catch (e) { setErr(e.message || t('devErrUpload')) }
     setBusyId('')
   }
 
   const remove = async (item) => {
     setErr(''); setMsg('')
-    try { await deleteDeviceItem(item.id); await refresh() } catch (e) { setErr(e.message || 'Could not remove that file.') }
+    try { await deleteDeviceItem(item.id); await refresh() } catch (e) { setErr(e.message || t('devErrRemove')) }
   }
 
   const schedule = async (item) => {
-    if (!when) { setErr('Pick a date and time for the post first.'); return }
+    if (!when) { setErr(t('devErrPickTime')); return }
     setErr(''); setMsg(''); setBusyId(item.id)
     try {
       const res = await scheduleFromDevice(item, { caption, hashtags, format, scheduleTime: fromLocalInputValue(when) })
-      if (res.outcome === 'scheduled') setMsg('Scheduled ✓ — find it in your Queue. One copy is on the server; your original stays on this phone.')
-      else if (res.outcome === 'posted-late') setMsg('That time had already passed, so the post was created to publish right away — find it in your Queue.')
-      else if (res.outcome === 'missing') setErr('That file is no longer on this phone, so the post could not be created.')
-      else setMsg('Waiting for network — it will upload and schedule itself automatically when you are back online. You can close the app.')
+      if (res.outcome === 'scheduled') setMsg(t('devMsgScheduled'))
+      else if (res.outcome === 'posted-late') setMsg(t('devMsgPostedLate'))
+      else if (res.outcome === 'missing') setErr(t('devErrMissing'))
+      else setMsg(t('devMsgWaiting'))
       setSchedId(''); setCaption(''); setHashtags(''); setWhen('')
       await refresh()
       if (onUploaded) onUploaded()
-    } catch (e) { setErr(e.message || 'Could not schedule that post.') }
+    } catch (e) { setErr(e.message || t('devErrSchedule')) }
     setBusyId('')
   }
 
@@ -126,16 +127,16 @@ function DeviceLibrary({ onUploaded, onUpload }) {
     <div className="card mt2">
       <div className="card-head">
         <div>
-          <h2>On this phone</h2>
-          <p>Videos and photos stored inside the app on your phone. Importing uploads nothing — scheduling sends one copy to the server in the background, and your original always stays here.</p>
+          <h2>{t('devTitle')}</h2>
+          <p>{t('devSub')}</p>
         </div>
-        <span className="pill">{items.length} on device</span>
+        <span className="pill">{t('devCount').replace('{n}', items.length)}</span>
       </div>
       {err && <div className="alert error">{err}</div>}
       {msg && <div className="alert success">{msg}</div>}
       <div className="drop" onClick={() => devFileRef.current?.click()} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter') devFileRef.current?.click() }}>
-        <b>{importing ? 'Saving…' : 'Add videos or photos to this phone'}</b>
-        <p className="small">Stored in the app only — no cloud storage used until you schedule a post.</p>
+        <b>{importing ? t('devSaving') : t('devAddTitle')}</b>
+        <p className="small">{t('devAddSub')}</p>
         <input ref={devFileRef} type="file" multiple accept="video/*,image/*" style={{ display: 'none' }} onChange={(e) => { pick(e.target.files); e.target.value = '' }} />
       </div>
       {items.length > 0 && (
@@ -150,23 +151,23 @@ function DeviceLibrary({ onUploaded, onUpload }) {
                     : <div style={{ width: 44, height: 58, borderRadius: 8, flex: 'none', background: 'var(--surface-2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }} aria-hidden="true">{item.kind === 'image' ? '🖼' : '🎬'}</div>}
                 <div style={{ minWidth: 0, flex: 1 }}>
                   <b title={item.title}>{item.title}</b>
-                  <span className="muted small">{fmtSize(item.size)} · {item.kind}{item.width && item.height ? ` · ${item.width}×${item.height}` : ''} · on this phone</span>
+                  <span className="muted small">{fmtSize(item.size)} · {item.kind}{item.width && item.height ? ` · ${item.width}×${item.height}` : ''} · {t('devOnPhone')}</span>
                 </div>
                 <div style={{ display: 'flex', gap: 6, flex: 'none', flexWrap: 'wrap' }}>
-                  <button type="button" className="btn primary small" disabled={busyId === item.id} onClick={() => { setSchedId(schedId === item.id ? '' : item.id); setErr(''); setMsg('') }}>Schedule</button>
-                  <button type="button" className="btn ghost small" disabled={busyId === item.id} onClick={() => uploadCopy(item)}>{busyId === item.id ? 'Working…' : 'Upload copy'}</button>
-                  <button type="button" className="btn danger small" disabled={busyId === item.id} onClick={() => remove(item)}>Remove</button>
+                  <button type="button" className="btn primary small" disabled={busyId === item.id} onClick={() => { setSchedId(schedId === item.id ? '' : item.id); setErr(''); setMsg('') }}>{t('devSchedule')}</button>
+                  <button type="button" className="btn ghost small" disabled={busyId === item.id} onClick={() => uploadCopy(item)}>{busyId === item.id ? t('devWorking') : t('devUploadCopy')}</button>
+                  <button type="button" className="btn danger small" disabled={busyId === item.id} onClick={() => remove(item)}>{t('devRemove')}</button>
                 </div>
               </div>
               {schedId === item.id && (
                 <div style={{ border: '1px solid var(--line-2)', borderRadius: 10, padding: 12, margin: '4px 0 10px', background: 'var(--surface-2)' }}>
-                  <label htmlFor={`devCap-${item.id}`}>Caption</label>
-                  <textarea id={`devCap-${item.id}`} rows={3} placeholder="Write your caption…" value={caption} onChange={(e) => setCaption(e.target.value)} />
-                  <label htmlFor={`devTags-${item.id}`} style={{ marginTop: 10 }}>Hashtags <span className="muted">(space or comma separated)</span></label>
+                  <label htmlFor={`devCap-${item.id}`}>{t('captionLabel')}</label>
+                  <textarea id={`devCap-${item.id}`} rows={3} placeholder={t('captionPh')} value={caption} onChange={(e) => setCaption(e.target.value)} />
+                  <label htmlFor={`devTags-${item.id}`} style={{ marginTop: 10 }}>{t('hashtagsLabel')} <span className="muted">{t('hashtagsNote')}</span></label>
                   <input id={`devTags-${item.id}`} placeholder="#reels #daily" value={hashtags} onChange={(e) => setHashtags(e.target.value)} />
                   <div className="two-col" style={{ marginTop: 10 }}>
                     <div>
-                      <label htmlFor={`devFmt-${item.id}`}>Format</label>
+                      <label htmlFor={`devFmt-${item.id}`}>{t('formatLabel')}</label>
                       <select id={`devFmt-${item.id}`} value={format} onChange={(e) => setFormat(e.target.value)}>
                         <option value="REELS">REELS</option>
                         <option value="FEED">FEED</option>
@@ -174,14 +175,14 @@ function DeviceLibrary({ onUploaded, onUpload }) {
                       </select>
                     </div>
                     <div>
-                      <label htmlFor={`devWhen-${item.id}`}>Schedule time</label>
+                      <label htmlFor={`devWhen-${item.id}`}>{t('scheduleTimeLabel')}</label>
                       <input id={`devWhen-${item.id}`} type="datetime-local" value={when} onChange={(e) => setWhen(e.target.value)} />
                     </div>
                   </div>
-                  <p className="muted small" style={{ marginTop: 10 }}>Scheduling uploads one copy to the server in the background — your original stays on this phone, and the server copy is deleted after the post publishes. If you are offline, the request waits below and finishes itself when you are back online.</p>
+                  <p className="muted small" style={{ marginTop: 10 }}>{t('devSchedNote')}</p>
                   <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-                    <button type="button" className="btn primary small" disabled={busyId === item.id} onClick={() => schedule(item)}>{busyId === item.id ? 'Working…' : 'Schedule post'}</button>
-                    <button type="button" className="btn ghost small" onClick={() => setSchedId('')}>Cancel</button>
+                    <button type="button" className="btn primary small" disabled={busyId === item.id} onClick={() => schedule(item)}>{busyId === item.id ? t('devWorking') : t('devSchedulePost')}</button>
+                    <button type="button" className="btn ghost small" onClick={() => setSchedId('')}>{t('cancel')}</button>
                   </div>
                 </div>
               )}
@@ -191,15 +192,15 @@ function DeviceLibrary({ onUploaded, onUpload }) {
       )}
       {pending.length > 0 && (
         <div className="mt">
-          <h3 style={{ margin: '6px 0 4px' }}>Waiting to finish</h3>
+          <h3 style={{ margin: '6px 0 4px' }}>{t('devWaitingTitle')}</h3>
           {pending.map((p) => (
             <div key={p.id} className="device-row">
               <div style={{ minWidth: 0 }}>
                 <b title={p.title}>{p.title}</b>
-                <span className="muted small">{p.scheduleTime ? `For ${new Date(p.scheduleTime).toLocaleString()}` : 'No time set'} · {p.status === 'failed' ? 'Not created' : 'Waiting for network'}</span>
+                <span className="muted small">{p.scheduleTime ? t('devForTime').replace('{time}', new Date(p.scheduleTime).toLocaleString()) : t('devNoTime')} · {p.status === 'failed' ? t('devNotCreated') : t('devWaitingNetwork')}</span>
                 {p.note && <span className="small" style={{ display: 'block', color: p.status === 'failed' ? 'var(--red)' : 'var(--muted)' }}>{p.note}</span>}
               </div>
-              {p.status === 'failed' && <button type="button" className="btn ghost small" style={{ flex: 'none' }} onClick={() => dismiss(p)}>Dismiss</button>}
+              {p.status === 'failed' && <button type="button" className="btn ghost small" style={{ flex: 'none' }} onClick={() => dismiss(p)}>{t('dismiss')}</button>}
             </div>
           ))}
         </div>
@@ -208,7 +209,8 @@ function DeviceLibrary({ onUploaded, onUpload }) {
   )
 }
 
-export default function MediaLibrary({ media, loading, error, onRetry, onAddLink, onUpload, onToggleFav, onDelete, onUse, searchSeed, searchNonce }) {
+export default function MediaLibrary({ media, loading, error, onRetry, onAddLink, onUpload, onToggleFav, onDelete, onUse, searchSeed, searchNonce, tr }) {
+  const t = tr || ((k) => k)
   const [q, setQ] = useState('')
   // D3: global search seed from the top nav / drawer.
   useEffect(() => {
@@ -255,39 +257,39 @@ export default function MediaLibrary({ media, loading, error, onRetry, onAddLink
     for (const f of list) {
       // Big files upload in pieces (chunked upload in api.js) — the
       // only hard stop now is the 200 MB per-file cap.
-      if (f.size > 200 * 1024 * 1024) { setErr(`"${f.name}" is over the 200 MB per-file limit and was skipped.`); continue }
+      if (f.size > 200 * 1024 * 1024) { setErr(t('errOverLimit').replace('{name}', f.name)); continue }
       try {
         const isVideo = /^video\//.test(f.type) || /\.(mp4|mov|webm)$/i.test(f.name)
         const meta = await probeUrl(URL.createObjectURL(f), isVideo)
         setProgress({ name: f.name, frac: 0 })
         await onUpload(f, { folder: newFolder || undefined, ...meta }, (frac) => setProgress({ name: f.name, frac }))
         ok++
-      } catch (e) { setErr(e.message || 'Upload failed.') }
+      } catch (e) { setErr(e.message || t('errUploadFailed')) }
       setProgress(null)
     }
     setBusy(false)
-    if (ok) setMsg(`Uploaded ${ok} file${ok === 1 ? '' : 's'}.`)
+    if (ok) setMsg(t(ok === 1 ? 'msgUploadedOne' : 'msgUploadedMany').replace('{n}', ok))
   }
 
   const addLink = async (e) => {
     e.preventDefault()
     setErr(''); setMsg('')
-    if (!url.trim()) { setErr('Paste a media URL first.'); return }
+    if (!url.trim()) { setErr(t('errPasteUrl')); return }
     setBusy(true)
     try {
       const isVideo = !/\.(png|jpe?g|gif|webp|avif)(\?|$)/i.test(url.trim())
       const meta = await probeUrl(url.trim(), isVideo)
-      await onAddLink({ url: url.trim(), title: title.trim() || url.trim(), folder: newFolder || undefined, tags: tags.split(',').map((t) => t.trim()).filter(Boolean), ...meta })
-      setMsg('Link added to your library.')
+      await onAddLink({ url: url.trim(), title: title.trim() || url.trim(), folder: newFolder || undefined, tags: tags.split(',').map((tg) => tg.trim()).filter(Boolean), ...meta })
+      setMsg(t('msgLinkAdded'))
       setUrl(''); setTitle(''); setTags('')
-    } catch (e2) { setErr(e2.message || 'Could not add link.') }
+    } catch (e2) { setErr(e2.message || t('errAddLink')) }
     setBusy(false)
   }
 
   return (
     <div>
-      <h2 className="section-title">Media Library</h2>
-      <p className="section-sub">Upload videos and images (up to 200 MB per file — big files upload in pieces automatically) or save links. Organise with folders, tags and favourites.</p>
+      <h2 className="section-title">{t('mediaTitle')}</h2>
+      <p className="section-sub">{t('mediaSub')}</p>
 
       {error && <ErrorBox error={error} onRetry={onRetry} />}
       {err && <div className="alert error">{err}</div>}
@@ -295,8 +297,8 @@ export default function MediaLibrary({ media, loading, error, onRetry, onAddLink
 
       <div className="two-col" style={{ alignItems: 'start' }}>
         <div className="card">
-          <h2>Upload</h2>
-          <p className="muted small mb">Drag files here, or choose from your device.</p>
+          <h2>{t('uploadTitle')}</h2>
+          <p className="muted small mb">{t('uploadSub')}</p>
           <div
             className={`drop ${drag ? 'drag' : ''}`}
             onDragOver={(e) => { e.preventDefault(); setDrag(true) }}
@@ -305,65 +307,65 @@ export default function MediaLibrary({ media, loading, error, onRetry, onAddLink
             onClick={() => fileRef.current?.click()}
             role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter') fileRef.current?.click() }}
           >
-            <b>{busy ? 'Uploading…' : 'Drop files here, or click to browse'}</b>
-            <p className="small">MP4, MOV, JPG, PNG, WebP — up to 200 MB per file (big files upload in pieces)</p>
+            <b>{busy ? t('uploadingWord') : t('dropHere')}</b>
+            <p className="small">{t('dropFormats')}</p>
             <input ref={fileRef} type="file" multiple accept="video/*,image/*" style={{ display: 'none' }} onChange={(e) => handleFiles(e.target.files)} />
           </div>
           {progress && (
             <div className="mt">
-              <div className="small muted" style={{ marginBottom: 4 }}>Uploading {progress.name} — {Math.round(progress.frac * 100)}%</div>
+              <div className="small muted" style={{ marginBottom: 4 }}>{t('uploadingPct').replace('{name}', progress.name).replace('{pct}', Math.round(progress.frac * 100))}</div>
               <div className="pbar"><span style={{ width: `${Math.round(progress.frac * 100)}%` }} /></div>
             </div>
           )}
-          <label htmlFor="upFolder" style={{ marginTop: 14 }}>Folder for uploads</label>
-          <input id="upFolder" placeholder="e.g. Reels, Tutorials, B-roll" value={newFolder} onChange={(e) => setNewFolder(e.target.value)} />
+          <label htmlFor="upFolder" style={{ marginTop: 14 }}>{t('folderForUploads')}</label>
+          <input id="upFolder" placeholder={t('folderPh')} value={newFolder} onChange={(e) => setNewFolder(e.target.value)} />
         </div>
 
         <form className="card" onSubmit={addLink}>
-          <h2>Add by link</h2>
-          <p className="muted small mb">Save a direct media URL without uploading the file.</p>
-          <label htmlFor="linkUrl">Media URL</label>
+          <h2>{t('addByLink')}</h2>
+          <p className="muted small mb">{t('addByLinkSub')}</p>
+          <label htmlFor="linkUrl">{t('mediaUrlLabel')}</label>
           <input id="linkUrl" type="url" placeholder="https://…/video.mp4" value={url} onChange={(e) => setUrl(e.target.value)} />
-          <label htmlFor="linkTitle" style={{ marginTop: 12 }}>Title</label>
-          <input id="linkTitle" placeholder="e.g. Street interview — part 1" value={title} onChange={(e) => setTitle(e.target.value)} />
-          <label htmlFor="linkTags" style={{ marginTop: 12 }}>Tags <span className="muted">(comma separated)</span></label>
-          <input id="linkTags" placeholder="reels, tutorial" value={tags} onChange={(e) => setTags(e.target.value)} />
-          <button type="submit" className="btn primary mt" disabled={busy}>{busy ? 'Adding…' : 'Add to library'}</button>
+          <label htmlFor="linkTitle" style={{ marginTop: 12 }}>{t('titleLabel')}</label>
+          <input id="linkTitle" placeholder={t('linkTitlePh')} value={title} onChange={(e) => setTitle(e.target.value)} />
+          <label htmlFor="linkTags" style={{ marginTop: 12 }}>{t('tagsLabel')} <span className="muted">{t('tagsNote')}</span></label>
+          <input id="linkTags" placeholder={t('tagsPh')} value={tags} onChange={(e) => setTags(e.target.value)} />
+          <button type="submit" className="btn primary mt" disabled={busy}>{busy ? t('addingWord') : t('addToLibrary')}</button>
         </form>
       </div>
 
-      {isNativeApp() ? <DeviceLibrary onUploaded={onRetry} onUpload={onUpload} /> : null}
+      {isNativeApp() ? <DeviceLibrary onUploaded={onRetry} onUpload={onUpload} tr={t} /> : null}
 
       <div className="toolbar mt2">
         <div style={{ position: 'relative', flex: 2, minWidth: 180 }}>
-          <input type="search" placeholder="Search title, tag, folder…" value={q} onChange={(e) => setQ(e.target.value)} style={{ paddingLeft: 36 }} aria-label="Search media" />
+          <input type="search" placeholder={t('searchMediaPh')} value={q} onChange={(e) => setQ(e.target.value)} style={{ paddingLeft: 36 }} aria-label={t('searchMediaAria')} />
           <span style={{ position: 'absolute', left: 11, top: 11, color: 'var(--muted)' }}><IconSearch size={16} /></span>
         </div>
-        <select value={folder} onChange={(e) => setFolder(e.target.value)} aria-label="Filter by folder">
-          {folders.map((f) => <option key={f} value={f}>{f === 'all' ? 'All folders' : f}</option>)}
+        <select value={folder} onChange={(e) => setFolder(e.target.value)} aria-label={t('filterFolderAria')}>
+          {folders.map((f) => <option key={f} value={f}>{f === 'all' ? t('allFolders') : f}</option>)}
         </select>
-        <button type="button" className={`tab ${onlyFav ? 'active' : ''}`} onClick={() => setOnlyFav(!onlyFav)} aria-pressed={onlyFav}>♥ Favourites only</button>
-        <span className="pill">{filtered.length} file{filtered.length === 1 ? '' : 's'}</span>
+        <button type="button" className={`tab ${onlyFav ? 'active' : ''}`} onClick={() => setOnlyFav(!onlyFav)} aria-pressed={onlyFav}>{t('favOnly')}</button>
+        <span className="pill">{t(filtered.length === 1 ? 'filesCountOne' : 'filesCountMany').replace('{n}', filtered.length)}</span>
       </div>
 
       {loading ? <Skeleton variant="media" rows={3} /> : filtered.length === 0 ? (
-        <div className="card"><Empty title="Library is empty" body={q || folder !== 'all' || onlyFav ? 'Nothing matches those filters — try clearing them.' : 'Upload your first video or image, or add one by link, and it will live here ready for Studio.'} action={q || folder !== 'all' || onlyFav ? undefined : <button type="button" className="btn primary small" onClick={() => fileRef.current?.click()}>Upload media</button>} /></div>
+        <div className="card"><Empty title={t('libraryEmpty')} body={q || folder !== 'all' || onlyFav ? t('libraryNoMatch') : t('libraryEmptyBody')} action={q || folder !== 'all' || onlyFav ? undefined : <button type="button" className="btn primary small" onClick={() => fileRef.current?.click()}>{t('uploadMediaBtn')}</button>} /></div>
       ) : (
         <div>
           <div className="media-grid">
             {filtered.slice(0, visibleCount).map((m) => (
               <article key={m.id} className="media-card">
                 {m.serverCopyRemoved ? (
-                  <div className="media-removed"><b>Published ✓</b><span>Server copy removed to save space — the post is live now. Upload the file again to reuse it.</span></div>
+                  <div className="media-removed"><b>{t('removedTitle')}</b><span>{t('removedBody')}</span></div>
                 ) : <MediaVisual url={m.url} kind={m.kind} posterUrl={m.posterUrl} />}
                 <div className="mc-body">
-                  <b title={m.title || m.url}>{m.title || 'Untitled'}</b>
-                  <span className="muted small">{m.folder || 'Unsorted'} · {fmtDate(m.createdAt)}{m.usedCount ? ` · Used ${m.usedCount}×` : ''}{m.width && m.height ? ` · ${m.width}×${m.height}` : ''}</span>
-                  {(m.tags || []).length > 0 && <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 6 }}>{m.tags.map((t) => <span key={t} className="chip">{t}</span>)}</div>}
+                  <b title={m.title || m.url}>{m.title || t('untitledMedia')}</b>
+                  <span className="muted small">{m.folder || t('unsortedWord')} · {fmtDate(m.createdAt)}{m.usedCount ? ` · ${t('usedTimes').replace('{n}', m.usedCount)}` : ''}{m.width && m.height ? ` · ${m.width}×${m.height}` : ''}</span>
+                  {(m.tags || []).length > 0 && <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 6 }}>{m.tags.map((tg) => <span key={tg} className="chip">{tg}</span>)}</div>}
                   <div style={{ display: 'flex', gap: 6, marginTop: 9, flexWrap: 'wrap' }}>
-                    {!m.serverCopyRemoved && <button type="button" className="btn primary small" onClick={() => onUse(m)}>Use in Studio</button>}
-                    <button type="button" className="btn ghost small" aria-label={m.favorite ? 'Remove favourite' : 'Mark favourite'} onClick={() => onToggleFav(m)}><span className={m.favorite ? 'heart' : ''}><IconHeart size={15} filled={Boolean(m.favorite)} /></span></button>
-                    <button type="button" className="btn danger small" aria-label="Delete media" onClick={() => onDelete(m)}><IconTrash size={15} /></button>
+                    {!m.serverCopyRemoved && <button type="button" className="btn primary small" onClick={() => onUse(m)}>{t('useInStudio')}</button>}
+                    <button type="button" className="btn ghost small" aria-label={m.favorite ? t('favRemoveAria') : t('favAddAria')} onClick={() => onToggleFav(m)}><span className={m.favorite ? 'heart' : ''}><IconHeart size={15} filled={Boolean(m.favorite)} /></span></button>
+                    <button type="button" className="btn danger small" aria-label={t('deleteMediaAria')} onClick={() => onDelete(m)}><IconTrash size={15} /></button>
                   </div>
                 </div>
               </article>
@@ -371,7 +373,7 @@ export default function MediaLibrary({ media, loading, error, onRetry, onAddLink
           </div>
           {filtered.length > visibleCount && (
             <div style={{ textAlign: 'center', marginTop: 18 }}>
-              <button type="button" className="btn ghost" onClick={() => setVisibleCount((c) => c + PAGE_SIZE)}>Load more ({filtered.length - visibleCount} remaining)</button>
+              <button type="button" className="btn ghost" onClick={() => setVisibleCount((c) => c + PAGE_SIZE)}>{t('loadMore').replace('{n}', filtered.length - visibleCount)}</button>
             </div>
           )}
         </div>

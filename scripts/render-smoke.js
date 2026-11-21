@@ -238,25 +238,25 @@ async function runScenario(scenario, bundleDir) {
       () => root.textContent.includes('Scheduled'),
       'dashboard to render'
     )
-    // Home search pill (D3 refinement): the pill with the app logo and
-    // the "Search posts, media…" placeholder must render on Home.
-    const pillInput = window.document.querySelector('.home-search input')
-    if (!pillInput || pillInput.getAttribute('placeholder') !== 'Search posts, media…') {
-      throw new Error('home search pill missing or wrong placeholder')
+    // Batch 5 dedupe: the old Home search pill is GONE — search lives
+    // only behind the header search icon (one search control total).
+    if (window.document.querySelector('.home-search')) {
+      throw new Error('duplicate home search pill still renders (batch 5 dedupe)')
     }
-    if (!window.document.querySelector('.home-search img')) {
-      throw new Error('home search pill logo missing')
-    }
+    // Exactly ONE "Create Post" button on the dashboard (batch 5).
+    const createBtns = [...window.document.querySelectorAll('button')].filter((el) => el.textContent.trim() === 'Create Post')
+    if (createBtns.length !== 1) throw new Error('expected exactly 1 Create Post button on Home, found ' + createBtns.length)
     // Header structure (2026-11-18 overlap fix). jsdom does no layout,
     // so overlap is asserted structurally: the brand block, the desktop
     // nav and the actions must be SEPARATE children of .topbar-in, in
     // that order — the old bug was the logo flex item shrinking to
     // min-width:0 so the nav painted over the wordmark (the CSS now
-    // pins .logo{flex:none} and lets .topnav scroll). The desktop
-    // search form must be present, and the mobile header must carry
-    // the compact search ICON button in the actions row — NOT an
-    // always-visible wide pill (the old mobile bar rendered the
-    // desktop form next to the logo, truncating + overlapping it).
+    // pins .logo{flex:none} and lets .topnav scroll). Batch 5: the
+    // header carries NO inline search form at any width (search is one
+    // icon-toggled row), and the header must carry the compact search
+    // ICON button in the actions row — NOT an always-visible wide pill
+    // (the old mobile bar rendered the desktop form next to the logo,
+    // truncating + overlapping it).
     const topbarIn = window.document.querySelector('.topbar-in')
     if (!topbarIn) fail('topbar row missing')
     const kids = [...topbarIn.children]
@@ -268,7 +268,7 @@ async function runScenario(scenario, bundleDir) {
       fail('header order is not brand block, nav, actions')
     }
     if (logoEl.contains(navEl) || navEl.contains(logoEl)) fail('brand block and nav are nested (overlap family)')
-    if (!topbarIn.querySelector('form.topnav-search input[type="search"]')) fail('desktop header search input missing')
+    if (topbarIn.querySelector('form.topnav-search')) fail('inline header search form still renders (batch 5 dedupe)')
     const searchToggle = actionsEl.querySelector('.search-toggle-btn')
     if (!searchToggle) fail('mobile search icon button missing from the header actions')
     if (window.document.querySelector('.mobile-search-row')) fail('mobile search row is expanded before the icon is tapped')
@@ -333,7 +333,9 @@ async function runScenario(scenario, bundleDir) {
     // per-account chips show ✓ / ✗.
     const partRow = [...window.document.querySelectorAll('.post-row')].find((r) => r.textContent.includes('PARTIAL POST'))
     if (!partRow) fail('partial multi-target post row missing')
-    if (!partRow.textContent.includes('partial')) fail('partial post badge does not read "partial": ' + partRow.textContent.slice(0, 200))
+    // Batch 5: the badge now shows the translated status label
+    // ("Partial") instead of the old raw lowercase status string.
+    if (!partRow.textContent.includes('Partial')) fail('partial post badge does not read "Partial": ' + partRow.textContent.slice(0, 200))
     const partTrk = partRow.querySelector('.post-tracker')
     if (!partTrk) fail('no status tracker rendered for the partial post')
     if (!partTrk.textContent.includes('Partial')) fail('partial tracker does not say "Partial": ' + partTrk.textContent)
@@ -363,10 +365,12 @@ async function runScenario(scenario, bundleDir) {
     )
     // Studio (Create): with a YouTube channel connected (stub), Step 3
     // must show the platform picker — Instagram + YouTube ticks.
+    // Batch 5: the header's duplicate "Create Post" button is gone —
+    // the nav "Create" tab is the one create entry from other tabs.
     const createBtn = await waitFor(() => {
       const els = [...window.document.querySelectorAll('button, a')]
-      return els.find((el) => el.textContent.trim() === 'Create Post')
-    }, 'Create Post control')
+      return els.find((el) => el.textContent.trim() === 'Create')
+    }, 'Create nav control')
     createBtn.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }))
     await waitFor(() => root.textContent.includes('Step 1'), 'studio to render')
     const step3 = [...window.document.querySelectorAll('button')].find((el) => el.textContent.includes('Schedule & publish'))

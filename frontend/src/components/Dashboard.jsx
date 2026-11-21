@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { api, fmtDateTime, formatCountdown, openInstagramDirectConnect } from '../api.js'
 import { ErrorBox } from './shared.jsx'
 import { IconClock } from './icons.jsx'
@@ -18,8 +18,6 @@ function useCountdown(targetIso) {
   return { label: formatCountdown(targetIso), parts: { d, h, m } }
 }
 
-const GuideWizard = lazy(() => import('./GuideWizard.jsx'))
-
 // Dashboard (batch 4): ONE job — status at a glance, short enough to
 // read in five seconds. Greeting + next post + one big New Post
 // button, the problem alerts (never hidden — the satisfaction rule),
@@ -28,13 +26,8 @@ const GuideWizard = lazy(() => import('./GuideWizard.jsx'))
 // to its own tab: the plan lives on Pricing, the post lists live in
 // Queue, the day-by-day table lives in Calendar, totals live in
 // Pricing's "Your numbers".
-export default function Dashboard({ posts, media, user, loading, error, onRetry, onCreate, onGoQueue, onNavigate, onPublish, publishingId, settings, onDismissChecklist, overdue, onPublishDue, notifications, tr, onSearch, onDismissGuide, inWorkspace }) {
+export default function Dashboard({ posts, media, user, loading, error, onRetry, onCreate, onGoQueue, onNavigate, onPublish, publishingId, settings, onDismissChecklist, overdue, onPublishDue, notifications, tr, inWorkspace }) {
   const t = tr || ((k) => k)
-  // Home search pill: routes into the same global search as the top
-  // nav — Queue filtered by caption, Media by name. Kept on Home
-  // because on phones the header search collapses to an icon; this
-  // pill is the visible search entry here.
-  const [homeQ, setHomeQ] = useState('')
   // Publishing streak (real data only): consecutive days with at
   // least one published post, ending today or yesterday.
   const streak = useMemo(() => {
@@ -53,10 +46,10 @@ export default function Dashboard({ posts, media, user, loading, error, onRetry,
   // that is where accounts live now (batch 4 de-duplication; the old
   // card sent users to Settings, which itself pointed onward).
   const checklist = useMemo(() => [
-    { done: Boolean(settings?.instagramConnected), label: 'Connect Instagram', hint: 'So your posts can publish live', tab: 'connections', cta: 'Connect' },
-    { done: (media || []).length > 0, label: 'Add your first media', hint: 'Upload a video or image, or add one by link', tab: 'media', cta: 'Add media' },
-    { done: (posts || []).length > 0, label: 'Schedule your first post', hint: 'Pick a time in the Studio', tab: 'studio', cta: 'Create a post' },
-  ], [settings, media, posts])
+    { done: Boolean(settings?.instagramConnected), label: t('checkConnect'), hint: t('checkConnectHint'), tab: 'connections', cta: t('checkConnectCta') },
+    { done: (media || []).length > 0, label: t('checkMedia'), hint: t('checkMediaHint'), tab: 'media', cta: t('checkMediaCta') },
+    { done: (posts || []).length > 0, label: t('checkSchedule'), hint: t('checkScheduleHint'), tab: 'studio', cta: t('checkScheduleCta') },
+  ], [settings, media, posts, t])
   const checklistDone = checklist.every((c) => c.done)
   const checklistDismissed = settings?.checklistDismissed === true
   const greeting = useMemo(() => {
@@ -136,46 +129,32 @@ export default function Dashboard({ posts, media, user, loading, error, onRetry,
     return (posts || []).some((p) => p.status === 'scheduled' && p.scheduleTime && new Date(p.scheduleTime).toDateString() === key)
   }, [posts])
 
-  // First-run guide (batch 3): the wizard form of the checklist
-  // below, for brand-new users only (no posts yet, guide not
-  // dismissed, steps not all done). In a team workspace the guide
-  // never appears — the workspace is not yours to set up.
-  const guideSteps = checklist.map((c) => ({ done: c.done, title: c.label, body: c.hint, tab: c.tab, cta: c.cta }))
-  const showGuide = !loading && !inWorkspace && settings && settings.guideDismissed !== true && !checklistDone && (posts || []).length === 0
+  // Batch 5: the first-run story lives in ONE place now — the
+  // SetupWizard (3 steps: connect, import, first post). The old
+  // second wizard (GuideWizard) is gone; this checklist is the same
+  // 3 steps in card form, with the same labels.
   return (
     <div>
-      {showGuide && (
-        <Suspense fallback={null}>
-          <GuideWizard steps={guideSteps} tr={t} onNavigate={onNavigate} onDismiss={onDismissGuide} />
-        </Suspense>
-      )}
       <section className="home-head" aria-label="Next scheduled post">
         <h1>{greeting}</h1>
-        {onSearch && (
-          <form className="home-search" role="search" onSubmit={(e) => { e.preventDefault(); onSearch(homeQ) }}>
-            <img src="/icon-192.png" alt="" width="26" height="26" aria-hidden="true" />
-            <input type="search" value={homeQ} onChange={(e) => setHomeQ(e.target.value)} placeholder={t('homeSearchPlaceholder')} aria-label="Search posts and media" />
-            <button type="submit" className="btn small">Search</button>
-          </form>
-        )}
         {loading ? (
           <div style={{ marginTop: 14 }}><div className="skel" style={{ height: 20, width: '55%' }} /><div className="skel" style={{ height: 16, width: '40%', marginTop: 10 }} /></div>
         ) : next ? (
           <>
-            <p className="muted" style={{ marginTop: 6 }}>Next up: <b style={{ color: 'var(--ink)' }}>{next.caption ? (next.caption.length > 90 ? `${next.caption.slice(0, 90)}…` : next.caption) : 'Untitled post'}</b></p>
-            <p className="muted small" style={{ marginTop: 4 }}>{next.platform || 'Instagram'} · {next.format || 'REELS'} · {fmtDateTime(next.scheduleTime)} · in {cd.label}{next.hashtags ? ` · ${next.hashtags}` : ''}</p>
+            <p className="muted" style={{ marginTop: 6 }}>{t('nextUpPrefix')}: <b style={{ color: 'var(--ink)' }}>{next.caption ? (next.caption.length > 90 ? `${next.caption.slice(0, 90)}…` : next.caption) : t('untitledPost')}</b></p>
+            <p className="muted small" style={{ marginTop: 4 }}>{next.platform || 'Instagram'} · {next.format || 'REELS'} · {fmtDateTime(next.scheduleTime)} · {t('nextInLabel').replace('{label}', cd.label)}{next.hashtags ? ` · ${next.hashtags}` : ''}</p>
             <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
-              <button type="button" className="btn" onClick={onCreate}>Create Post</button>
-              <button type="button" className="btn ghost" onClick={() => onPublish && onPublish(next)} disabled={publishingId === next.id}>Publish next now</button>
-              <button type="button" className="btn ghost" onClick={onGoQueue}>View queue</button>
+              <button type="button" className="btn" onClick={onCreate}>{t('createPost')}</button>
+              <button type="button" className="btn ghost" onClick={() => onPublish && onPublish(next)} disabled={publishingId === next.id}>{t('publishNextNow')}</button>
+              <button type="button" className="btn ghost" onClick={onGoQueue}>{t('viewQueue')}</button>
             </div>
           </>
         ) : (
           <>
-            <p className="muted" style={{ marginTop: 6 }}>Nothing scheduled yet — create your first post, or import a whole week at once with Bulk scheduling. It&apos;s free, forever.</p>
+            <p className="muted" style={{ marginTop: 6 }}>{t('nothingScheduledYet')}</p>
             <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
-              <button type="button" className="btn" onClick={onCreate}>Create Post</button>
-              <button type="button" className="btn ghost" onClick={onGoQueue}>View queue</button>
+              <button type="button" className="btn" onClick={onCreate}>{t('createPost')}</button>
+              <button type="button" className="btn ghost" onClick={onGoQueue}>{t('viewQueue')}</button>
             </div>
           </>
         )}
@@ -186,10 +165,10 @@ export default function Dashboard({ posts, media, user, loading, error, onRetry,
       {!loading && brokenIg.length > 0 && (
         <div className="alert error" role="alert" style={{ marginTop: 16 }}>
           <div style={{ flex: 1 }}>
-            <b>Instagram connection broken{brokenIg.length === 1 && brokenIg[0] ? ` for @${brokenIg[0]}` : ''}</b> — Meta ended {brokenIg.length === 1 ? 'this connection' : 'these connections'} (for example a password change, or access removed in your Meta settings). Scheduled posts for {brokenIg.length === 1 ? 'that account' : 'those accounts'} cannot publish until you reconnect — it takes one tap.
+            <b>{t('brokenTitle')}{brokenIg.length === 1 && brokenIg[0] ? ` ${t('brokenFor').replace('{name}', brokenIg[0])}` : ''}</b> — {brokenIg.length === 1 ? t('brokenBodyOne') : t('brokenBodyMany')}
             <div style={{ marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <button type="button" className="btn primary small" disabled={reconnectBusy} onClick={startReconnect}>{reconnectBusy ? 'Opening Instagram login…' : 'Reconnect Instagram'}</button>
-              <button type="button" className="btn ghost small" onClick={() => onNavigate && onNavigate('connections')}>Open Connections</button>
+              <button type="button" className="btn primary small" disabled={reconnectBusy} onClick={startReconnect}>{reconnectBusy ? t('openingIgLogin') : t('reconnectInstagram')}</button>
+              <button type="button" className="btn ghost small" onClick={() => onNavigate && onNavigate('connections')}>{t('openConnections')}</button>
             </div>
           </div>
         </div>
@@ -199,8 +178,8 @@ export default function Dashboard({ posts, media, user, loading, error, onRetry,
         <section className="card" style={{ padding: '14px 16px', marginTop: 16 }} aria-label={t('todayGlance')}>
           <h2 style={{ margin: 0, fontSize: 17 }}>{t('todayGlance')}</h2>
           <div className="stats stats-3" style={{ marginTop: 12 }}>
-            <div className="stat"><b>{publishedToday}</b><span>{t('publishedToday')}</span><small>{postedThisWeek} this week{streak > 0 ? ` · ${streak}-day streak` : ''}</small></div>
-            <div className="stat"><b>{upcoming.length}</b><span>{t('scheduled')}</span><small>{next ? `${new Date(next.scheduleTime).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} · ${new Date(next.scheduleTime).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} · in ${cd.label}` : t('nothingScheduled')}</small></div>
+            <div className="stat"><b>{publishedToday}</b><span>{t('publishedToday')}</span><small>{postedThisWeek} {t('thisWeekSuffix')}{streak > 0 ? ` · ${t('dayStreakSuffix').replace('{n}', streak)}` : ''}</small></div>
+            <div className="stat"><b>{upcoming.length}</b><span>{t('scheduled')}</span><small>{next ? `${new Date(next.scheduleTime).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} · ${new Date(next.scheduleTime).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} · ${t('nextInLabel').replace('{label}', cd.label)}` : t('nothingScheduled')}</small></div>
             <div className="stat"><b style={problemCount > 0 ? { color: 'var(--red)' } : undefined}>{problemCount}</b><span>{t('problems')}</span><small>{problemCount > 0 ? problemBits : t('allGood')}</small></div>
           </div>
           <div className="conn-strip">
@@ -208,13 +187,14 @@ export default function Dashboard({ posts, media, user, loading, error, onRetry,
               <span className={`dot ${!settings ? 'amber' : brokenIg.length > 0 || !settings.instagramConnected ? 'off' : ''}`} aria-hidden="true" />
               Instagram · {!settings ? '…' : brokenIg.length > 0 ? t('connectionBroken') : settings.instagramConnected ? `${t('connected')}${settings.instagramHandle ? ` · @${settings.instagramHandle}` : ''}` : t('notConnected')}
               {!inWorkspace && settings && brokenIg.length > 0 && <button type="button" className="btn primary small" disabled={reconnectBusy} onClick={startReconnect}>{reconnectBusy ? '…' : t('reconnect')}</button>}
-              {!inWorkspace && settings && brokenIg.length === 0 && !settings.instagramConnected && <button type="button" className="btn ghost small" onClick={() => onNavigate && onNavigate('connections')}>{t('openConnections')}</button>}
             </span>
             <span className="conn-chip">
               <span className={`dot ${yt == null ? 'amber' : yt.connected ? '' : 'off'}`} aria-hidden="true" />
               YouTube · {yt == null ? '…' : yt.connected ? `${t('connected')}${yt.channelTitle ? ` · ${yt.channelTitle}` : ''}` : t('notConnected')}
-              {!inWorkspace && yt && !yt.connected && <button type="button" className="btn ghost small" onClick={() => onNavigate && onNavigate('connections')}>{t('openConnections')}</button>}
             </span>
+            {!inWorkspace && settings && ((brokenIg.length === 0 && !settings.instagramConnected) || (yt && !yt.connected)) && (
+              <button type="button" className="btn ghost small" onClick={() => onNavigate && onNavigate('connections')}>{t('openConnections')}</button>
+            )}
             {problemCount > 0 && (
               <button type="button" className="btn small" onClick={onGoQueue} style={{ marginLeft: 'auto' }}>{t('reviewInQueue')}</button>
             )}
@@ -225,10 +205,10 @@ export default function Dashboard({ posts, media, user, loading, error, onRetry,
       {!loading && overdue && overdue.length > 0 && (
         <div className="alert error" role="alert" style={{ marginTop: 16 }}>
           <div style={{ flex: 1 }}>
-            <b>{overdue.length} post{overdue.length === 1 ? '' : 's'} overdue</b> — scheduled time passed without publishing.
+            <b>{t(overdue.length === 1 ? 'overdueTitleOne' : 'overdueTitleMany').replace('{n}', overdue.length)}</b> — {t('overdueBody')}
             <div style={{ marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <button type="button" className="btn primary small" disabled={publishingId === 'due'} onClick={onPublishDue}>{publishingId === 'due' ? 'Publishing…' : `Publish due (${overdue.length})`}</button>
-              <button type="button" className="btn ghost small" onClick={onGoQueue}>Review in Queue</button>
+              <button type="button" className="btn primary small" disabled={publishingId === 'due'} onClick={onPublishDue}>{publishingId === 'due' ? t('publishingWord') : t('publishDueCount').replace('{n}', overdue.length)}</button>
+              <button type="button" className="btn ghost small" onClick={onGoQueue}>{t('reviewInQueue')}</button>
             </div>
           </div>
         </div>
@@ -237,23 +217,23 @@ export default function Dashboard({ posts, media, user, loading, error, onRetry,
       {!loading && failedPosts.length > 0 && (
         <div className="alert error" role="alert" style={{ marginTop: 16 }}>
           <div style={{ flex: 1 }}>
-            <b>{failedPosts.length} post{failedPosts.length === 1 ? '' : 's'} failed to publish</b>
-            {failedPosts[0].retryPending ? ' — the newest one will be retried automatically in about 15 minutes.' : ' — the automatic retry has been used.'}
-            {failedPosts[0].lastPublishError && <div className="small" style={{ marginTop: 4 }}>Latest reason: {failedPosts[0].lastPublishError}</div>}
+            <b>{t(failedPosts.length === 1 ? 'failedTitleOne' : 'failedTitleMany').replace('{n}', failedPosts.length)}</b>
+            {failedPosts[0].retryPending ? ` — ${t('failedRetryNote')}` : ` — ${t('failedRetryUsed')}`}
+            {failedPosts[0].lastPublishError && <div className="small" style={{ marginTop: 4 }}>{t('latestReason')} {failedPosts[0].lastPublishError}</div>}
             <div style={{ marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <button type="button" className="btn ghost small" onClick={onGoQueue}>Review in Queue</button>
+              <button type="button" className="btn ghost small" onClick={onGoQueue}>{t('reviewInQueue')}</button>
             </div>
           </div>
         </div>
       )}
 
       {!loading && notifications && notifications.length > 0 && (
-        <section className="card section" aria-label="Notifications">
-          <div className="card-head"><div><h2>Notifications</h2><p>Publish results — successes and failures with their reasons.</p></div></div>
+        <section className="card section" aria-label={t('notificationsTitle')}>
+          <div className="card-head"><div><h2>{t('notificationsTitle')}</h2><p>{t('notificationsSub')}</p></div></div>
           <div>
             {notifications.slice(0, 5).map((n) => (
               <p key={n.id} className="small" style={{ padding: '6px 0', color: n.read ? 'var(--muted)' : 'var(--ink)' }}>
-                {n.type === 'publish-success' ? '✅ ' : '⚠️ '}<b>{n.type === 'publish-success' ? 'Published' : 'Publish problem'}</b>
+                {n.type === 'publish-success' ? '✅ ' : '⚠️ '}<b>{n.type === 'publish-success' ? t('published') : t('publishProblem')}</b>
                 <span className="muted"> · {fmtDateTime(n.createdAt)}</span>
                 <br /><span>{String(n.message || '').replace(/^Publish (failed|ed)[^:]*: /, '')}</span>
               </p>
@@ -265,8 +245,8 @@ export default function Dashboard({ posts, media, user, loading, error, onRetry,
       {!loading && !inWorkspace && !checklistDismissed && !checklistDone && (
         <section className="card section" aria-label="Getting started checklist">
           <div className="card-head">
-            <div><h2>Getting started</h2><p>{checklist.filter((c) => c.done).length} of {checklist.length} done</p></div>
-            <button type="button" className="btn ghost small" onClick={onDismissChecklist}>Dismiss</button>
+            <div><h2>{t('gettingStarted')}</h2><p>{t('doneOfTotal').replace('{done}', checklist.filter((c) => c.done).length).replace('{total}', checklist.length)}</p></div>
+            <button type="button" className="btn ghost small" onClick={onDismissChecklist}>{t('dismiss')}</button>
           </div>
           <div className="pbar" style={{ marginBottom: 12 }} aria-hidden="true"><span style={{ width: `${(checklist.filter((c) => c.done).length / checklist.length) * 100}%`, background: 'var(--gold)' }} /></div>
           <div>
@@ -291,9 +271,9 @@ export default function Dashboard({ posts, media, user, loading, error, onRetry,
       {!loading && !hasTomorrow && !nudgeDismissed && (
         <div className="warn amber nudge" role="status">
           <IconClock size={17} />
-          <div style={{ flex: 1 }}><b>Nothing scheduled for tomorrow</b><br />Schedule a post now and it will publish itself right on time.</div>
-          <button type="button" className="btn small" onClick={onCreate}>Schedule a post</button>
-          <button type="button" className="nudge-close" aria-label="Dismiss for today" onClick={dismissNudge}>✕</button>
+          <div style={{ flex: 1 }}><b>{t('tomorrowTitle')}</b><br />{t('tomorrowBody')}</div>
+          <button type="button" className="btn small" onClick={onCreate}>{t('scheduleAPost')}</button>
+          <button type="button" className="nudge-close" aria-label={t('dismissToday')} onClick={dismissNudge}>✕</button>
         </div>
       )}
     </div>

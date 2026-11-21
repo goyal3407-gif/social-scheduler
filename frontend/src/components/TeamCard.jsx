@@ -36,23 +36,22 @@ export default function TeamCard({ tr }) {
     try {
       await api.inviteTeamMember(email.trim(), role)
       setEmail('')
-      setMsg('Invited. Tell them to sign in with that email — their access starts right away.')
+      setMsg(t('teamInvited'))
       await load()
-    } catch (e) { setMsg(e.message || 'Could not send the invite.') }
+    } catch (e) { setMsg(e.message || t('teamInviteFail')) }
     finally { setBusy(false) }
   }
   const remove = async (m) => {
     setBusy(true); setMsg('')
     try { await api.removeTeamMember(m.id); await load() }
-    catch (e) { setMsg(e.message || 'Could not remove that member.') }
+    catch (e) { setMsg(e.message || t('teamRemoveFail')) }
     finally { setBusy(false) }
   }
   return (
     <section className="card" aria-label={t('team')} style={{ marginTop: 14 }}>
       <h3 style={{ marginTop: 0 }}>{t('team')}</h3>
       <p className="muted small" style={{ marginTop: 0 }}>
-        Invite people to help with this workspace. A Scheduler can create and schedule posts; a Viewer can only look.
-        Nobody on your team can change connections, settings or your plan — and removing someone ends their access immediately.
+        {t('teamIntro')}
       </p>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
         <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="teammate@example.com" aria-label="Team member email" style={{ flex: '1 1 220px' }} />
@@ -66,12 +65,12 @@ export default function TeamCard({ tr }) {
       {members === null
         ? <p className="muted small">{t('loading')}</p>
         : live.length === 0
-          ? <p className="muted small">No team members yet.</p>
+          ? <p className="muted small">{t('teamNone')}</p>
           : (
             <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
               {live.map((m) => (
                 <div key={m.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, border: '1px solid var(--line)', borderRadius: 10, padding: '8px 12px', flexWrap: 'wrap' }}>
-                  <span><b>{m.email}</b> <span className="muted small">· {m.role === 'viewer' ? 'Viewer' : 'Scheduler'} · {m.status === 'active' ? 'Active' : 'Invited — waiting for their first sign-in'}</span></span>
+                  <span><b>{m.email}</b> <span className="muted small">· {m.role === 'viewer' ? t('roleViewerShort') : t('roleSchedulerShort')} · {m.status === 'active' ? t('memberActive') : t('memberInvited')}</span></span>
                   <button type="button" className="btn ghost small" disabled={busy} onClick={() => remove(m)}>{t('remove')}</button>
                 </div>
               ))}

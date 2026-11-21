@@ -2,12 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { api } from '../api.js'
 import MyStats from './MyStats.jsx'
 
-const PLAN_BLURBS = {
-  free: '2 connected accounts (1 Instagram + 1 YouTube) · 2 posts a day · 30 posts a month',
-  pro: '3 connected accounts · 100 posts a month · no daily cap',
-  max: '10 connected accounts · unlimited posts · whole queue server-ready · priority publishing',
-  ultra: 'Unlimited accounts · unlimited posts · whole queue server-ready · priority publishing · agency mode',
-}
+const PLAN_BLURBS = { free: 'blurbFree', pro: 'blurbPro', max: 'blurbMax', ultra: 'blurbUltra' }
 
 // Extra feature lines that are not numeric limits (the numeric ones
 // are rendered from the server's own plan config, so the comparison
@@ -75,7 +70,7 @@ export default function Pricing({ tr }) {
     <div key={label} style={{ minWidth: 150, flex: '1 1 150px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
         <span className="muted small">{label}</span>
-        <b className="small">{limit == null ? `${used} · Unlimited` : `${used} / ${limit}`}</b>
+        <b className="small">{limit == null ? `${used} · ${t('unlimitedWord')}` : `${used} / ${limit}`}</b>
       </div>
       <div style={{ height: 7, background: 'var(--line)', borderRadius: 99, overflow: 'hidden', marginTop: 4 }}>
         <div style={{ height: '100%', width: limit == null ? '100%' : `${Math.min(100, limit ? Math.round((used / limit) * 100) : 0)}%`, background: '#e8c268' }} />
@@ -85,7 +80,7 @@ export default function Pricing({ tr }) {
   const features = (o) => {
     const lim2 = o.limits || {}
     const out = []
-    out.push(lim2.accounts == null ? t('featAccountsUnlimited') : t('featAccounts').replace('{n}', lim2.accounts) + (lim2.igAccounts === 1 ? ' (1 Instagram + 1 YouTube)' : ''))
+    out.push(lim2.accounts == null ? t('featAccountsUnlimited') : t('featAccounts').replace('{n}', lim2.accounts) + (lim2.igAccounts === 1 ? t('featIgYtNote') : ''))
     if (lim2.postsPerDay != null) out.push(t('featPostsDay').replace('{n}', lim2.postsPerDay))
     out.push(lim2.postsPerMonth == null ? t('featPostsMonthUnlimited') : t('featPostsMonth').replace('{n}', lim2.postsPerMonth))
     out.push(o.fullBridge ? t('featServerReadyAll') : t('featServerReadyNext'))
@@ -104,7 +99,7 @@ export default function Pricing({ tr }) {
           <h2 style={{ margin: 0 }}>{t('myPlan')} — {plan.planName}</h2>
           {rec && rec.planId === plan.plan && <span className="badge" style={{ background: 'var(--gold)', color: '#191204' }}>{t('bestForYou')}</span>}
         </div>
-        <p className="muted small" style={{ margin: '6px 0 0' }}>{PLAN_BLURBS[plan.plan] || ''}</p>
+        <p className="muted small" style={{ margin: '6px 0 0' }}>{PLAN_BLURBS[plan.plan] ? t(PLAN_BLURBS[plan.plan]) : ''}</p>
         {plan.comp
           ? <p className="small" style={{ margin: '6px 0 0' }}><b>{t('lifetime')}</b></p>
           : plan.planExpiresAt
@@ -123,7 +118,7 @@ export default function Pricing({ tr }) {
         )}
       </section>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', margin: '18px 0 12px' }} role="group" aria-label="Billing period">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', margin: '18px 0 12px' }} role="group" aria-label={t('billingPeriod')}>
         <button type="button" className={`btn small ${period === 'monthly' ? 'primary' : 'ghost'}`} onClick={() => setPeriod('monthly')}>{t('monthly')}</button>
         <button type="button" className={`btn small ${period === 'yearly' ? 'primary' : 'ghost'}`} onClick={() => setPeriod('yearly')}>{t('yearly')}</button>
         {period === 'yearly' && <span className="badge" style={{ background: 'var(--gold)', color: '#191204' }}>{t('twoMonthsFree')}</span>}
@@ -149,17 +144,15 @@ export default function Pricing({ tr }) {
               {o.kind === 'upgrade' && (period === 'yearly'
                 ? <p className="small" style={{ margin: 0 }}>{t('upgradeYearlyLine').replace('{name}', o.name).replace('{charge}', Number(o.chargeInr * factor).toLocaleString('en-IN'))}</p>
                 : pricing.currentPriceInr > 0
-                  ? <p className="small" style={{ margin: 0 }}>You already paid {inr(pricing.currentPriceInr)} for {pricing.currentName} — for {o.name} you pay only <b>{inr(o.chargeInr)} more</b>. {o.name} starts fresh from the upgrade day — a full new {periodWord}.</p>
-                  : <p className="small" style={{ margin: 0 }}>{o.name} starts fresh from the upgrade day — a full new {periodWord}.</p>)}
-              {o.kind === 'downgrade' && <p className="small" style={{ margin: 0 }}>Downgrade: no refund and no mid-cycle cut — your {pricing.currentName} plan runs till its expiry, then {o.name} begins automatically.</p>}
-              {isCurrent
-                ? <span className="badge" style={{ alignSelf: 'flex-start' }}>{t('currentPlan')}</span>
-                : <button type="button" className="btn ghost small" disabled title={t('paymentSoon')} style={{ alignSelf: 'flex-start' }}>{o.kind === 'upgrade' ? `Pay ${inr(o.chargeInr * factor)} — coming soon` : 'Coming soon'}</button>}
+                  ? <p className="small" style={{ margin: 0 }}>{t('alreadyPaidLine').replace('{paid}', inr(pricing.currentPriceInr)).replace('{cur}', pricing.currentName).replaceAll('{name}', o.name).replace('{charge}', inr(o.chargeInr)).replace('{period}', periodWord)}</p>
+                  : <p className="small" style={{ margin: 0 }}>{t('startsFreshLine').replace('{name}', o.name).replace('{period}', periodWord)}</p>)}
+              {o.kind === 'downgrade' && <p className="small" style={{ margin: 0 }}>{t('downgradeLine').replace('{cur}', pricing.currentName).replace('{name}', o.name)}</p>}
+              {!isCurrent && <button type="button" className="btn ghost small" disabled title={t('paymentSoon')} style={{ alignSelf: 'flex-start' }}>{o.kind === 'upgrade' ? t('payComingSoon').replace('{amount}', inr(o.chargeInr * factor)) : t('comingSoon')}</button>}
             </section>
           )
         })}
       </div>
-      <p className="muted small" style={{ marginTop: 12 }}>{t('paymentSoon')}. To change your plan today, ask the app owner — they can switch it instantly while payments are being set up.</p>
+      <p className="muted small" style={{ marginTop: 12 }}>{t('paymentSoon')}. {t('pricingFootNote')}</p>
 
       <div style={{ marginTop: 18 }}>
         <MyStats tr={t} />
