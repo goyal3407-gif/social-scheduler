@@ -153,6 +153,9 @@ export const api = {
   // Pre-flight check (batch 2): connection + media + plan verdict for
   // a not-yet-saved post, shown inline in Studio Step 3 before saving.
   preflightPost: (post) => req('/api/posts/preflight', { method: 'POST', body: JSON.stringify(post) }),
+  // My Plan (batch 2): effective plan + live usage for the header
+  // badge and the Dashboard plan card.
+  getPlanUsage: () => req('/api/plan/usage'),
   createPostsBulk: (posts) => req('/api/posts/bulk', { method: 'POST', body: JSON.stringify({ posts }) }),
   updatePost: async (id, patch) => (await req(`/api/posts/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) })).post,
   deletePost: (id) => req(`/api/posts/${encodeURIComponent(id)}`, { method: 'DELETE' }),

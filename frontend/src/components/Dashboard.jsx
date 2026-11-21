@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
-import { dailyPlan, fmtDateTime, formatCountdown, openInstagramDirectConnect } from '../api.js'
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
+import { api, dailyPlan, fmtDateTime, formatCountdown, openInstagramDirectConnect } from '../api.js'
 import { PostRow, Skeleton, ErrorBox, Empty } from './shared.jsx'
 import { IconClock, IconPlay } from './icons.jsx'
 
@@ -17,6 +17,8 @@ function useCountdown(targetIso) {
   const m = Math.floor((diff % 3600000) / 60000)
   return { label: formatCountdown(targetIso), parts: { d, h, m } }
 }
+
+const PlanCard = lazy(() => import('./PlanCard.jsx'))
 
 export default function Dashboard({ posts, media, user, stats, loading, error, onRetry, onCreate, onGoQueue, onNavigate, onEdit, onDelete, onPublish, publishingId, settings, onDuplicate, onPostAgain, onReschedule, onRescheduleNextBest, onDismissChecklist, overdue, onPublishDue, notifications, onReconnect, tr, onSearch }) {
   const t = tr || ((k) => k)
@@ -127,6 +129,7 @@ export default function Dashboard({ posts, media, user, stats, loading, error, o
 
   return (
     <div>
+      <Suspense fallback={null}><PlanCard /></Suspense>
       <section className="home-head" aria-label="Next scheduled post">
         <h1>{greeting}</h1>
         {onSearch && (

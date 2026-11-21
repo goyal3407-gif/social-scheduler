@@ -395,7 +395,7 @@ function publicUser(u) {
   const eff = effectivePlanOf(u);
   out.plan = eff.id;
   out.planName = eff.name;
-  if (u.comp) out.comp = true;
+  if (u.comp || isOwnerCompEmail(u)) out.comp = true;
   if (u.planExpiresAt && eff.id !== 'free') out.planExpiresAt = u.planExpiresAt;
   return out;
 }
@@ -535,8 +535,9 @@ app.post('/api/auth/signup', ah(async (req, res) => {
     ...(name ? { name } : {}),
   };
   await db.saveUser(user);
+  const granted = await applyOwnerComp(user);
   await setSessionCookie(req, res, user.id);
-  res.json({ ok: true, user: publicUser(user) });
+  res.json({ ok: true, user: publicUser(granted || user) });
 }));
 app.post('/api/auth/login', ah(async (req, res) => {
   const email = String(req.body?.email || '').trim().toLowerCase();
@@ -557,11 +558,12 @@ app.post('/api/auth/login', ah(async (req, res) => {
     return res.status(401).json({ ok: false, error: 'Wrong email or password. Check both and try again — or sign up if you have no account yet.' });
   }
   loginAttempts.delete(email);
+  const granted = await applyOwnerComp(user);
   await setSessionCookie(req, res, user.id);
-  res.json({ ok: true, user: publicUser(user) });
+  res.json({ ok: true, user: publicUser(granted || user) });
 }));
 app.get('/api/auth/me', ah(async (req, res) => {
-  const user = await getAuthUser(req);
+  const user = await applyOwnerComp(await getAuthUser(req));
   if (!user) return res.status(401).json({ ok: false, error: 'Not logged in. Please log in again.' });
   res.json({ ok: true, user: publicUser(user) });
 }));
@@ -2572,12 +2574,41 @@ function summarizeTargets(post, targets) {
 // ahead of time and priority in the publish queue; Free/Pro bridge
 // only the NEXT due post (the refined server rule, report §3).
 const PLANS = {
-  free: { id: 'free', name: 'Free', accounts: 2, igAccounts: 1, postsPerDay: 2, postsPerMonth: 30, fullBridge: false },
-  pro: { id: 'pro', name: 'Pro', accounts: 3, igAccounts: 3, postsPerDay: Infinity, postsPerMonth: 100, fullBridge: false },
-  max: { id: 'max', name: 'Max', accounts: 10, igAccounts: 10, postsPerDay: Infinity, postsPerMonth: Infinity, fullBridge: true },
-  ultra: { id: 'ultra', name: 'Ultra', accounts: Infinity, igAccounts: Infinity, postsPerDay: Infinity, postsPerMonth: Infinity, fullBridge: true },
+  free: { id: 'free', name: 'Free', priceInr: 0, accounts: 2, igAccounts: 1, postsPerDay: 2, postsPerMonth: 30, fullBridge: false },
+  pro: { id: 'pro', name: 'Pro', priceInr: 249, accounts: 3, igAccounts: 3, postsPerDay: Infinity, postsPerMonth: 100, fullBridge: false },
+  max: { id: 'max', name: 'Max', priceInr: 499, accounts: 10, igAccounts: 10, postsPerDay: Infinity, postsPerMonth: Infinity, fullBridge: true },
+  ultra: { id: 'ultra', name: 'Ultra', priceInr: 999, accounts: Infinity, igAccounts: Infinity, postsPerDay: Infinity, postsPerMonth: Infinity, fullBridge: true },
 };
+// Upgrade pricing rule (owner, 2026-11-21) — the ONE place plan
+// prices and upgrade math live, so the future Razorpay wiring charges
+// exactly what the upgrade screen displays:
+//   upgrade   = pay only the difference, max(0, new − current); the
+//               upgraded plan starts fresh from the upgrade day (a
+//               full new month of the higher plan).
+//   downgrade = no refund, no mid-cycle cut; the current higher plan
+//               runs to its expiry, then the lower plan begins.
+function upgradeQuote(user) {
+  const cur = effectivePlanOf(user);
+  const prices = {};
+  for (const p of Object.values(PLANS)) prices[p.id] = p.priceInr;
+  const options = Object.values(PLANS).map((p) => ({
+    plan: p.id, name: p.name, priceInr: p.priceInr,
+    kind: p.id === cur.id ? 'current' : (PLAN_RANK[p.id] > PLAN_RANK[cur.id] ? 'upgrade' : 'downgrade'),
+    chargeInr: Math.max(0, p.priceInr - cur.priceInr),
+  }));
+  return { current: cur.id, currentName: cur.name, currentPriceInr: cur.priceInr, prices, options };
+}
 const PLAN_RANK = { free: 0, pro: 1, max: 2, ultra: 3 };
+// Standing instruction from the owner (2026-11-21): his own two app
+// accounts are permanent Ultra comps — for testing, no expiry, no
+// payment. Keyed by EMAIL so the grant applies to the account
+// whenever it exists (an account created later with one of these
+// emails is Ultra from its first minute), and the plan system never
+// downgrades them: the check runs before plan/expiry/comp-flag logic.
+const OWNER_COMP_EMAILS = ['astuugoyal@gmail.com', 'goyaldhiman00@gmail.com'];
+function isOwnerCompEmail(user) {
+  return !!user && OWNER_COMP_EMAILS.includes(String(user.email || '').trim().toLowerCase());
+}
 // The effective plan for a user doc: the account OWNER is never plan-
 // limited (he operates the app; his stored plan field is untouched),
 // a comp grant is full Ultra forever, an expired paid plan falls back
@@ -2587,6 +2618,7 @@ const PLAN_RANK = { free: 0, pro: 1, max: 2, ultra: 3 };
 function effectivePlanOf(user) {
   if (!user) return PLANS.free;
   if (user.role === 'owner') return PLANS.ultra;
+  if (isOwnerCompEmail(user)) return PLANS.ultra;
   if (user.comp) return PLANS.ultra;
   const raw = PLANS[user.plan] ? user.plan : 'free';
   if (raw !== 'free' && user.planExpiresAt && new Date(user.planExpiresAt).getTime() <= Date.now()) return PLANS.free;
@@ -2608,10 +2640,21 @@ function planInfoOf(user) {
   return {
     plan: plan.id, planName: plan.name,
     basePlan: user && PLANS[user.plan] ? user.plan : 'free',
-    comp: !!(user && user.comp),
+    comp: !!(user && (user.comp || isOwnerCompEmail(user))),
     planExpiresAt: (user && user.planExpiresAt) || '',
     limits: { accounts: ser(limits.accounts), igAccounts: ser(limits.igAccounts), postsPerDay: ser(limits.postsPerDay), postsPerMonth: ser(limits.postsPerMonth) },
   };
+}
+// Persist an owner's-email comp grant the first time such an account
+// is seen (signup, login, or /me): sets the comp flag, clears any
+// expiry, and writes the audit-log entry the owner asked for. The
+// effective plan is Ultra via isOwnerCompEmail either way — this only
+// makes the grant visible and permanent in the stored record.
+async function applyOwnerComp(user) {
+  if (!user || !isOwnerCompEmail(user) || user.comp) return user;
+  await db.updateUser(user.id, { comp: true, planExpiresAt: '' }).catch(() => null);
+  await writeAdminAudit({ id: 'system' }, 'comp-grant', user, 'Owner comp grant — standing instruction: permanent Ultra, no expiry');
+  return { ...user, comp: true, planExpiresAt: '' };
 }
 // How many Instagram accounts the plan covers for THIS user: the
 // total-accounts cap minus the YouTube slot when a channel is
@@ -2878,6 +2921,26 @@ app.post('/api/posts/preflight', ah(async (req, res) => {
     }
   }
   res.json({ ok: checks.every((c) => c.ok), checks, plan: info });
+}));
+// My Plan data (batch 2): the caller's effective plan + live usage —
+// posts today/this month (same counting the limits enforce, so the
+// meters always agree with enforcement) and connected accounts.
+app.get('/api/plan/usage', ah(async (req, res) => {
+  const user = await db.getUserById(req.userId);
+  const counts = await planUsageCounts(req.userId, new Date());
+  const { accounts, ytConnected } = await igAccountContext(req.userId);
+  res.json({
+    ok: true,
+    plan: planInfoOf(user),
+    pricing: upgradeQuote(user),
+    usage: {
+      postsToday: counts.day,
+      postsThisMonth: counts.month,
+      instagramConnected: accounts.length,
+      youtubeConnected: ytConnected,
+      accountsConnected: accounts.length + (ytConnected ? 1 : 0),
+    },
+  });
 }));
 // Bulk import: one request for many rows instead of one request per row
 // (a 100-row CSV used to take 100 round trips and often timed out).
@@ -4730,8 +4793,10 @@ input[type=date]{width:auto}
 <section class="card"><h2>Audit log</h2><div id="audit"></div></section>
 </div>
 </main>
-<script>
-var BASE = '/api' + location.pathname;
+<script src="/api/${ADMIN_SLUG}/app.js"></script>
+</body></html>`;
+const ADMIN_PAGE_JS = `
+var BASE = location.pathname.slice(0, location.pathname.lastIndexOf('/'));
 var token = sessionStorage.getItem('oc-token') || '';
 function el(id){ return document.getElementById(id); }
 function esc(s){ return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
@@ -4887,14 +4952,22 @@ function renderAudit(d){
   }).join('') : '<p class="muted">No admin actions yet.</p>';
 }
 boot();
-</script>
-</body></html>`;
-app.get(`/${ADMIN_SLUG}`, ah(async (req, res) => {
+`;
+// The console lives under /api/ on purpose: on the production host
+// only /api/* (plus media/bio/preview) reaches this app — every other
+// path is served the SPA — and the site-wide CSP allows only
+// same-origin scripts, so the page's JS is served as its own
+// owner-gated file rather than inline. Both routes answer with the
+// plain API 404 for anyone who is not the owner.
+app.get(`/api/${ADMIN_SLUG}/console`, ah(async (req, res) => {
   const me = await adminOwner(req);
-  if (!me) {
-    return res.status(404).type('html').send('<!doctype html><html><head><title>404 Not Found</title></head><body><h1>404 Not Found</h1><p>The page you requested could not be found.</p></body></html>');
-  }
+  if (!me) return adminApi404(res);
   return res.type('html').send(ADMIN_PAGE_HTML);
+}));
+app.get(`/api/${ADMIN_SLUG}/app.js`, ah(async (req, res) => {
+  const me = await adminOwner(req);
+  if (!me) return adminApi404(res);
+  return res.type('application/javascript').send(ADMIN_PAGE_JS);
 }));
 
 // Unknown /api routes — and method mismatches on known ones — answer

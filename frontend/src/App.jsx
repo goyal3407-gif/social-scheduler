@@ -839,6 +839,10 @@ export default function App() {
               <span className={`dot ${!settings ? 'amber' : igBroken ? 'off' : settings.instagramConnected ? '' : 'off'}`} />
               {!settings ? 'IG checking…' : igBroken ? 'IG connection broken' : settings.instagramConnected ? `IG ${settings.instagramHandle || 'connected'}` : 'IG not connected'}
             </span>
+            <span className="pill" title={user.comp ? 'Your plan — comp, free forever' : 'Your current plan'}>
+              <span className="dot" />
+              {user.planName || 'Free'} plan
+            </span>
             <button type="button" className="btn topnav-create" onClick={() => goStudio(null)}>{tr('createPost')}</button>
             <button type="button" className="icon-btn bell-btn" onClick={openNotifications} aria-label={unread ? `Notifications — ${unread} unread` : 'Notifications'}>
               <IconBell size={18} />
@@ -910,6 +914,10 @@ export default function App() {
               <span className="pill" title={!settings ? 'Checking Instagram connection' : igBroken ? 'Instagram connection broken — reconnect needed' : settings.instagramConnected ? 'Instagram connected' : 'Instagram not connected'}>
                 <span className={`dot ${!settings ? 'amber' : igBroken ? 'off' : settings.instagramConnected ? '' : 'off'}`} />
                 {!settings ? 'IG checking…' : igBroken ? 'IG connection broken' : settings.instagramConnected ? `IG ${settings.instagramHandle || 'connected'}` : 'IG not connected'}
+              </span>
+              <span className="pill" title={user.comp ? 'Your plan — comp, free forever' : 'Your current plan'} style={{ marginLeft: 8 }}>
+                <span className="dot" />
+                {user.planName || 'Free'} plan
               </span>
               <p className="muted small" style={{ marginTop: 10 }}>{user.email}</p>
               <p style={{ marginTop: 8 }}><a href="/contact.html" className="small">Contact</a></p>

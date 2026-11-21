@@ -140,23 +140,20 @@ async function main() {
       const r = await client.call('POST', '/api/auth/signup', { email, password: 'password123', name: email.split('@')[0] });
       return r;
     };
+    // NOTE: ids come from the signup responses — /api/auth/* is rate
+    // limited (20/min, a real security control), so the suite must
+    // not waste auth calls on redundant /me lookups.
     let r = await signup(O, 'owner@example.com');
     check('owner signup', r.status === 200 && r.data.user && r.data.user.role === 'owner', JSON.stringify(r.data).slice(0, 160));
     const ownerId = r.data.user.id;
-    check('owner /api/auth/me shows plan ultra (operator bypass)', r.data.user.plan === 'ultra', JSON.stringify(r.data.user).slice(0, 160));
-    await signup(B, 'b@example.com');
-    const bId = (await B.call('GET', '/api/auth/me')).data.user.id;
-    await signup(C, 'c@example.com');
-    const cId = (await C.call('GET', '/api/auth/me')).data.user.id;
-    await signup(D, 'd@example.com');
-    const dId = (await D.call('GET', '/api/auth/me')).data.user.id;
+    check('owner signup response shows plan ultra (operator bypass)', r.data.user.plan === 'ultra', JSON.stringify(r.data.user).slice(0, 160));
+    const bId = (await signup(B, 'b@example.com')).data.user.id;
+    const cId = (await signup(C, 'c@example.com')).data.user.id;
+    const dId = (await signup(D, 'd@example.com')).data.user.id;
     await signup(E, 'e@example.com');
-    await signup(F, 'f@example.com');
-    const fId = (await F.call('GET', '/api/auth/me')).data.user.id;
-    await signup(G, 'g@example.com');
-    const gId = (await G.call('GET', '/api/auth/me')).data.user.id;
-    await signup(H, 'h@example.com');
-    const hId = (await H.call('GET', '/api/auth/me')).data.user.id;
+    const fId = (await signup(F, 'f@example.com')).data.user.id;
+    const gId = (await signup(G, 'g@example.com')).data.user.id;
+    const hId = (await signup(H, 'h@example.com')).data.user.id;
 
     const mePlan = async (client) => (await client.call('GET', '/api/auth/me')).data.user.plan;
     check('member defaults to Free plan', (await mePlan(B)) === 'free');
@@ -168,18 +165,24 @@ async function main() {
     check('SEC anon admin overview → 404', r.status === 404, `got ${r.status}`);
     r = await anon.call('GET', `/api/${SLUG}/users`);
     check('SEC anon admin users → 404', r.status === 404, `got ${r.status}`);
-    let raw = await anon.raw('GET', `/${SLUG}`);
-    check('SEC anon admin page → 404 page', raw.status === 404 && raw.text.includes('404'), `got ${raw.status}`);
+    let raw = await anon.raw('GET', `/api/${SLUG}/console`);
+    check('SEC anon admin page → 404', raw.status === 404, `got ${raw.status}`);
+    r = await anon.call('GET', `/api/${SLUG}/app.js`);
+    check('SEC anon admin app.js → 404', r.status === 404, `got ${r.status}`);
     r = await B.call('GET', `/api/${SLUG}/status`);
     check('SEC member admin status → 404', r.status === 404, `got ${r.status}`);
     r = await B.call('GET', `/api/${SLUG}/overview`, undefined, { headers: { 'x-admin-token': 'forged-token' } });
     check('SEC member + forged token → 404', r.status === 404, `got ${r.status}`);
-    raw = await B.raw('GET', `/${SLUG}`);
-    check('SEC member admin page → 404 page', raw.status === 404, `got ${raw.status}`);
+    raw = await B.raw('GET', `/api/${SLUG}/console`);
+    check('SEC member admin page → 404', raw.status === 404, `got ${raw.status}`);
+    r = await B.call('GET', `/api/${SLUG}/app.js`);
+    check('SEC member admin app.js → 404', r.status === 404, `got ${r.status}`);
     r = await O.call('GET', `/api/${SLUG}/status`);
     check('owner admin status → 200, PIN not set', r.status === 200 && r.data.pinSet === false, JSON.stringify(r.data).slice(0, 120));
-    raw = await O.raw('GET', `/${SLUG}`);
+    raw = await O.raw('GET', `/api/${SLUG}/console`);
     check('owner admin page → 200 console HTML', raw.status === 200 && raw.text.includes('Owner Console'), `got ${raw.status}`);
+    raw = await O.raw('GET', `/api/${SLUG}/app.js`);
+    check('owner admin app.js → 200 console script', raw.status === 200 && raw.text.includes('loadAll'), `got ${raw.status}`);
     r = await O.call('GET', `/api/${SLUG}/overview`);
     check('SEC owner data endpoint without PIN token → 404', r.status === 404, `got ${r.status}`);
     r = await O.call('GET', `/api/${SLUG}/users`);
@@ -233,7 +236,8 @@ async function main() {
     check('admin limit override cleared → 0', r.status === 200 && r.data.user.postLimitOverride === 0);
     const yesterday = new Date(Date.now() - 86400000).toISOString();
     r = await O.call('PATCH', `/api/${SLUG}/users/${bId}`, { planExpiresAt: yesterday }, adm());
-    check('admin sets past expiry → member falls back to Free', r.status === 200 && (await mePlan(B)) === 'free', `me=${await mePlan(B)}`);
+    const bPlanAfterExpiry = await mePlan(B);
+    check('admin sets past expiry → member falls back to Free', r.status === 200 && bPlanAfterExpiry === 'free', `me=${bPlanAfterExpiry}`);
     audit = (await O.call('GET', `/api/${SLUG}/audit`, undefined, adm())).data.entries || [];
     check('audit has plan-expiry', audit.some((e) => e.action === 'plan-expiry' && e.targetUserId === bId));
     r = await O.call('PATCH', `/api/${SLUG}/users/${bId}`, { planExpiresAt: '' }, adm());
@@ -403,6 +407,62 @@ async function main() {
       if (rr.status !== 200) ownerOk = false;
     }
     check('owner schedules past Free daily limit (operator bypass)', ownerOk);
+
+    // ---------- S12: owner-email Ultra comps (standing instruction) ----------
+    const A1 = makeClient(base);
+    const A2 = makeClient(base);
+    r = await signup(A1, 'astuugoyal@gmail.com');
+    check('owner-comp signup astuugoyal → Ultra + comp', r.status === 200 && r.data.user.plan === 'ultra' && r.data.user.comp === true, JSON.stringify(r.data.user || {}).slice(0, 160));
+    const a1Id = r.data.user.id;
+    r = await signup(A2, 'goyaldhiman00@gmail.com');
+    check('owner-comp signup goyaldhiman00 → Ultra + comp', r.status === 200 && r.data.user.plan === 'ultra' && r.data.user.comp === true, JSON.stringify(r.data.user || {}).slice(0, 160));
+    const a2Id = r.data.user.id;
+    audit = (await O.call('GET', `/api/${SLUG}/audit`, undefined, adm())).data.entries || [];
+    check('audit records owner comp grants for both accounts', audit.some((e) => e.action === 'comp-grant' && e.targetUserId === a1Id) && audit.some((e) => e.action === 'comp-grant' && e.targetUserId === a2Id), JSON.stringify(audit).slice(0, 200));
+    await O.call('PATCH', `/api/${SLUG}/users/${a1Id}`, { plan: 'free' }, adm());
+    check('admin plan edit cannot downgrade an owner-comp account', (await mePlan(A1)) === 'ultra', `me=${await mePlan(A1)}`);
+    seedInstagram(dataDir, a1Id, [
+      igAcct('111', 'aone', { connectedAt: '2026-01-01T00:00:00.000Z' }),
+      igAcct('222', 'atwo', { connectedAt: '2026-02-01T00:00:00.000Z' }),
+    ], '111');
+    let compOk = true;
+    for (const h of [9, 11, 13]) {
+      const rr = await post(A1, { scheduleTime: day(NY, NM, 10, h), igTargets: ['111', '222'] });
+      if (rr.status !== 200) compOk = false;
+    }
+    check('owner-comp: multi-account posts past Free limits → 200', compOk);
+    r = await A1.call('GET', '/api/plan/usage');
+    check('owner-comp usage → Ultra, comp, unlimited limits (null)', r.status === 200 && r.data.plan.plan === 'ultra' && r.data.plan.comp === true && r.data.plan.limits.postsPerMonth === null && r.data.plan.limits.accounts === null, JSON.stringify(r.data.plan || {}).slice(0, 200));
+
+    // ---------- S13: plan usage endpoint (meters = enforcement counting) ----------
+    r = await D.call('GET', '/api/plan/usage');
+    check('usage: Free D at 0 today / 0 this month, 1 account, Free limits shown', r.status === 200 && r.data.usage.postsToday === 0 && r.data.usage.postsThisMonth === 0 && r.data.usage.accountsConnected === 1 && r.data.plan.limits.postsPerDay === 2 && r.data.plan.limits.postsPerMonth === 30, JSON.stringify(r.data).slice(0, 220));
+    const todayFuture = new Date(); todayFuture.setHours(23, 30, 0, 0);
+    r = await post(D, { scheduleTime: todayFuture.toISOString(), caption: 'usage mover' });
+    check('usage: D schedules a post today', r.status === 200, `got ${r.status}`);
+    r = await D.call('GET', '/api/plan/usage');
+    check('usage: meters move with enforcement counting (1 today / 1 month)', r.status === 200 && r.data.usage.postsToday === 1 && r.data.usage.postsThisMonth === 1, JSON.stringify(r.data.usage || {}).slice(0, 120));
+
+    // ---------- S14: upgrade pricing rule — every tier pair ----------
+    const PRICES = { free: 0, pro: 249, max: 499, ultra: 999 };
+    let pricingOk = true; let pricingDetail = '';
+    for (const cur of ['free', 'pro', 'max', 'ultra']) {
+      await O.call('PATCH', `/api/${SLUG}/users/${dId}`, { plan: cur }, adm());
+      const u = await D.call('GET', '/api/plan/usage');
+      const pr = (u.data && u.data.pricing) || {};
+      if (pr.current !== cur) { pricingOk = false; pricingDetail = `current ${pr.current} != ${cur}`; break; }
+      for (const o of pr.options || []) {
+        const want = Math.max(0, PRICES[o.plan] - PRICES[cur]);
+        if (o.chargeInr !== want) { pricingOk = false; pricingDetail = `${cur}->${o.plan} charge ${o.chargeInr} want ${want}`; break; }
+      }
+      if (!pricingOk) break;
+    }
+    check('pricing: every tier pair charges max(0, new - old)', pricingOk, pricingDetail);
+    await O.call('PATCH', `/api/${SLUG}/users/${dId}`, { plan: 'pro' }, adm());
+    const ux = await D.call('GET', '/api/plan/usage');
+    const maxOpt = ((ux.data.pricing || {}).options || []).find((o) => o.plan === 'max');
+    check('pricing example: Pro (₹249) → Max (₹499) charges ₹250', !!maxOpt && maxOpt.chargeInr === 250 && maxOpt.kind === 'upgrade', JSON.stringify(maxOpt || {}).slice(0, 120));
+    await O.call('PATCH', `/api/${SLUG}/users/${dId}`, { plan: 'free' }, adm());
 
     // ---------- S11: PIN attempt cap (LAST — blocks for 10 min) ----------
     for (let i = 0; i < 5; i++) await O.call('POST', `/api/${SLUG}/unlock`, { pin: '0000' });
