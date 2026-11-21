@@ -2669,13 +2669,18 @@ function upgradeQuote(user) {
   return { current: cur.id, currentName: cur.name, currentPriceInr: cur.priceInr, prices, options };
 }
 const PLAN_RANK = { free: 0, pro: 1, max: 2, ultra: 3 };
-// Standing instruction from the owner (2026-11-21): his own two app
+// Standing instruction from the owner (2026-11-21): his own app
 // accounts are permanent Ultra comps — for testing, no expiry, no
 // payment. Keyed by EMAIL so the grant applies to the account
 // whenever it exists (an account created later with one of these
 // emails is Ultra from its first minute), and the plan system never
 // downgrades them: the check runs before plan/expiry/comp-flag logic.
-const OWNER_COMP_EMAILS = ['astuugoyal@gmail.com', 'goyaldhiman00@gmail.com'];
+// All THREE of the owner's own addresses are listed: astuugoyal@ is
+// his main email, goyaldhiman00@ runs @kiluaai.app, and
+// goyalkumar3407@ runs @kiluaai.web + @kiluaai.pro — the last one was
+// missing at first, so that login honestly showed Free (fix verified
+// by scripts/batch2-test.js owner-comp checks, 2026-11-21).
+const OWNER_COMP_EMAILS = ['astuugoyal@gmail.com', 'goyaldhiman00@gmail.com', 'goyalkumar3407@gmail.com'];
 function isOwnerCompEmail(user) {
   return !!user && OWNER_COMP_EMAILS.includes(String(user.email || '').trim().toLowerCase());
 }

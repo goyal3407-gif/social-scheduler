@@ -434,6 +434,26 @@ async function main() {
     r = await A1.call('GET', '/api/plan/usage');
     check('owner-comp usage → Ultra, comp, unlimited limits (null)', r.status === 200 && r.data.plan.plan === 'ultra' && r.data.plan.comp === true && r.data.plan.limits.postsPerMonth === null && r.data.plan.limits.accounts === null, JSON.stringify(r.data.plan || {}).slice(0, 200));
 
+    // Regression (2026-11-21 evening): the owner's THIRD address —
+    // goyalkumar3407@gmail.com, his @kiluaai.web/.pro app login — was
+    // missing from OWNER_COMP_EMAILS, so that account honestly showed
+    // Free while the other two showed Ultra. All three addresses must
+    // resolve to permanent Ultra in every display path: the signup
+    // response (badge data), /api/auth/me (badge), and /api/plan/usage
+    // (My Plan card), and no admin edit may downgrade them.
+    const A3 = makeClient(base);
+    r = await signup(A3, 'goyalkumar3407@gmail.com');
+    check('owner-comp signup goyalkumar3407 → Ultra + comp', r.status === 200 && r.data.user.plan === 'ultra' && r.data.user.planName === 'Ultra' && r.data.user.comp === true, JSON.stringify(r.data.user || {}).slice(0, 160));
+    const a3Id = r.data.user.id;
+    const me3 = (await A3.call('GET', '/api/auth/me')).data.user || {};
+    check('owner-comp /me goyalkumar3407 → plan ultra, planName Ultra (badge)', me3.plan === 'ultra' && me3.planName === 'Ultra' && me3.comp === true, JSON.stringify(me3).slice(0, 160));
+    r = await A3.call('GET', '/api/plan/usage');
+    check('owner-comp usage goyalkumar3407 → Ultra + comp + unlimited', r.status === 200 && r.data.plan.plan === 'ultra' && r.data.plan.planName === 'Ultra' && r.data.plan.comp === true && r.data.plan.limits.postsPerMonth === null && r.data.plan.limits.accounts === null, JSON.stringify(r.data.plan || {}).slice(0, 200));
+    audit = (await O.call('GET', `/api/${SLUG}/audit`, undefined, adm())).data.entries || [];
+    check('audit records owner comp grant for goyalkumar3407', audit.some((e) => e.action === 'comp-grant' && e.targetUserId === a3Id), JSON.stringify(audit).slice(0, 200));
+    await O.call('PATCH', `/api/${SLUG}/users/${a3Id}`, { plan: 'free', comp: false }, adm());
+    check('admin plan+comp edit cannot downgrade goyalkumar3407', (await mePlan(A3)) === 'ultra', `me=${await mePlan(A3)}`);
+
     // ---------- S13: plan usage endpoint (meters = enforcement counting) ----------
     r = await D.call('GET', '/api/plan/usage');
     check('usage: Free D at 0 today / 0 this month, 1 account, Free limits shown', r.status === 200 && r.data.usage.postsToday === 0 && r.data.usage.postsThisMonth === 0 && r.data.usage.accountsConnected === 1 && r.data.plan.limits.postsPerDay === 2 && r.data.plan.limits.postsPerMonth === 30, JSON.stringify(r.data).slice(0, 220));
