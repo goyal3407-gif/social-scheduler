@@ -2628,6 +2628,8 @@ app.post('/api/posts', ah(async (req, res) => {
   const resolver = await postTargetResolver(req.userId);
   const resolved = resolver.resolveForBody(b);
   if (resolved.error) return res.status(400).json({ ok: false, error: resolved.error });
+  const mediaErr = await deadStoredMediaError(req.userId, b.mediaUrl);
+  if (mediaErr) return res.status(400).json({ ok: false, error: mediaErr });
   const settings = await db.getSettings(req.userId);
   const post = buildPost(b, req.userId, resolved.targets, settings && settings.ytDefaultVisibility);
   await db.savePost(post);
@@ -2643,13 +2645,16 @@ app.post('/api/posts/bulk', ah(async (req, res) => {
   const errors = [];
   const resolver = await postTargetResolver(req.userId);
   const settings = await db.getSettings(req.userId);
-  rows.forEach((b, i) => {
+  for (let i = 0; i < rows.length; i++) {
+    const b = rows[i];
     const err = validPostInput(b || {});
-    if (err) { errors.push(`Row ${i + 1}: ${err}`); return; }
+    if (err) { errors.push(`Row ${i + 1}: ${err}`); continue; }
     const resolved = resolver.resolveForBody(b || {});
-    if (resolved.error) { errors.push(`Row ${i + 1}: ${resolved.error}`); return; }
+    if (resolved.error) { errors.push(`Row ${i + 1}: ${resolved.error}`); continue; }
+    const mediaErr = await deadStoredMediaError(req.userId, (b || {}).mediaUrl);
+    if (mediaErr) { errors.push(`Row ${i + 1}: ${mediaErr}`); continue; }
     valid.push(buildPost(b, req.userId, resolved.targets, settings && settings.ytDefaultVisibility));
-  });
+  }
   if (valid.length) await db.savePostsBulk(valid);
   res.json({ ok: true, imported: valid.length, failed: rows.length - valid.length, errors: errors.slice(0, 10) });
 }));
@@ -2705,6 +2710,13 @@ app.patch('/api/posts/:id', ah(async (req, res) => {
   if (b.status === 'draft' || b.status === 'scheduled') patch.status = b.status;
   // Same poster rule as buildPost: only app-served or web URLs survive.
   if (patch.posterUrl !== undefined && !/^(\/|https?:\/\/)/i.test(patch.posterUrl || '')) patch.posterUrl = '';
+  // Pointing a post at a stored copy that is already gone (removed
+  // after its first publish) would only fail later at publish time —
+  // refuse it here with the reason.
+  if (patch.mediaUrl !== undefined) {
+    const mediaErr = await deadStoredMediaError(req.userId, patch.mediaUrl);
+    if (mediaErr) return res.status(400).json({ ok: false, error: mediaErr });
+  }
   const updated = await db.updatePost(req.userId, req.params.id, patch);
   if (!updated) return res.status(404).json({ ok: false, error: 'That post no longer exists — it may have been deleted. Refresh the queue.' });
   res.json({ ok: true, post: updated });
@@ -2720,6 +2732,10 @@ app.delete('/api/posts/:id', ah(async (req, res) => {
 app.post('/api/posts/:id/duplicate', ah(async (req, res) => {
   const orig = await db.getPost(req.userId, req.params.id);
   if (!orig) return res.status(404).json({ ok: false, error: 'That post no longer exists — it may have been deleted.' });
+  // A copy of a post whose stored media was removed after publishing
+  // could never publish — say so now instead of creating a doomed draft.
+  const dupMediaErr = await deadStoredMediaError(req.userId, orig.mediaUrl);
+  if (dupMediaErr) return res.status(400).json({ ok: false, error: dupMediaErr });
   const copy = {
     ...orig,
     id: uid('post'),
@@ -2757,6 +2773,10 @@ app.post('/api/posts/:id/reschedule', ah(async (req, res) => {
   // A published/failed/partial post moved to a new time goes back to
   // the queue, with every target reset so it publishes again.
   if (post.status === 'published' || post.status === 'failed' || post.status === 'partial') {
+    // Reviving a post whose stored media copy is gone can never
+    // publish — refuse with the reason instead of re-queueing a dud.
+    const mediaErr = await deadStoredMediaError(req.userId, post.mediaUrl);
+    if (mediaErr) return res.status(400).json({ ok: false, error: mediaErr });
     patch.status = 'scheduled';
     patch.liveUrl = '';
     patch.igTargets = targetsOf(post).map(freshTarget);
@@ -2893,6 +2913,38 @@ async function markTargetFailed(userId, post, targets, target, error, { isRetryA
 async function persistTargets(userId, post, targets) {
   await db.updatePost(userId, post.id, summarizeTargets(post, targets));
   return db.getPost(userId, post.id);
+}
+// Is this URL one of OUR stored copies, and is the copy still there?
+// Returns null for anything that is not a stored copy (link media,
+// external URLs, data: URLs — each handled elsewhere), otherwise
+// { fileId, item, alive }. A database copy is alive while its file row
+// exists; an OCI copy is alive while its library item is not marked
+// serverCopyRemoved (the post-publish delete is what sets that mark,
+// and a failed delete leaves the mark unset — see maybeDeleteServerCopy).
+async function storedMediaState(userId, url) {
+  if (typeof url !== 'string' || !url) return null;
+  const library = await db.listMedia(userId, { all: true }).catch(() => []);
+  const itemByUrl = library.find((x) => x.url === url) || null;
+  if (itemByUrl && itemByUrl.storage === 'oci' && itemByUrl.objectName) {
+    return { fileId: itemByUrl.objectName, item: itemByUrl, alive: !itemByUrl.serverCopyRemoved };
+  }
+  const m = /\/media\/(f[0-9a-f]{32})$/.exec(url.trim());
+  if (!m) return null;
+  const fileId = m[1];
+  const item = itemByUrl || library.find((x) => x.fileId === fileId) || null;
+  if (item && item.serverCopyRemoved) return { fileId, item, alive: false };
+  const file = await db.getMediaFile(fileId).catch(() => null);
+  return { fileId, item, alive: !!file };
+}
+// The one clear message every reuse path gives when the stored copy is
+// gone (the "Band Mandir" lesson: a post reusing an already-published
+// library item used to sail through scheduling and then die at publish
+// time with Instagram's opaque fetch error). The bytes are deleted by
+// design, so no retry can heal this — the only fix is a fresh upload.
+const MEDIA_GONE_ERROR = 'That media’s server copy was removed after it was published — KiluaAI keeps only a temporary copy to save space. Upload the file again in Media Library, then schedule it.';
+async function deadStoredMediaError(userId, url) {
+  const st = await storedMediaState(userId, url).catch(() => null);
+  return st && !st.alive ? MEDIA_GONE_ERROR : '';
 }
 // Server-copy auto-delete (the owner's storage model: the server is
 // only a bridge — Instagram has the post now, so the uploaded bytes do
@@ -3218,6 +3270,19 @@ async function attemptPublishLocked(userId, post, ig, publicBaseUrl) {
         }
       }
       return { ok: false, error: err };
+    }
+    // Stored copy already gone (removed after an earlier publish of
+    // the same library item): fail every attemptable target with the
+    // clear re-upload reason instead of letting Instagram fetch a 404
+    // and blaming the media format.
+    const goneErr = await deadStoredMediaError(userId, post.mediaUrl);
+    if (goneErr) {
+      for (const t of targets) {
+        if (t.status === 'pending' || t.status === 'publishing' || t.status === 'failed') {
+          await markTargetFailed(userId, post, targets, t, goneErr, { isRetryAttempt: isAutoRetry });
+        }
+      }
+      return { ok: false, error: goneErr };
     }
     // Which targets this attempt may touch: pending/publishing ones
     // always; a failed target only on its armed automatic retry (due

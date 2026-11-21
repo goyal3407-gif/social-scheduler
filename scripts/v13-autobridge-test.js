@@ -191,7 +191,12 @@ async function phaseA() {
     check('A: sequential duplicate -> still one publish', publishCount() - b3 === 1, `delta ${publishCount() - b3}`);
 
     // --- concurrent publish-due does not double-post (in-flight guard) ---
-    r = await A.call('POST', '/api/posts', { mediaUrl: item2.url, mediaType: 'image', caption: 'dup conc', scheduleTime: new Date(Date.now() - 60000).toISOString(), status: 'scheduled', format: 'FEED' });
+    // (A fresh upload for this scenario: item2's copy was deleted by
+    // the previous publish, and reusing it is now refused at create
+    // time — see scripts/reused-media-test.js.)
+    r = await A.call('POST', '/api/media/upload', { name: 'conc.png', dataUrl: PNG_DATA_URL });
+    const item4 = r.data.media;
+    r = await A.call('POST', '/api/posts', { mediaUrl: item4.url, mediaType: 'image', caption: 'dup conc', scheduleTime: new Date(Date.now() - 60000).toISOString(), status: 'scheduled', format: 'FEED' });
     const post4 = r.data.post;
     const b4 = publishCount();
     await Promise.all([A.call('POST', '/api/publish-due', {}), A.call('POST', '/api/publish-due', {})]);
@@ -201,7 +206,9 @@ async function phaseA() {
     check('A: concurrent post ends published once', p4?.status === 'published' && (p4?.publishAttempts || 0) >= 1, JSON.stringify(p4).slice(0, 200));
 
     // --- cron publish-due also publishes a due post exactly once ---
-    r = await A.call('POST', '/api/posts', { mediaUrl: item2.url, mediaType: 'image', caption: 'cron post', scheduleTime: new Date(Date.now() - 60000).toISOString(), status: 'scheduled', format: 'FEED' });
+    r = await A.call('POST', '/api/media/upload', { name: 'cron.png', dataUrl: PNG_DATA_URL });
+    const item5 = r.data.media;
+    r = await A.call('POST', '/api/posts', { mediaUrl: item5.url, mediaType: 'image', caption: 'cron post', scheduleTime: new Date(Date.now() - 60000).toISOString(), status: 'scheduled', format: 'FEED' });
     const post5 = r.data.post;
     const b5 = publishCount();
     r = await A.call('POST', '/api/cron/publish-due', {}, { auth: 'Bearer v13-cron-secret' });
@@ -210,14 +217,20 @@ async function phaseA() {
     check('A: cron -> one publish call', publishCount() - b5 === 1, `delta ${publishCount() - b5}`);
 
     // --- timezone: an IST-offset schedule time is the same instant ---
+    // (Fresh uploads: item2's copy is long deleted and reuse is now
+    // refused at create time — see scripts/reused-media-test.js.)
     const pastInstant = Date.now() - 5 * 60000;
-    r = await A.call('POST', '/api/posts', { mediaUrl: item2.url, mediaType: 'image', caption: 'tz past', scheduleTime: istOffsetString(pastInstant), status: 'scheduled', format: 'FEED' });
+    r = await A.call('POST', '/api/media/upload', { name: 'tz-past.png', dataUrl: PNG_DATA_URL });
+    const itemTzPast = r.data.media;
+    r = await A.call('POST', '/api/posts', { mediaUrl: itemTzPast.url, mediaType: 'image', caption: 'tz past', scheduleTime: istOffsetString(pastInstant), status: 'scheduled', format: 'FEED' });
     check('A: IST-offset time stored as the same instant', r.status === 200 && Math.abs(new Date(r.data.post.scheduleTime).getTime() - pastInstant) < 1500, `stored ${r.data.post?.scheduleTime}`);
     const postTz = r.data.post;
     r = await A.call('POST', '/api/publish-due', {});
     check('A: IST past post is due and publishes', (r.data.published || []).some((p) => p.id === postTz.id), JSON.stringify(r.data).slice(0, 200));
     const futureInstant = Date.now() + 3600000;
-    r = await A.call('POST', '/api/posts', { mediaUrl: item2.url, mediaType: 'image', caption: 'tz future', scheduleTime: istOffsetString(futureInstant), status: 'scheduled', format: 'FEED' });
+    r = await A.call('POST', '/api/media/upload', { name: 'tz-future.png', dataUrl: PNG_DATA_URL });
+    const itemTzFuture = r.data.media;
+    r = await A.call('POST', '/api/posts', { mediaUrl: itemTzFuture.url, mediaType: 'image', caption: 'tz future', scheduleTime: istOffsetString(futureInstant), status: 'scheduled', format: 'FEED' });
     const postTzF = r.data.post;
     r = await A.call('POST', '/api/publish-due', {});
     check('A: IST future post is NOT due', !(r.data.published || []).some((p) => p.id === postTzF.id) && r.data.due === 0, JSON.stringify(r.data).slice(0, 200));

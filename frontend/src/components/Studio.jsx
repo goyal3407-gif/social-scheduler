@@ -429,7 +429,11 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
                 <label>From your library</label>
                 {(!media || media.length === 0) ? <p className="muted small">No media yet — upload some in Media Library first.</p> : (
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', maxHeight: 180, overflow: 'auto' }}>
-                    {media.slice(0, 12).map((m) => (
+                    {media.slice(0, 12).map((m) => m.serverCopyRemoved ? (
+                      <button key={m.id} type="button" disabled title="This file was published and its server copy was removed to save space — upload it again in Media Library to reuse it" style={{ border: '1px dashed var(--line)', borderRadius: 10, padding: 6, width: 72, height: 96, background: 'var(--surface-2)', color: 'var(--muted)', fontSize: 10, lineHeight: 1.4, cursor: 'not-allowed' }}>
+                        Published ✓<br />Re-upload to reuse
+                      </button>
+                    ) : (
                       <button key={m.id} type="button" onClick={() => pickMedia(m)} style={{ border: form.mediaUrl === m.url ? '2px solid var(--brand)' : '1px solid var(--line)', borderRadius: 10, padding: 0, overflow: 'hidden', width: 72, height: 96, background: 'var(--surface-2)' }} title={m.title || m.url}>
                         {m.kind === 'image' ? <img src={m.url} alt={m.title || ''} style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <video src={m.url} muted preload="metadata" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />}
                       </button>

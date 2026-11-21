@@ -687,6 +687,10 @@ export default function App() {
   // Plain-language failure fix action (Phase C5): a token/connection
   // failure's fix is reconnecting — that lives on the Connections page.
   const handleReconnect = useCallback(() => setTab('connections'), [])
+  // Any connected account whose token Meta has revoked (the keeper's
+  // verdict): header pills must not claim "connected" for it.
+  const igBroken = Boolean(settings && ((settings.instagramHealth && settings.instagramHealth.needsReconnect)
+    || (settings.instagramAccounts || []).some((a) => a && a.health && a.health.needsReconnect)))
 
   // "Post again": reopen the composer with the original post's content
   // so the user picks a fresh time — nothing is scheduled or published
@@ -831,9 +835,9 @@ export default function App() {
             <button type="button" className="icon-btn search-toggle-btn" onClick={() => setMobileSearchOpen((o) => !o)} aria-label="Search" aria-expanded={mobileSearchOpen}>
               <IconSearch size={18} />
             </button>
-            <span className="pill" title={!settings ? 'Checking Instagram connection' : settings.instagramConnected ? 'Instagram connected' : 'Instagram not connected'}>
-              <span className={`dot ${!settings ? 'amber' : settings.instagramConnected ? '' : 'off'}`} />
-              {!settings ? 'IG checking…' : settings.instagramConnected ? `IG ${settings.instagramHandle || 'connected'}` : 'IG not connected'}
+            <span className="pill" title={!settings ? 'Checking Instagram connection' : igBroken ? 'Instagram connection broken — reconnect needed' : settings.instagramConnected ? 'Instagram connected' : 'Instagram not connected'}>
+              <span className={`dot ${!settings ? 'amber' : igBroken ? 'off' : settings.instagramConnected ? '' : 'off'}`} />
+              {!settings ? 'IG checking…' : igBroken ? 'IG connection broken' : settings.instagramConnected ? `IG ${settings.instagramHandle || 'connected'}` : 'IG not connected'}
             </span>
             <button type="button" className="btn topnav-create" onClick={() => goStudio(null)}>{tr('createPost')}</button>
             <button type="button" className="icon-btn bell-btn" onClick={openNotifications} aria-label={unread ? `Notifications — ${unread} unread` : 'Notifications'}>
@@ -903,9 +907,9 @@ export default function App() {
               </button>
             </nav>
             <div className="drawer-foot">
-              <span className="pill" title={!settings ? 'Checking Instagram connection' : settings.instagramConnected ? 'Instagram connected' : 'Instagram not connected'}>
-                <span className={`dot ${!settings ? 'amber' : settings.instagramConnected ? '' : 'off'}`} />
-                {!settings ? 'IG checking…' : settings.instagramConnected ? `IG ${settings.instagramHandle || 'connected'}` : 'IG not connected'}
+              <span className="pill" title={!settings ? 'Checking Instagram connection' : igBroken ? 'Instagram connection broken — reconnect needed' : settings.instagramConnected ? 'Instagram connected' : 'Instagram not connected'}>
+                <span className={`dot ${!settings ? 'amber' : igBroken ? 'off' : settings.instagramConnected ? '' : 'off'}`} />
+                {!settings ? 'IG checking…' : igBroken ? 'IG connection broken' : settings.instagramConnected ? `IG ${settings.instagramHandle || 'connected'}` : 'IG not connected'}
               </span>
               <p className="muted small" style={{ marginTop: 10 }}>{user.email}</p>
               <p style={{ marginTop: 8 }}><a href="/contact.html" className="small">Contact</a></p>

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { dailyPlan, fmtDateTime, formatCountdown } from '../api.js'
+import { dailyPlan, fmtDateTime, formatCountdown, openInstagramDirectConnect } from '../api.js'
 import { PostRow, Skeleton, ErrorBox, Empty } from './shared.jsx'
 import { IconClock, IconPlay } from './icons.jsx'
 
@@ -91,6 +91,25 @@ export default function Dashboard({ posts, media, user, stats, loading, error, o
   const failedPosts = useMemo(() => [...(posts || [])]
     .filter((p) => p.status === 'failed')
     .sort((a, b) => new Date(b.failedAt || b.scheduleTime || 0) - new Date(a.failedAt || a.scheduleTime || 0)), [posts])
+  // Broken Instagram connections (keeper verdict: Meta revoked the
+  // token, auto-renewal cannot save it). Usernames of every connected
+  // account in that state — the default account's health plus every
+  // account row's own health. Drives the persistent alert below: a
+  // broken connection must be impossible to miss, because scheduled
+  // posts for it cannot publish (the Byvano lesson).
+  const brokenIg = useMemo(() => {
+    const out = []
+    const seen = new Set()
+    const push = (u) => { const name = u || ''; if (!seen.has(name)) { seen.add(name); out.push(name) } }
+    if (settings?.instagramHealth?.needsReconnect) push(settings.instagramUsername || settings.instagramHandle || '')
+    for (const a of settings?.instagramAccounts || []) if (a?.health?.needsReconnect) push(a.username || '')
+    return out
+  }, [settings])
+  const [reconnectBusy, setReconnectBusy] = useState(false)
+  const startReconnect = async () => {
+    setReconnectBusy(true)
+    try { await openInstagramDirectConnect() } finally { setReconnectBusy(false) }
+  }
   // Tomorrow nudge: shown when nothing is scheduled for tomorrow.
   // Dismissing hides it for the rest of today (localStorage by date).
   const [nudgeDismissed, setNudgeDismissed] = useState(() => {
@@ -140,6 +159,18 @@ export default function Dashboard({ posts, media, user, stats, loading, error, o
         )}
       </section>
 
+      {!loading && brokenIg.length > 0 && (
+        <div className="alert error" role="alert" style={{ marginTop: 16 }}>
+          <div style={{ flex: 1 }}>
+            <b>Instagram connection broken{brokenIg.length === 1 && brokenIg[0] ? ` for @${brokenIg[0]}` : ''}</b> — Meta ended {brokenIg.length === 1 ? 'this connection' : 'these connections'} (for example a password change, or access removed in your Meta settings). Scheduled posts for {brokenIg.length === 1 ? 'that account' : 'those accounts'} cannot publish until you reconnect — it takes one tap.
+            <div style={{ marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button type="button" className="btn primary small" disabled={reconnectBusy} onClick={startReconnect}>{reconnectBusy ? 'Opening Instagram login…' : 'Reconnect Instagram'}</button>
+              <button type="button" className="btn ghost small" onClick={() => onNavigate && onNavigate('connections')}>Open Connections</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="stats stats-3" aria-label="Overview">
         {loading ? Array.from({ length: 3 }).map((_, i) => <div key={i} className="skel" style={{ height: 92 }} />) : (
           <>
@@ -166,13 +197,14 @@ export default function Dashboard({ posts, media, user, stats, loading, error, o
 
       {!loading && (
         <div className="ig-row" role="status">
-          <span className={`dot ${settings ? (settings.instagramConnected ? '' : 'off') : 'amber'}`} aria-hidden="true" />
+          <span className={`dot ${settings ? (brokenIg.length > 0 || !settings.instagramConnected ? 'off' : '') : 'amber'}`} aria-hidden="true" />
           <div className="grow">
             <b>Instagram: </b>
-            {!settings ? 'Checking connection…' : settings.instagramConnected ? <>Connected{settings.instagramHandle ? ` as @${settings.instagramHandle}` : ''} — publishing is ready.</> : 'Not connected yet — connect Instagram to publish live.'}
-            {settings?.instagramConnected && <span className="muted small" style={{ display: 'block' }}>Token is stored on the server only — it is never shown in this app.</span>}
+            {!settings ? 'Checking connection…' : brokenIg.length > 0 ? <>Connection broken{brokenIg[0] ? ` for @${brokenIg[0]}` : ''} — reconnect so your scheduled posts can publish.</> : settings.instagramConnected ? <>Connected{settings.instagramHandle ? ` as @${settings.instagramHandle}` : ''} — publishing is ready.</> : 'Not connected yet — connect Instagram to publish live.'}
+            {settings?.instagramConnected && brokenIg.length === 0 && <span className="muted small" style={{ display: 'block' }}>Token is stored on the server only — it is never shown in this app.</span>}
           </div>
-          {settings && !settings.instagramConnected && <button type="button" className="btn ghost small" onClick={() => onNavigate && onNavigate('settings')}>Open Settings</button>}
+          {settings && brokenIg.length > 0 && <button type="button" className="btn primary small" disabled={reconnectBusy} onClick={startReconnect}>{reconnectBusy ? 'Opening…' : 'Reconnect'}</button>}
+          {settings && !settings.instagramConnected && brokenIg.length === 0 && <button type="button" className="btn ghost small" onClick={() => onNavigate && onNavigate('settings')}>Open Settings</button>}
         </div>
       )}
 

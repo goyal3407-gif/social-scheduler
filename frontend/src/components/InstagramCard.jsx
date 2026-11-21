@@ -125,18 +125,24 @@ export default function InstagramCard({ settings, onInstagramChanged }) {
       {igAccounts.length > 0 && (
         <div style={{ marginTop: 16 }}>
           <h3 style={{ marginBottom: 8 }}>Connected accounts</h3>
-          {igAccounts.map((a) => (
-            <div key={a.igUserId} style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', padding: '10px 0', borderTop: '1px solid var(--line)' }}>
+          {igAccounts.map((a) => {
+            const broken = !!a.health?.needsReconnect
+            return (
+            <div key={a.igUserId} style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', padding: '10px 0', borderTop: '1px solid var(--line)', ...(broken ? { background: 'var(--red-soft)', borderRadius: 10, padding: '10px 12px', borderTop: 'none', marginTop: 6 } : {}) }}>
               <b style={{ color: 'var(--ink)' }}>@{a.username || a.igUserId}</b>
               {a.isDefault
                 ? <span className="badge brand">Default</span>
                 : <button type="button" className="btn ghost small" onClick={() => makeDefault(a.igUserId)}>Set as default</button>}
-              <span className="muted small">{a.health?.tokenNeverExpires ? 'Never expires' : a.health?.needsReconnect ? 'Needs reconnect' : 'Auto-renews'}</span>
+              {broken
+                ? <span className="small" style={{ color: 'var(--red)', fontWeight: 700 }}>Connection broken — posts for this account can&apos;t publish</span>
+                : <span className="muted small">{a.health?.tokenNeverExpires ? 'Never expires' : 'Auto-renews'}</span>}
+              {broken && <button type="button" className="btn primary small" disabled={connectBusy} onClick={startConnect}>{connectBusy ? 'Opening…' : 'Reconnect'}</button>}
               <button type="button" className="btn danger small" disabled={disconnecting} onClick={() => disconnect(a.igUserId, a.username)} style={{ marginLeft: 'auto' }}>
                 {disconnecting ? 'Disconnecting…' : 'Disconnect'}
               </button>
             </div>
-          ))}
+            )
+          })}
           <p className="muted small" style={{ marginTop: 8 }}>Each post publishes to the account you pick in the Studio. Disconnecting one account never touches the others — posts scheduled for a disconnected account fail with a clear message instead of posting to the wrong profile.</p>
         </div>
       )}
