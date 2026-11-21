@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense } from 'react'
-import { api, nextBestTime } from './api.js'
+import { api, nextBestTime, getWorkspaceId, setWorkspaceId } from './api.js'
 import { trFor } from './i18n.js'
 import { ResetPassword } from './components/Auth.jsx'
-import Dashboard from './components/Dashboard.jsx'
 import { IconHome, IconCal, IconQueue, IconPlus, IconMedia, IconBulk, IconTools, IconSpark, IconSettings, IconSun, IconMoon, IconMenu, IconX, IconBell, IconLink, IconSearch } from './components/icons.jsx'
 import { Skeleton, isOwnMediaUrl } from './components/shared.jsx'
 // The build id baked in at build time (vite define). The update guard
@@ -35,6 +34,11 @@ function lazyRetry(factory) {
     }
   })
 }
+// Dashboard lazy-loads like the heavy tabs since batch 3: the main
+// chunk budget (220 KB smoke guard) no longer fits the shell +
+// Dashboard + the batch-3 workspace/guide code eagerly. The home tab
+// shows the same skeleton fallback every other tab uses.
+const Dashboard = lazyRetry(() => import('./components/Dashboard.jsx'))
 const SetupWizard = lazyRetry(() => import('./components/SetupWizard.jsx'))
 const CalendarView = lazyRetry(() => import('./components/CalendarView.jsx'))
 const Queue = lazyRetry(() => import('./components/Queue.jsx'))
@@ -109,6 +113,12 @@ export default function App() {
   const [studioKey, setStudioKey] = useState(0)
   const [saving, setSaving] = useState(false)
   const [publishingId, setPublishingId] = useState(null)
+  const [retryingId, setRetryingId] = useState(null)
+  // Team workspaces (batch 3): memberships this user holds in other
+  // people's workspaces + the workspace currently open ('' = own).
+  const [memberships, setMemberships] = useState([])
+  const [wsId, setWsId] = useState(() => getWorkspaceId())
+  const wsIdRef = useRef(wsId)
   const [notifications, setNotifications] = useState([])
   const [unread, setUnread] = useState(0)
   const [confirmDelete, setConfirmDelete] = useState(null) // {type:'post'|'media'|'posts', item|items}
@@ -299,7 +309,10 @@ export default function App() {
         if (r.status === 'rejected' && r.reason && r.reason.status === 401) { setUser(null); return }
       }
       const value = (i, fallback) => (results[i].status === 'fulfilled' ? results[i].value : fallback)
-      const firstError = results.find((r) => r.status === 'rejected')
+      // In a team workspace, owner-only endpoints (settings) answer
+      // 403 by design — that is the role gate working, not an app
+      // error, so it never surfaces as one.
+      const firstError = results.find((r) => r.status === 'rejected' && !(wsIdRef.current && r.reason && r.reason.status === 403))
       setPosts(value(0, [])); setMedia(value(1, [])); setTemplates(value(2, [])); setSettings(value(3, null)); setStats(value(4, null)); setDbStatus(value(5, null))
       const notif = value(6, null)
       if (notif) { setNotifications(notif.notifications || []); setUnread(notif.unread || 0) }
@@ -313,6 +326,37 @@ export default function App() {
   }, [])
 
   useEffect(() => { if (user) loadAll() }, [user, loadAll])
+
+  // Team workspaces (batch 3): load the workspaces this user belongs
+  // to; a saved workspace that is no longer offered (removed by its
+  // owner) falls back to the user's own workspace.
+  useEffect(() => {
+    if (!user) { setMemberships([]); return undefined }
+    let alive = true
+    api.getMemberships().then((d) => {
+      if (!alive) return
+      const list = (d && d.memberships) || []
+      setMemberships(list)
+      if (wsIdRef.current && !list.some((m) => m.ownerId === wsIdRef.current)) {
+        setWorkspaceId(''); wsIdRef.current = ''; setWsId('')
+      }
+    }).catch(() => {})
+    return () => { alive = false }
+  }, [user])
+
+  const switchWorkspace = useCallback((id) => {
+    setWorkspaceId(id); wsIdRef.current = id; setWsId(id); setTab('home')
+  }, [])
+  // Switching workspace re-scopes every list — refetch as the new scope.
+  const wsFirstRun = useRef(true)
+  useEffect(() => {
+    if (wsFirstRun.current) { wsFirstRun.current = false; return }
+    if (user) loadAll()
+  }, [wsId]) // eslint-disable-line react-hooks/exhaustive-deps
+  // Owner-only tabs make no sense inside someone else's workspace.
+  useEffect(() => {
+    if (wsId && (tab === 'settings' || tab === 'connections' || tab === 'tools')) setTab('home')
+  }, [wsId, tab])
 
   // Auto-bridge: schedule requests made from the on-device library
   // while offline wait in a local pending list; this runner finishes
@@ -394,6 +438,7 @@ export default function App() {
 
   const handleLogout = useCallback(async () => {
     try { await api.logout() } catch { /* cookie cleared server-side anyway */ }
+    setWorkspaceId(''); wsIdRef.current = ''; setWsId(''); setMemberships([])
     setUser(null); setPosts([]); setMedia([]); setTemplates([]); setHashtagGroups([]); setDrafts([]); setSettings(null); setStats(null); setTab('home')
   }, [])
 
@@ -476,6 +521,26 @@ export default function App() {
       if (/no longer connected|not connected/i.test(e.message || '')) setTab('settings')
     } finally { setPublishingId(null) }
   }, [refreshStats, pushToast])
+
+  // One-tap retry (batch 3): the server re-checks connection, media
+  // and plan before re-arming, so a blocked retry explains exactly
+  // what to fix (the error carries the check list); a successful one
+  // publishes through the normal machinery and we refetch the truth.
+  const handleRetry = useCallback(async (post) => {
+    setRetryingId(post.id)
+    try {
+      const res = await api.retryPost(post.id)
+      if (res && res.ok === false) throw new Error(res.error || 'Retry failed.')
+      showToast(res?.partial ? 'Retried — published to some accounts; the rest are still in the queue.' : 'Retried and published.')
+      refreshStats()
+    } catch (e) {
+      showToast(e.message || 'Retry failed.')
+      setError(e)
+    } finally {
+      setRetryingId(null)
+      try { const fresh = await api.getPosts(); if (Array.isArray(fresh)) setPosts(fresh) } catch { /* the toast already explained */ }
+    }
+  }, [refreshStats])
 
   const doDelete = useCallback(async () => {
     if (!confirmDelete) return
@@ -733,6 +798,13 @@ export default function App() {
     try { await api.saveSettings({ checklistDismissed: true }) } catch { /* hidden locally either way */ }
   }, [])
 
+  // First-run guide dismissal (batch 3): same settings-backed pattern
+  // as the checklist — once dismissed it never pops up again.
+  const handleDismissGuide = useCallback(async () => {
+    setSettings((prev) => (prev ? { ...prev, guideDismissed: true } : prev))
+    try { await api.saveSettings({ guideDismissed: true }) } catch { /* hidden locally either way */ }
+  }, [])
+
   const useInStudio = useCallback((seed) => {
     // Seed is {text} (content bank) or a full template {name,text}.
     setTemplateSeed(seed)
@@ -825,8 +897,8 @@ export default function App() {
             <button type="button" className={tab === 'media' ? 'active' : ''} onClick={() => setTab('media')}>{tr('media')}</button>
             <button type="button" className={tab === 'ai' ? 'active' : ''} onClick={() => setTab('ai')}>{tr('aiStudio')}</button>
             <button type="button" className={tab === 'bulk' ? 'active' : ''} onClick={() => setTab('bulk')}>{tr('bulk')}</button>
-            <button type="button" className={tab === 'tools' ? 'active' : ''} onClick={() => setTab('tools')}>{tr('tools')}</button>
-            <button type="button" className={tab === 'connections' ? 'active' : ''} onClick={() => setTab('connections')}>{tr('connections')}</button>
+            {!wsId && <button type="button" className={tab === 'tools' ? 'active' : ''} onClick={() => setTab('tools')}>{tr('tools')}</button>}
+            {!wsId && <button type="button" className={tab === 'connections' ? 'active' : ''} onClick={() => setTab('connections')}>{tr('connections')}</button>}
           </nav>
           <form className="topnav-search" role="search" onSubmit={(e) => { e.preventDefault(); runGlobalSearch(globalQ) }} style={{ marginRight: 8 }}>
             <input type="search" value={globalQ} onChange={(e) => setGlobalQ(e.target.value)} placeholder={tr('searchPlaceholder')} aria-label="Search posts and media" />
@@ -835,14 +907,18 @@ export default function App() {
             <button type="button" className="icon-btn search-toggle-btn" onClick={() => setMobileSearchOpen((o) => !o)} aria-label="Search" aria-expanded={mobileSearchOpen}>
               <IconSearch size={18} />
             </button>
-            <span className="pill" title={!settings ? 'Checking Instagram connection' : igBroken ? 'Instagram connection broken — reconnect needed' : settings.instagramConnected ? 'Instagram connected' : 'Instagram not connected'}>
-              <span className={`dot ${!settings ? 'amber' : igBroken ? 'off' : settings.instagramConnected ? '' : 'off'}`} />
-              {!settings ? 'IG checking…' : igBroken ? 'IG connection broken' : settings.instagramConnected ? `IG ${settings.instagramHandle || 'connected'}` : 'IG not connected'}
-            </span>
-            <span className="pill" title={user.comp ? 'Your plan — comp, free forever' : 'Your current plan'}>
-              <span className="dot" />
-              {user.planName || 'Free'} plan
-            </span>
+            {!wsId && (
+              <span className="pill" title={!settings ? 'Checking Instagram connection' : igBroken ? 'Instagram connection broken — reconnect needed' : settings.instagramConnected ? 'Instagram connected' : 'Instagram not connected'}>
+                <span className={`dot ${!settings ? 'amber' : igBroken ? 'off' : settings.instagramConnected ? '' : 'off'}`} />
+                {!settings ? 'IG checking…' : igBroken ? 'IG connection broken' : settings.instagramConnected ? `IG ${settings.instagramHandle || 'connected'}` : 'IG not connected'}
+              </span>
+            )}
+            {!wsId && (
+              <span className="pill" title={user.comp ? 'Your plan — comp, free forever' : 'Your current plan'}>
+                <span className="dot" />
+                {user.planName || 'Free'} plan
+              </span>
+            )}
             <button type="button" className="btn topnav-create" onClick={() => goStudio(null)}>{tr('createPost')}</button>
             <button type="button" className="icon-btn bell-btn" onClick={openNotifications} aria-label={unread ? `Notifications — ${unread} unread` : 'Notifications'}>
               <IconBell size={18} />
@@ -858,7 +934,16 @@ export default function App() {
                   <div className="avatar-menu" role="menu">
                     <p className="avatar-email">{user.name || user.email}</p>
                     {user.name && <p className="muted small" style={{ padding: '0 10px 6px' }}>{user.email}</p>}
-                    <button type="button" role="menuitem" onClick={() => { setAvatarMenuOpen(false); setTab('settings') }}>{tr('settings')}</button>
+                    {memberships.length > 0 && (
+                      <>
+                        <p className="muted small" style={{ padding: '6px 10px 2px' }}>{tr('workspace')}</p>
+                        <button type="button" role="menuitem" onClick={() => { setAvatarMenuOpen(false); switchWorkspace('') }}>{!wsId ? '✓ ' : ''}{tr('myWorkspace')}</button>
+                        {memberships.map((m) => (
+                          <button key={m.ownerId} type="button" role="menuitem" onClick={() => { setAvatarMenuOpen(false); switchWorkspace(m.ownerId) }}>{wsId === m.ownerId ? '✓ ' : ''}{m.ownerEmail} · {m.role === 'viewer' ? 'Viewer' : 'Scheduler'}</button>
+                        ))}
+                      </>
+                    )}
+                    {!wsId && <button type="button" role="menuitem" onClick={() => { setAvatarMenuOpen(false); setTab('settings') }}>{tr('settings')}</button>}
                     <a role="menuitem" href="/contact.html" onClick={() => setAvatarMenuOpen(false)}>{tr('contact')}</a>
                     <button type="button" role="menuitem" onClick={() => { setAvatarMenuOpen(false); setTheme(theme === 'dark' ? 'light' : 'dark') }}>{theme === 'dark' ? 'Light theme' : 'Dark theme'}</button>
                     <button type="button" role="menuitem" onClick={() => { setAvatarMenuOpen(false); setLang(lang === 'hi' ? 'en' : 'hi') }}>{lang === 'hi' ? 'Language: English' : 'Language: Hinglish'}</button>
@@ -900,7 +985,7 @@ export default function App() {
               <input type="search" value={globalQ} onChange={(e) => setGlobalQ(e.target.value)} placeholder={tr('searchPlaceholder')} aria-label="Search posts and media" />
             </form>
             <nav className="drawer-nav" aria-label="Menu navigation">
-              {NAV.map(({ id, label, Icon }) => (
+              {NAV.filter(({ id }) => !wsId || !['tools', 'connections', 'settings'].includes(id)).map(({ id, label, Icon }) => (
                 <button key={id} type="button" className={`drawer-item ${tab === id ? 'active' : ''}`} aria-current={tab === id ? 'page' : undefined}
                   onClick={() => { setTab(id); setMenuOpen(false); window.scrollTo({ top: 0 }) }}>
                   <Icon size={20} /><span>{tr(id === 'ai' ? 'aiStudio' : id) || label}</span>
@@ -932,6 +1017,21 @@ export default function App() {
         </div>
       )}
 
+      {wsId && (() => {
+        const m = memberships.find((x) => x.ownerId === wsId)
+        if (!m) return null
+        return (
+          <div className="wrap" style={{ paddingBottom: 0 }}>
+            <div className="warn amber nudge" role="status">
+              <div style={{ flex: 1 }}>
+                <b>You are working in {m.ownerEmail}&rsquo;s workspace</b> — {m.role === 'viewer' ? 'view only: you can look, but not change anything.' : 'as a Scheduler: you can create and schedule posts here.'} Nothing here touches your own account.
+              </div>
+              <button type="button" className="btn small" onClick={() => switchWorkspace('')}>Back to my workspace</button>
+            </div>
+          </div>
+        )
+      })()}
+
       <main className="wrap" id="main">
         {error && tab !== 'home' && (
           <div className="alert error" role="alert" style={{ marginTop: 16 }}>
@@ -942,6 +1042,7 @@ export default function App() {
         )}
 
         {tab === 'home' && (
+          <Suspense fallback={<TabFallback />}>
           <Dashboard tr={tr} onSearch={runGlobalSearch} posts={visiblePosts} media={media} user={user} stats={statsFallback} loading={loading} error={error} onRetry={loadAll}
             onCreate={() => goStudio(null)} onGoQueue={() => setTab('queue')} onNavigate={setTab}
             onEdit={goStudio} onDelete={requestDeletePost}
@@ -949,14 +1050,17 @@ export default function App() {
             onDuplicate={handleDuplicate} onPostAgain={handlePostAgain} onReschedule={handleReschedule} onRescheduleNextBest={handleRescheduleNextBest}
             onReconnect={handleReconnect}
             onDismissChecklist={handleDismissChecklist}
+            onRetryPost={handleRetry} retryingId={retryingId}
+            onDismissGuide={handleDismissGuide} inWorkspace={!!wsId}
             overdue={overdue} onPublishDue={handlePublishDue} notifications={notifications} />
+          </Suspense>
         )}
         <Suspense fallback={<TabFallback />}>
         {tab === 'calendar' && (
           <div className="section"><CalendarView posts={visiblePosts} loading={loading} onEdit={goStudio} onDelete={requestDeletePost} onPublish={handlePublish} publishingId={publishingId} onGoQueue={() => setTab('queue')} onCreate={() => goStudio(null)} onReconnect={handleReconnect} onReschedule={handleReschedule} /></div>
         )}
         {tab === 'queue' && (
-          <div className="section"><Queue tr={tr} searchSeed={globalQ} searchNonce={searchNonce} posts={visiblePosts} loading={loading} onEdit={goStudio} onDelete={requestDeletePost} onPublish={handlePublish} publishingId={publishingId} onCreate={() => goStudio(null)} onDuplicate={handleDuplicate} onPostAgain={handlePostAgain} onReschedule={handleReschedule} onRescheduleNextBest={handleRescheduleNextBest} overdue={overdue} onPublishDue={handlePublishDue} onDeleteMany={(items) => setConfirmDelete({ type: 'posts', items })} onReconnect={handleReconnect} /></div>
+          <div className="section"><Queue tr={tr} searchSeed={globalQ} searchNonce={searchNonce} posts={visiblePosts} loading={loading} onEdit={goStudio} onDelete={requestDeletePost} onPublish={handlePublish} publishingId={publishingId} onCreate={() => goStudio(null)} onDuplicate={handleDuplicate} onPostAgain={handlePostAgain} onReschedule={handleReschedule} onRescheduleNextBest={handleRescheduleNextBest} overdue={overdue} onPublishDue={handlePublishDue} onDeleteMany={(items) => setConfirmDelete({ type: 'posts', items })} onReconnect={handleReconnect} onRetry={handleRetry} retryingId={retryingId} /></div>
         )}
         {tab === 'studio' && (
           <div className="section">
@@ -978,7 +1082,7 @@ export default function App() {
           <div className="section"><AIStudio posts={visiblePosts} settings={settings} onSendToStudio={useInStudio} onSaveDraft={handleSaveDraft} onSaveDrafts={handleSaveDrafts} /></div>
         )}
         {tab === 'settings' && (
-          <div className="section"><Settings settings={settings} dbStatus={dbStatus} saving={saving} onSave={async (s) => { setSaving(true); try { const u = await api.saveSettings(s); setSettings(u || s) } finally { setSaving(false) } }} onInstagramChanged={refreshSettings} user={user} onAccountDeleted={handleLogout} onNavigate={setTab} lang={lang} onLangChange={setLang} /></div>
+          <div className="section"><Settings settings={settings} dbStatus={dbStatus} saving={saving} onSave={async (s) => { setSaving(true); try { const u = await api.saveSettings(s); setSettings(u || s) } finally { setSaving(false) } }} onInstagramChanged={refreshSettings} user={user} onAccountDeleted={handleLogout} onNavigate={setTab} lang={lang} onLangChange={setLang} tr={tr} /></div>
         )}
         {tab === 'connections' && (
           <div className="section"><Connections settings={settings} onInstagramChanged={refreshSettings} /></div>

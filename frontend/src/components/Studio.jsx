@@ -285,21 +285,50 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
     }
   }
 
+  // Caption library (batch 3): a saved set restores caption +
+  // hashtags + CTA in one tap. Older templates carry only text —
+  // those still apply as caption-only, exactly as before.
   const applyTemplate = (tpl) => {
     if (!tpl) return
-    setForm((f) => ({ ...f, caption: tpl.text || tpl.caption || '' }))
+    setForm((f) => ({
+      ...f,
+      caption: tpl.text || tpl.caption || '',
+      ...(typeof tpl.hashtags === 'string' && tpl.hashtags ? { hashtags: tpl.hashtags } : {}),
+      ...(typeof tpl.cta === 'string' && tpl.cta ? { cta: tpl.cta } : {}),
+    }))
     setStep(2)
   }
 
   const saveAsTemplate = async () => {
     setBankMsg('')
-    if (!form.caption.trim()) { setBankMsg('Write a caption first, then save it as a template.'); return }
-    if (!tplName.trim()) { setBankMsg('Give the template a name first.'); return }
+    if (!form.caption.trim()) { setBankMsg('Write a caption first, then save it as a set.'); return }
+    if (!tplName.trim()) { setBankMsg('Give the set a name first.'); return }
     try {
-      await onCreateTemplate({ name: tplName.trim(), text: form.caption.trim() })
+      await onCreateTemplate({ name: tplName.trim(), text: form.caption.trim(), hashtags: form.hashtags.trim(), cta: form.cta.trim() })
       setTplName(''); setShowTplSave(false)
-      setBankMsg('Template saved — find it in the list above.')
-    } catch (e) { setBankMsg(e.message || 'Could not save the template.') }
+      setBankMsg('Caption set saved — find it in the library above.')
+    } catch (e) { setBankMsg(e.message || 'Could not save the caption set.') }
+  }
+
+  // AI caption assistant (batch 3): one suggestion from a topic the
+  // user types. The suggestion fills the fields — the user edits
+  // freely before saving, and any failure (assistant off, daily cap,
+  // network) shows the server's plain message and changes nothing.
+  const [aiTopic, setAiTopic] = useState('')
+  const [aiBusy, setAiBusy] = useState(false)
+  const [aiMsg, setAiMsg] = useState('')
+  const [aiRemaining, setAiRemaining] = useState(null)
+  const runAiSuggest = async () => {
+    const topic = (aiTopic || '').trim() || (form.caption || '').trim()
+    if (topic.length < 3) { setAiMsg('Write a few words about your post first — in the box above or as your caption.'); return }
+    setAiBusy(true); setAiMsg('')
+    try {
+      const r = await api.aiCaption(topic)
+      setForm((f) => ({ ...f, caption: r.caption || f.caption, hashtags: r.hashtags || f.hashtags, cta: r.cta || f.cta }))
+      if (r.remaining != null) setAiRemaining(r.remaining)
+      setAiMsg('Suggestion added — edit it freely before you schedule.')
+    } catch (e) { setAiMsg(e.message || 'The AI assistant could not answer just now.') }
+    finally { setAiBusy(false) }
   }
 
   const appendHashtagGroup = (g) => {
@@ -475,16 +504,16 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
               <p className="muted small mb">Write like you talk. The score updates live.</p>
               {templates && templates.length > 0 && (
                 <div className="mb">
-                  <label htmlFor="tpl">Start from a template</label>
+                  <label htmlFor="tpl">Caption library — one tap fills caption, hashtags &amp; CTA</label>
                   <select id="tpl" value="" onChange={(e) => { const t = templates.find((x) => String(x.id) === e.target.value); if (t) applyTemplate(t) }}>
-                    <option value="">Choose a template…</option>
+                    <option value="">Choose a saved set…</option>
                     {templates.map((t) => <option key={t.id} value={t.id}>{t.name}{isPackTemplate(t) ? ' · KiluaAI pack' : ''}</option>)}
                   </select>
                   <div style={{ marginTop: 8 }}>
                     {templates.filter((t) => !isSeedTemplate(t)).map((t) => (
                       <span key={t.id} className="chip" style={{ marginRight: 6, marginBottom: 6 }}>
-                        {t.name}
-                        {onDeleteTemplate && <button type="button" aria-label={`Delete template ${t.name}`} onClick={() => onDeleteTemplate(t)} style={{ border: 'none', background: 'transparent', color: 'var(--red)', fontWeight: 700, padding: 0, marginLeft: 2 }}>✕</button>}
+                        <button type="button" onClick={() => applyTemplate(t)} style={{ border: 'none', background: 'transparent', fontWeight: 700, padding: 0, color: 'var(--ink)' }} title="Use this set">{t.name}</button>
+                        {onDeleteTemplate && <button type="button" aria-label={`Delete caption set ${t.name}`} onClick={() => onDeleteTemplate(t)} style={{ border: 'none', background: 'transparent', color: 'var(--red)', fontWeight: 700, padding: 0, marginLeft: 2 }}>✕</button>}
                       </span>
                     ))}
                   </div>
@@ -496,16 +525,25 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
               {onCreateTemplate && (
                 <div className="mb">
                   {!showTplSave ? (
-                    <button type="button" className="btn ghost small" onClick={() => setShowTplSave(true)}>Save caption as template</button>
+                    <button type="button" className="btn ghost small" onClick={() => setShowTplSave(true)}>Save caption as a set</button>
                   ) : (
                     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                      <input placeholder="Template name, e.g. Product launch" value={tplName} onChange={(e) => setTplName(e.target.value)} style={{ flex: 1, minWidth: 180 }} aria-label="Template name" />
-                      <button type="button" className="btn small" onClick={saveAsTemplate}>Save template</button>
+                      <input placeholder="Set name, e.g. Product launch" value={tplName} onChange={(e) => setTplName(e.target.value)} style={{ flex: 1, minWidth: 180 }} aria-label="Caption set name" />
+                      <button type="button" className="btn small" onClick={saveAsTemplate}>Save set</button>
                       <button type="button" className="btn ghost small" onClick={() => setShowTplSave(false)}>Cancel</button>
                     </div>
                   )}
                 </div>
               )}
+              <div className="mb" style={{ border: '1px solid var(--line)', borderRadius: 12, padding: 12 }}>
+                <label htmlFor="aiTopic">AI caption assistant <span className="muted">(a suggestion — you edit before anything is used)</span></label>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <input id="aiTopic" placeholder="What is this post about? e.g. New Diwali collection launch" value={aiTopic} onChange={(e) => setAiTopic(e.target.value)} style={{ flex: 1, minWidth: 200 }} />
+                  <button type="button" className="btn small" disabled={aiBusy} onClick={runAiSuggest}>{aiBusy ? 'Thinking…' : 'Suggest a caption'}</button>
+                </div>
+                {aiRemaining != null && <p className="muted small" style={{ margin: '6px 0 0' }}>{aiRemaining} AI suggestions left today.</p>}
+                {aiMsg && <p className="small" role="status" style={{ margin: '6px 0 0' }}>{aiMsg}</p>}
+              </div>
               <label htmlFor="hashtags">Hashtags <span className="muted">(space or comma separated)</span></label>
               <input id="hashtags" placeholder="#social #creator #reels" value={form.hashtags} onChange={(e) => set({ hashtags: e.target.value })} />
               <p className="small mt" style={{ color: nTags > 30 ? 'var(--red)' : 'var(--muted)' }}>{nTags} / 30 hashtags{nTags > 30 ? ' — over the Instagram limit of 30. Remove some before publishing.' : ''}</p>

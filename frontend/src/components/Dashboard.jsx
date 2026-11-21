@@ -19,8 +19,10 @@ function useCountdown(targetIso) {
 }
 
 const PlanCard = lazy(() => import('./PlanCard.jsx'))
+const GuideWizard = lazy(() => import('./GuideWizard.jsx'))
+const MyStats = lazy(() => import('./MyStats.jsx'))
 
-export default function Dashboard({ posts, media, user, stats, loading, error, onRetry, onCreate, onGoQueue, onNavigate, onEdit, onDelete, onPublish, publishingId, settings, onDuplicate, onPostAgain, onReschedule, onRescheduleNextBest, onDismissChecklist, overdue, onPublishDue, notifications, onReconnect, tr, onSearch }) {
+export default function Dashboard({ posts, media, user, stats, loading, error, onRetry, onCreate, onGoQueue, onNavigate, onEdit, onDelete, onPublish, publishingId, settings, onDuplicate, onPostAgain, onReschedule, onRescheduleNextBest, onDismissChecklist, overdue, onPublishDue, notifications, onReconnect, tr, onSearch, onRetryPost, retryingId, onDismissGuide, inWorkspace }) {
   const t = tr || ((k) => k)
   // Home search pill (D3 refinement): routes into the same global
   // search as the top nav — Queue filtered by caption, Media by name.
@@ -127,9 +129,21 @@ export default function Dashboard({ posts, media, user, stats, loading, error, o
     return (posts || []).some((p) => p.status === 'scheduled' && p.scheduleTime && new Date(p.scheduleTime).toDateString() === key)
   }, [posts])
 
+  // First-run guide (batch 3): the wizard form of the checklist
+  // below, for brand-new users only (no posts yet, guide not
+  // dismissed, steps not all done). In a team workspace the guide
+  // never appears — the workspace is not yours to set up.
+  const guideSteps = checklist.map((c) => ({ done: c.done, title: c.label, body: c.hint, tab: c.tab, cta: c.cta }))
+  const showGuide = !loading && !inWorkspace && settings && settings.guideDismissed !== true && !checklistDone && (posts || []).length === 0
   return (
     <div>
-      <Suspense fallback={null}><PlanCard /></Suspense>
+      {showGuide && (
+        <Suspense fallback={null}>
+          <GuideWizard steps={guideSteps} tr={t} onNavigate={onNavigate} onDismiss={onDismissGuide} />
+        </Suspense>
+      )}
+      {!inWorkspace && <Suspense fallback={null}><PlanCard /></Suspense>}
+      <Suspense fallback={null}><MyStats tr={t} /></Suspense>
       <section className="home-head" aria-label="Next scheduled post">
         <h1>{greeting}</h1>
         {onSearch && (
@@ -253,7 +267,7 @@ export default function Dashboard({ posts, media, user, stats, loading, error, o
         </section>
       )}
 
-      {!loading && !checklistDismissed && !checklistDone && (
+      {!loading && !inWorkspace && !checklistDismissed && !checklistDone && (
         <section className="card section" aria-label="Getting started checklist">
           <div className="card-head">
             <div><h2>Getting started</h2><p>{checklist.filter((c) => c.done).length} of {checklist.length} done</p></div>
@@ -325,7 +339,7 @@ export default function Dashboard({ posts, media, user, stats, loading, error, o
           {loading ? <Skeleton variant="posts" rows={3} /> : upcoming.length === 0 ? (
             <Empty title="Nothing scheduled yet" body="No posts are scheduled. Schedule one from Studio or Bulk and it will show up here, soonest first." action={<button type="button" className="btn primary small" onClick={onCreate}>Create a post</button>} />
           ) : upcoming.slice(0, 4).map((p) => (
-            <PostRow key={p.id} post={p} onEdit={onEdit} onDelete={onDelete} onPublish={onPublish} publishing={publishingId === p.id} onDuplicate={onDuplicate} onPostAgain={onPostAgain} onReschedule={onReschedule} onRescheduleNextBest={onRescheduleNextBest} onReconnect={onReconnect} />
+            <PostRow key={p.id} post={p} onEdit={onEdit} onDelete={onDelete} onPublish={onPublish} publishing={publishingId === p.id} onDuplicate={onDuplicate} onPostAgain={onPostAgain} onReschedule={onReschedule} onRescheduleNextBest={onRescheduleNextBest} onReconnect={onReconnect} onRetry={onRetryPost} retrying={retryingId === p.id} />
           ))}
         </section>
 
@@ -334,7 +348,7 @@ export default function Dashboard({ posts, media, user, stats, loading, error, o
           {loading ? <Skeleton variant="posts" rows={3} /> : recent.length === 0 ? (
             <Empty title="No posts yet" body="Your recent posts will appear here once you create one." />
           ) : recent.map((p) => (
-            <PostRow key={p.id} post={p} onEdit={onEdit} onDelete={onDelete} onPublish={onPublish} publishing={publishingId === p.id} onPostAgain={onPostAgain} onReconnect={onReconnect} />
+            <PostRow key={p.id} post={p} onEdit={onEdit} onDelete={onDelete} onPublish={onPublish} publishing={publishingId === p.id} onPostAgain={onPostAgain} onReconnect={onReconnect} onRetry={onRetryPost} retrying={retryingId === p.id} />
           ))}
         </section>
       </div>

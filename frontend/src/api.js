@@ -11,6 +11,22 @@
 // All list helpers normalise either shape so the UI never breaks on a
 // wrapped response.
 
+// Team workspace (batch 3): when the user steps into a workspace
+// they were invited to, every request carries the owner's id in an
+// x-workspace-id header and the server scopes data + enforces the
+// member's role. Kept in localStorage so a reload stays in the
+// workspace; '' means "my own workspace".
+let workspaceId = ''
+try { workspaceId = localStorage.getItem('ss-workspace') || '' } catch { workspaceId = '' }
+export function getWorkspaceId() { return workspaceId }
+export function setWorkspaceId(id) {
+  workspaceId = id || ''
+  try {
+    if (workspaceId) localStorage.setItem('ss-workspace', workspaceId)
+    else localStorage.removeItem('ss-workspace')
+  } catch { /* private mode */ }
+}
+
 async function reqOnce(path, options = {}) {
   // 30 s timeout: a hung request used to hang the UI forever.
   const ctrl = new AbortController()
@@ -19,7 +35,7 @@ async function reqOnce(path, options = {}) {
   try {
     res = await fetch(path, {
       credentials: 'include', // send the httpOnly session cookie
-      headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+      headers: { 'Content-Type': 'application/json', ...(workspaceId && !options.noWorkspace ? { 'x-workspace-id': workspaceId } : {}), ...(options.headers || {}) },
       signal: ctrl.signal,
       ...options
     })
@@ -163,7 +179,29 @@ export const api = {
   reschedulePost: async (id, patch) => (await req(`/api/posts/${encodeURIComponent(id)}/reschedule`, { method: 'POST', body: JSON.stringify(patch) })).post,
   getNextBestTime: () => req('/api/next-best-time'),
   publishPost: (id) => req(`/api/posts/${encodeURIComponent(id)}/publish`, { method: 'POST', body: JSON.stringify({}) }),
+  // One-tap retry (batch 3): the server re-checks connection, media
+  // and plan first; a blocked retry throws with err.data.checks so
+  // the UI can show the exact problem and its fix.
+  retryPost: (id) => req(`/api/posts/${encodeURIComponent(id)}/retry`, { method: 'POST', body: JSON.stringify({}) }),
   publishDue: () => req('/api/publish-due', { method: 'POST', body: JSON.stringify({}) }),
+
+  // AI caption assistant (batch 3): one suggestion from the user's
+  // topic text. Throws with the server's plain message when the
+  // assistant is off, capped, or unreachable — scheduling never
+  // depends on it.
+  aiCaption: (topic) => req('/api/ai/caption', { method: 'POST', body: JSON.stringify({ topic }) }),
+  // Basic stats (batch 3): counts from the user's own posts only.
+  getMyStats: () => req('/api/my-stats'),
+  // Team / agency (batch 3, Ultra): owner manages invites; members
+  // read their memberships and the active workspace context.
+  getTeam: () => req('/api/team'),
+  inviteTeamMember: (email, role) => req('/api/team/invite', { method: 'POST', body: JSON.stringify({ email, role }) }),
+  removeTeamMember: (id) => req(`/api/team/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  // Memberships are always read as yourself (no workspace header):
+  // if access was revoked, this is how the app finds out and offers
+  // the way back to your own workspace.
+  getMemberships: () => req('/api/team/memberships', { noWorkspace: true }),
+  getTeamContext: () => req('/api/team/context'),
 
   getMedia: async () => asArray(await req('/api/media?limit=500'), 'media'),
   createMedia: async (media) => (await req('/api/media', { method: 'POST', body: JSON.stringify(media) })).media,

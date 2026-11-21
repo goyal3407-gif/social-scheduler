@@ -484,6 +484,60 @@ app.use('/api', ah(async (req, res, next) => {
   if (req.method === 'GET' && (req.path === '/instagram/connect' || req.path === '/instagram/callback' || req.path === '/instagram/ig-connect' || req.path === '/instagram/ig-callback' || req.path === '/youtube/connect' || req.path === '/youtube/callback')) return next();
   return requireAuth(req, res, next);
 }));
+// Team workspace gate (batch 3): runs AFTER auth, only when the caller
+// sends an x-workspace-id header naming a workspace OWNER. The caller
+// must hold an ACTIVE invite from that owner; the data scope then
+// swaps to the owner's (req.userId becomes the owner id, the real
+// caller stays in req.selfId) and the role gate below decides what
+// the request may touch. Without a valid active invite the answer is
+// a flat 403 — and because membership is re-checked on EVERY request,
+// removing a member cuts their access on the very next call.
+//   viewer    — reads only, and only the workspace allowlist.
+//   scheduler — reads + the composer's write allowlist (create/edit/
+//               reschedule/duplicate/publish/retry posts, upload
+//               media, save templates/hashtag groups/drafts, AI
+//               suggestions). Never deletes, never connections,
+//               settings, plan, team management or account actions.
+const WS_GET_ALLOW = [
+  /^\/posts(\/.*)?$/, /^\/media$/, /^\/stats$/, /^\/my-stats$/,
+  /^\/templates$/, /^\/hashtag-groups$/, /^\/drafts$/, /^\/next-best-time$/,
+  /^\/team\/memberships$/, /^\/team\/context$/, /^\/auth\/me$/,
+];
+const WS_SCHEDULER_POST_ALLOW = [
+  /^\/posts$/, /^\/posts\/preflight$/, /^\/posts\/bulk$/,
+  /^\/posts\/[^/]+\/(reschedule|duplicate|publish|retry)$/,
+  /^\/publish-due$/, /^\/media$/, /^\/media\/upload$/, /^\/media\/upload\/(init|chunk|complete)$/,
+  /^\/templates$/, /^\/hashtag-groups$/, /^\/drafts$/, /^\/ai\/caption$/,
+];
+const WS_SCHEDULER_PATCH_ALLOW = [/^\/posts\/[^/]+$/];
+app.use('/api', ah(async (req, res, next) => {
+  if (!req.userId) return next(); // public/exempt path — auth gate already ran
+  const ws = String(req.get('x-workspace-id') || '').trim();
+  if (!ws || ws === req.userId) return next();
+  const memberships = await db.listMemberships(req.userId).catch(() => []);
+  const m = memberships.find((i) => i.ownerId === ws && i.status === 'active');
+  if (!m) return res.status(403).json({ ok: false, error: 'You do not have access to that workspace. If you were invited, sign in with the invited email address.' });
+  req.selfId = req.userId;
+  req.selfEmail = (req.user && req.user.email) || '';
+  req.userId = m.ownerId;
+  req.teamRole = m.role;
+  req.teamInviteId = m.id;
+  const p = req.path;
+  const deny = () => res.status(403).json({ ok: false, error: req.teamRole === 'viewer'
+    ? 'You have view-only access to this workspace — you can look, but not change anything.'
+    : 'Your role in this workspace does not allow that action.' });
+  if (req.method === 'GET') {
+    if (WS_GET_ALLOW.some((re) => re.test(p))) return next();
+    return deny();
+  }
+  // Method-aware write gate: DELETE is never allowed in a workspace,
+  // PATCH only for a post's own fields, POST only for the allowlist.
+  if (req.teamRole === 'scheduler') {
+    if (req.method === 'POST' && WS_SCHEDULER_POST_ALLOW.some((re) => re.test(p))) return next();
+    if (req.method === 'PATCH' && WS_SCHEDULER_PATCH_ALLOW.some((re) => re.test(p))) return next();
+  }
+  return deny();
+}));
 
 function validEmail(email) { return typeof email === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()); }
 
@@ -536,6 +590,7 @@ app.post('/api/auth/signup', ah(async (req, res) => {
   };
   await db.saveUser(user);
   const granted = await applyOwnerComp(user);
+  await bindTeamInvites(user).catch(() => null);
   await setSessionCookie(req, res, user.id);
   res.json({ ok: true, user: publicUser(granted || user) });
 }));
@@ -559,12 +614,14 @@ app.post('/api/auth/login', ah(async (req, res) => {
   }
   loginAttempts.delete(email);
   const granted = await applyOwnerComp(user);
+  await bindTeamInvites(user).catch(() => null);
   await setSessionCookie(req, res, user.id);
   res.json({ ok: true, user: publicUser(granted || user) });
 }));
 app.get('/api/auth/me', ah(async (req, res) => {
   const user = await applyOwnerComp(await getAuthUser(req));
   if (!user) return res.status(401).json({ ok: false, error: 'Not logged in. Please log in again.' });
+  await bindTeamInvites(user).catch(() => null);
   res.json({ ok: true, user: publicUser(user) });
 }));
 app.post('/api/auth/logout', ah(async (req, res) => {
@@ -1459,6 +1516,7 @@ app.get('/api/settings', ah(async (req, res) => {
     defaultIgUserId: summaries.defaultIgUserId,
     setupDone: s.setupDone === true,
     checklistDismissed: s.checklistDismissed === true,
+    guideDismissed: s.guideDismissed === true,
     keepServerCopyAfterPublish: s.keepServerCopyAfterPublish === true,
     ytDefaultVisibility: ytVisibilityOf(s.ytDefaultVisibility),
   };
@@ -1492,7 +1550,7 @@ app.post('/api/settings', ah(async (req, res) => {
   const ig = await getInstagramCreds(req);
   const stored = await getInstagramStored(req);
   const summaries = await instagramAccountSummaries(req.userId);
-  res.json({ ok: true, instagramHandle: s.instagramHandle || ig.username || '', instagramConnected: !!(ig.token && ig.igUserId), tokenConfigured: !!(ig.token && ig.igUserId), instagramUsername: ig.username || '', maskedToken: maskToken(ig.token), tokenSource: ig.source, igUserIdSet: !!ig.igUserId, tokenEncrypted: stored.token ? !!stored.encrypted : null, instagramProfile: stored.profile || null, connectedAt: stored.connectedAt || '', instagramHealth: instagramHealth(stored), instagramAccounts: summaries.accounts, defaultIgUserId: summaries.defaultIgUserId, setupDone: s.setupDone === true, checklistDismissed: s.checklistDismissed === true, keepServerCopyAfterPublish: s.keepServerCopyAfterPublish === true, ytDefaultVisibility: ytVisibilityOf(s.ytDefaultVisibility) });
+  res.json({ ok: true, instagramHandle: s.instagramHandle || ig.username || '', instagramConnected: !!(ig.token && ig.igUserId), tokenConfigured: !!(ig.token && ig.igUserId), instagramUsername: ig.username || '', maskedToken: maskToken(ig.token), tokenSource: ig.source, igUserIdSet: !!ig.igUserId, tokenEncrypted: stored.token ? !!stored.encrypted : null, instagramProfile: stored.profile || null, connectedAt: stored.connectedAt || '', instagramHealth: instagramHealth(stored), instagramAccounts: summaries.accounts, defaultIgUserId: summaries.defaultIgUserId, setupDone: s.setupDone === true, checklistDismissed: s.checklistDismissed === true, guideDismissed: s.guideDismissed === true, keepServerCopyAfterPublish: s.keepServerCopyAfterPublish === true, ytDefaultVisibility: ytVisibilityOf(s.ytDefaultVisibility) });
 }));
 
 // ---------- Instagram connect (Meta login only) ----------
@@ -2486,6 +2544,12 @@ function freshTarget(t) {
     igUserId: (t && (t.igAccountId || t.igUserId)) || '',
     username: (t && (t.igAccountUsername || t.username)) || '',
     status: 'pending', liveUrl: '', error: '', publishedAt: '',
+    // igMediaId (batch 3 foundation for #11/#14): the Instagram media
+    // id returned by media_publish — the key any future insights /
+    // engagement collection must join on. Recorded at publish time;
+    // engagement numbers themselves are NOT fetched yet (they need
+    // Meta App Review), so nothing downstream may invent them.
+    igMediaId: '',
     retryCount: 0, retryPending: false, retryAt: '', containerId: null,
     firstCommentPosted: false,
   };
@@ -2497,6 +2561,7 @@ function normalizeTarget(t) {
   base.liveUrl = typeof t.liveUrl === 'string' ? t.liveUrl : '';
   base.error = typeof t.error === 'string' ? t.error : '';
   base.publishedAt = typeof t.publishedAt === 'string' ? t.publishedAt : '';
+  base.igMediaId = typeof t.igMediaId === 'string' ? t.igMediaId : '';
   base.retryCount = Number.isFinite(t.retryCount) ? t.retryCount : 0;
   base.retryPending = !!t.retryPending;
   base.retryAt = typeof t.retryAt === 'string' ? t.retryAt : '';
@@ -2516,7 +2581,8 @@ function targetsOf(post) {
     status,
     liveUrl: status === 'published' ? (post.liveUrl || '') : '',
     error: status === 'failed' ? (post.lastPublishError || '') : '',
-    publishedAt: '',
+    publishedAt: status === 'published' ? (post.publishedAt || '') : '',
+    igMediaId: '',
     retryCount: post.retryCount || 0, retryPending: !!post.retryPending, retryAt: post.retryAt || '',
     containerId: post.containerId || null, firstCommentPosted: !!post.firstCommentPosted,
   }];
@@ -2556,6 +2622,10 @@ function summarizeTargets(post, targets) {
     igAccountUsername: first.username || '',
     containerId: first.containerId || null,
     liveUrl: firstPub ? (firstPub.liveUrl || '') : ((post && post.liveUrl) || ''),
+    // Post-level publish time (batch 3 foundation for #11/#14): the
+    // first target's publish moment; once set it is never cleared by
+    // later edits, so best-time/analytics data stays truthful.
+    publishedAt: firstPub ? (firstPub.publishedAt || (post && post.publishedAt) || '') : ((post && post.publishedAt) || ''),
     lastPublishError: firstFail ? (firstFail.error || '') : '',
     failedAt: firstFail ? ((post && post.failedAt) || new Date().toISOString()) : ((post && post.failedAt) || ''),
     retryPending: !!retrying,
@@ -2574,10 +2644,10 @@ function summarizeTargets(post, targets) {
 // ahead of time and priority in the publish queue; Free/Pro bridge
 // only the NEXT due post (the refined server rule, report §3).
 const PLANS = {
-  free: { id: 'free', name: 'Free', priceInr: 0, accounts: 2, igAccounts: 1, postsPerDay: 2, postsPerMonth: 30, fullBridge: false },
-  pro: { id: 'pro', name: 'Pro', priceInr: 249, accounts: 3, igAccounts: 3, postsPerDay: Infinity, postsPerMonth: 100, fullBridge: false },
-  max: { id: 'max', name: 'Max', priceInr: 499, accounts: 10, igAccounts: 10, postsPerDay: Infinity, postsPerMonth: Infinity, fullBridge: true },
-  ultra: { id: 'ultra', name: 'Ultra', priceInr: 999, accounts: Infinity, igAccounts: Infinity, postsPerDay: Infinity, postsPerMonth: Infinity, fullBridge: true },
+  free: { id: 'free', name: 'Free', priceInr: 0, accounts: 2, igAccounts: 1, postsPerDay: 2, postsPerMonth: 30, fullBridge: false, aiPerDay: 5 },
+  pro: { id: 'pro', name: 'Pro', priceInr: 249, accounts: 3, igAccounts: 3, postsPerDay: Infinity, postsPerMonth: 100, fullBridge: false, aiPerDay: 25 },
+  max: { id: 'max', name: 'Max', priceInr: 499, accounts: 10, igAccounts: 10, postsPerDay: Infinity, postsPerMonth: Infinity, fullBridge: true, aiPerDay: 100 },
+  ultra: { id: 'ultra', name: 'Ultra', priceInr: 999, accounts: Infinity, igAccounts: Infinity, postsPerDay: Infinity, postsPerMonth: Infinity, fullBridge: true, aiPerDay: Infinity },
 };
 // Upgrade pricing rule (owner, 2026-11-21) — the ONE place plan
 // prices and upgrade math live, so the future Razorpay wiring charges
@@ -2655,6 +2725,27 @@ async function applyOwnerComp(user) {
   await db.updateUser(user.id, { comp: true, planExpiresAt: '' }).catch(() => null);
   await writeAdminAudit({ id: 'system' }, 'comp-grant', user, 'Owner comp grant — standing instruction: permanent Ultra, no expiry');
   return { ...user, comp: true, planExpiresAt: '' };
+}
+// ---------- team / agency foundation (batch 3, Ultra) ----------
+// An Ultra workspace owner invites people by email with a limited
+// role. An invite binds to the account with that email (at invite
+// time if the account exists, otherwise at its next signup/login) —
+// no email is sent (there is no mailer yet), the owner tells the
+// person themselves. Access is resolved PER REQUEST by the workspace
+// middleware below: the member sends an x-workspace-id header naming
+// the owner, the server swaps the data scope to the owner's, and the
+// role gate decides what the request may do. Roles are enforced
+// server-side only — the UI hiding buttons is decoration.
+const TEAM_ROLES = ['scheduler', 'viewer'];
+const TEAM_MEMBER_CAP = 25;
+async function bindTeamInvites(user) {
+  if (!user || !user.email) return;
+  const invites = await db.listTeamInvitesByEmail(user.email);
+  for (const inv of invites) {
+    if (inv.status === 'invited' && !inv.memberUserId) {
+      await db.updateTeamInvite(inv.id, { memberUserId: user.id, status: 'active', boundAt: new Date().toISOString() });
+    }
+  }
 }
 // How many Instagram accounts the plan covers for THIS user: the
 // total-accounts cap minus the YouTube slot when a channel is
@@ -2929,9 +3020,12 @@ app.get('/api/plan/usage', ah(async (req, res) => {
   const user = await db.getUserById(req.userId);
   const counts = await planUsageCounts(req.userId, new Date());
   const { accounts, ytConnected } = await igAccountContext(req.userId);
+  const aiCap = effectivePlanOf(user).aiPerDay;
+  const aiUsed = aiUsageOf(user).count;
   res.json({
     ok: true,
     plan: planInfoOf(user),
+    ai: { perDay: Number.isFinite(aiCap) ? aiCap : null, usedToday: aiUsed, remaining: Number.isFinite(aiCap) ? Math.max(0, aiCap - aiUsed) : null },
     pricing: upgradeQuote(user),
     usage: {
       postsToday: counts.day,
@@ -3469,7 +3563,7 @@ async function attemptYouTubeOnlyPublish(userId, post) {
     if (post.youtubeVideoId) {
       // Already uploaded by an earlier attempt — just mark it live.
       const liveUrl = 'https://www.youtube.com/watch?v=' + post.youtubeVideoId;
-      await db.updatePost(userId, post.id, { status: 'published', liveUrl, containerId: null, lastPublishError: '', retryPending: false, retryAt: '' });
+      await db.updatePost(userId, post.id, { status: 'published', liveUrl, publishedAt: post.publishedAt || new Date().toISOString(), containerId: null, lastPublishError: '', retryPending: false, retryAt: '' });
       return { ok: true, liveUrl, mediaId: post.youtubeVideoId };
     }
     if (!post.youtube || !post.youtube.enabled) return fail('This post has no platform ticked — tick Instagram or YouTube and publish again.');
@@ -3478,7 +3572,7 @@ async function attemptYouTubeOnlyPublish(userId, post) {
     if (!bytes) return fail('This post\u2019s media could not be read for the YouTube upload — upload the file again from the Media Library, then publish.');
     const videoId = await uploadVideoToYouTube(userId, post, bytes);
     const liveUrl = 'https://www.youtube.com/watch?v=' + videoId;
-    await db.updatePost(userId, post.id, { status: 'published', liveUrl, youtubeVideoId: videoId, youtubeStatus: 'uploaded', youtubeError: '', containerId: null, lastPublishError: '', retryPending: false, retryAt: '' });
+    await db.updatePost(userId, post.id, { status: 'published', liveUrl, publishedAt: new Date().toISOString(), youtubeVideoId: videoId, youtubeStatus: 'uploaded', youtubeError: '', containerId: null, lastPublishError: '', retryPending: false, retryAt: '' });
     await notifyUser(userId, 'publish-success', post.id, `Published to YouTube (private): \u201C${String(post.caption || 'Untitled post').slice(0, 80)}\u201D`);
     await spawnNextOccurrence(userId, post);
     try { await maybeDeleteServerCopy(userId, post); } catch { /* cleanup never fails a publish */ }
@@ -3556,6 +3650,7 @@ async function publishOneTarget(userId, post, targets, target, publicBaseUrl) {
   }
   const media = await graph('/' + published.id + '?fields=permalink,media_type&access_token=' + encodeURIComponent(token), 'GET', undefined, base);
   target.status = 'published';
+  target.igMediaId = published.id || '';
   target.liveUrl = (media && media.permalink) || '';
   target.error = '';
   target.containerId = null;
@@ -3749,6 +3844,73 @@ app.post('/api/posts/:id/publish', ah(async (req, res) => {
   // a client-side fix (connect the account), not a server error.
   if (result.missingAll || /no longer connected|not connected/.test(result.error || '')) return res.status(400).json({ ok: false, error: result.error });
   return res.status(502).json({ ok: false, error: result.error });
+}));
+// One-tap retry (batch 3, improvement #3): a failed (or partly
+// failed) post goes through the SAME checks as the Studio pre-flight
+// first — connection, media, plan — and only re-arms when they all
+// pass, so a retry never walks into the same wall silently. Failed
+// targets reset to pending (published ones are never touched), the
+// post is made due now, and the normal publish machinery runs it
+// immediately; its result is reported exactly like a Publish press.
+app.post('/api/posts/:id/retry', ah(async (req, res) => {
+  const post = await db.getPost(req.userId, req.params.id);
+  if (!post) return res.status(404).json({ ok: false, error: 'That post no longer exists — it may have been deleted.' });
+  if (post.status === 'published') return res.status(409).json({ ok: false, error: 'This post is already published — there is nothing to retry. Duplicate it if you want to post it again.' });
+  if (post.status !== 'failed' && post.status !== 'partial') return res.status(409).json({ ok: false, error: 'Only a failed post can be retried — this one has not failed.' });
+  const targets = targetsOf(post);
+  const checks = [];
+  // --- connection ---
+  if (post.igEnabled === false) {
+    const yt = await db.getYouTube(req.userId).catch(() => null);
+    checks.push(yt
+      ? { id: 'connection', ok: true, message: 'YouTube is connected.' }
+      : { id: 'connection', ok: false, message: 'YouTube is not connected.', fix: 'Connect YouTube on the Connections page, then retry.' });
+  } else {
+    const { accounts } = await db.getInstagramAccounts(req.userId);
+    const pending = targets.filter((t) => t.status !== 'published');
+    const missing = pending.find((t) => t.igUserId && !accounts.some((a) => String(a.igUserId) === String(t.igUserId)));
+    const broken = pending.map((t) => accounts.find((a) => String(a.igUserId) === String(t.igUserId))).find((a) => a && a.tokenRefreshError === 'revoked-or-expired');
+    if (!accounts.length) checks.push({ id: 'connection', ok: false, message: 'Instagram is not connected.', fix: 'Connect Instagram on the Connections page, then retry.' });
+    else if (missing) checks.push({ id: 'connection', ok: false, message: `The account @${missing.username || ''} is no longer connected.`, fix: 'Reconnect that account on the Connections page, then retry.' });
+    else if (broken) checks.push({ id: 'connection', ok: false, message: `The connection for @${broken.username || ''} is broken — posts to it cannot publish.`, fix: 'Reconnect that account on the Connections page (one tap), then retry.' });
+    else checks.push({ id: 'connection', ok: true, message: 'Instagram connection is healthy.' });
+  }
+  // --- media ---
+  if (!post.mediaUrl) checks.push({ id: 'media', ok: false, message: 'This post has no media.', fix: 'Edit the post and add a photo or video, then retry.' });
+  else {
+    const dead = await deadStoredMediaError(req.userId, post.mediaUrl);
+    if (dead) checks.push({ id: 'media', ok: false, message: dead, fix: 'Upload the file again in Media Library, then schedule a fresh post with it.' });
+    else checks.push({ id: 'media', ok: true, message: 'Media is ready.' });
+  }
+  // --- plan (the post itself is excluded — it already holds its slot) ---
+  const chk = await planScheduleCheck(req.userId, {
+    scheduleTime: new Date().toISOString(), status: 'scheduled',
+    igEnabled: post.igEnabled !== false,
+    targets: targets.map((t) => ({ igAccountId: t.igUserId })),
+    excludePostId: post.id,
+  });
+  checks.push(chk.ok
+    ? { id: 'plan', ok: true, message: 'Within your plan limits.' }
+    : { id: 'plan', ok: false, message: chk.error, fix: 'Upgrade your plan, or delete some scheduled posts, then retry.' });
+  const failed = checks.find((c) => !c.ok);
+  if (failed) return res.status(422).json({ ok: false, error: failed.message, checks });
+  // --- re-arm + publish now through the normal machinery ---
+  const reset = targets.map((t) => (t.status === 'published' ? t : freshTarget(t)));
+  const patch = {
+    ...summarizeTargets(post, reset),
+    scheduleTime: new Date().toISOString(),
+    lastPublishError: '', failedAt: '',
+    retryCount: 0, retryPending: false, retryAt: '',
+    ...(post.igEnabled === false ? { youtubeStatus: '', youtubeError: '' } : {}),
+  };
+  await db.updatePost(req.userId, post.id, patch);
+  const fresh = await db.getPost(req.userId, post.id);
+  const result = await attemptPublish(req.userId, fresh, {}, publicBase(req));
+  if (result.ok && result.partial) return res.json({ ok: true, retried: true, partial: true, liveUrl: result.liveUrl, mediaId: result.mediaId, error: result.error });
+  if (result.ok) return res.json({ ok: true, retried: true, liveUrl: result.liveUrl, mediaId: result.mediaId });
+  if (result.retry) return res.json({ ok: false, retried: true, retry: true, containerId: result.containerId, error: result.error });
+  if (result.missingAll || /no longer connected|not connected/.test(result.error || '')) return res.status(400).json({ ok: false, retried: true, error: result.error });
+  return res.status(502).json({ ok: false, retried: true, error: result.error });
 }));
 // Posts that are due for one user: scheduled posts whose time has passed
 // (uploaded-file posts are included — attemptPublish migrates their
@@ -4239,7 +4401,13 @@ app.post('/api/templates', ah(async (req, res) => {
   if (typeof b.name !== 'string' || typeof b.text !== 'string') return res.status(400).json({ ok: false, error: 'That template is not valid — please try again.' });
   if (b.name.trim().length > 80) return res.status(400).json({ ok: false, error: 'Template names can be at most 80 characters.' });
   if (b.text.length > 2200) return res.status(400).json({ ok: false, error: 'Template text can be at most 2,200 characters (the Instagram caption limit).' });
-  const t = { id: uid('tpl'), userId: req.userId, name: b.name.trim(), text: b.text };
+  // Caption library (batch 3): a saved set may carry its hashtags and
+  // CTA too, so one tap restores the whole caption block.
+  if (b.hashtags !== undefined && typeof b.hashtags !== 'string') return res.status(400).json({ ok: false, error: 'That template is not valid — please try again.' });
+  if (b.cta !== undefined && typeof b.cta !== 'string') return res.status(400).json({ ok: false, error: 'That template is not valid — please try again.' });
+  if ((b.hashtags || '').length > 500) return res.status(400).json({ ok: false, error: 'Template hashtags can be at most 500 characters.' });
+  if ((b.cta || '').length > 300) return res.status(400).json({ ok: false, error: 'Template CTA can be at most 300 characters.' });
+  const t = { id: uid('tpl'), userId: req.userId, name: b.name.trim(), text: b.text, hashtags: (b.hashtags || '').trim(), cta: (b.cta || '').trim() };
   await db.saveTemplate(t);
   res.json({ ok: true, template: t });
 }));
@@ -4316,6 +4484,219 @@ app.delete('/api/hashtag-groups/:id', ah(async (req, res) => {
   const removed = await db.deleteHashtagGroup(req.userId, String(req.params.id || ''));
   if (!removed) return res.status(404).json({ ok: false, error: 'That hashtag group does not exist.' });
   res.json({ ok: true });
+}));
+
+// ---------- team / agency (batch 3, Ultra foundation) ----------
+// Owner side: list / invite / remove. Member side: memberships +
+// context. Access itself is enforced by the workspace middleware —
+// these endpoints only manage the invite records.
+function publicInvite(inv) {
+  return {
+    id: inv.id, email: inv.email, role: inv.role, status: inv.status,
+    memberUserId: inv.memberUserId || '', createdAt: inv.createdAt || '',
+    boundAt: inv.boundAt || '',
+  };
+}
+async function requireUltraOwner(req, res) {
+  const user = await db.getUserById(req.userId);
+  if (!user || effectivePlanOf(user).id !== 'ultra') {
+    res.status(403).json({ ok: false, error: 'Team members are an Ultra plan feature. Upgrade to Ultra to invite your team.' });
+    return null;
+  }
+  return user;
+}
+app.get('/api/team', ah(async (req, res) => {
+  const user = await requireUltraOwner(req, res);
+  if (!user) return;
+  const invites = await db.listTeamInvites(req.userId);
+  res.json({ ok: true, members: invites.map(publicInvite) });
+}));
+app.post('/api/team/invite', ah(async (req, res) => {
+  const user = await requireUltraOwner(req, res);
+  if (!user) return;
+  const b = req.body || {};
+  const email = String(b.email || '').trim().toLowerCase();
+  const role = TEAM_ROLES.includes(b.role) ? b.role : '';
+  if (!validEmail(email)) return res.status(400).json({ ok: false, error: 'Enter a valid email address for your team member.' });
+  if (!role) return res.status(400).json({ ok: false, error: 'Pick a role: Scheduler (can create and schedule posts) or Viewer (can only look).' });
+  if (email === String(user.email || '').toLowerCase()) return res.status(400).json({ ok: false, error: 'That is your own email — you already own this workspace.' });
+  const invites = await db.listTeamInvites(req.userId);
+  const existing = invites.find((i) => i.email === email && i.status !== 'removed');
+  const liveCount = invites.filter((i) => i.status === 'invited' || i.status === 'active').length;
+  if (!existing && liveCount >= TEAM_MEMBER_CAP) return res.status(400).json({ ok: false, error: `Your team can have at most ${TEAM_MEMBER_CAP} members — remove someone first.` });
+  // If the invited email already has an account, the invite binds
+  // right away; otherwise it binds at that account's next login.
+  const account = await db.getUserByEmail(email).catch(() => null);
+  if (existing) {
+    const patch = { role };
+    if (account && !existing.memberUserId) { patch.memberUserId = account.id; patch.status = 'active'; patch.boundAt = new Date().toISOString(); }
+    const updated = await db.updateTeamInvite(existing.id, patch);
+    return res.json({ ok: true, member: publicInvite(updated || { ...existing, ...patch }) });
+  }
+  const removed = invites.find((i) => i.email === email && i.status === 'removed');
+  if (removed) {
+    const patch = { role, status: account ? 'active' : 'invited', memberUserId: account ? account.id : (removed.memberUserId || ''), boundAt: account ? new Date().toISOString() : (removed.boundAt || ''), removedAt: '' };
+    const updated = await db.updateTeamInvite(removed.id, patch);
+    return res.json({ ok: true, member: publicInvite(updated || { ...removed, ...patch }) });
+  }
+  const inv = {
+    id: uid('team'), ownerId: req.userId, email, role,
+    status: account ? 'active' : 'invited',
+    memberUserId: account ? account.id : '',
+    createdAt: new Date().toISOString(),
+    boundAt: account ? new Date().toISOString() : '',
+  };
+  await db.saveTeamInvite(inv);
+  res.json({ ok: true, member: publicInvite(inv) });
+}));
+app.delete('/api/team/:id', ah(async (req, res) => {
+  const user = await requireUltraOwner(req, res);
+  if (!user) return;
+  const invites = await db.listTeamInvites(req.userId);
+  const inv = invites.find((i) => i.id === String(req.params.id || ''));
+  if (!inv) return res.status(404).json({ ok: false, error: 'That team member does not exist.' });
+  if (inv.status !== 'removed') await db.updateTeamInvite(inv.id, { status: 'removed', removedAt: new Date().toISOString() });
+  res.json({ ok: true });
+}));
+app.get('/api/team/memberships', ah(async (req, res) => {
+  const selfId = req.selfId || req.userId;
+  const mine = await db.listMemberships(selfId);
+  const out = [];
+  for (const inv of mine) {
+    if (inv.status !== 'active') continue;
+    const owner = await db.getUserById(inv.ownerId).catch(() => null);
+    out.push({ ownerId: inv.ownerId, ownerEmail: (owner && owner.email) || '', role: inv.role });
+  }
+  res.json({ ok: true, memberships: out });
+}));
+app.get('/api/team/context', ah(async (req, res) => {
+  if (!req.teamRole) return res.json({ ok: true, inWorkspace: false });
+  const owner = await db.getUserById(req.userId).catch(() => null);
+  res.json({ ok: true, inWorkspace: true, ownerEmail: (owner && owner.email) || '', role: req.teamRole });
+}));
+
+// ---------- AI caption assistant (batch 3, #10) ----------
+// Suggests ONE caption + hashtag set + CTA from the user's own topic
+// text, via Google Gemini. Suggestion only — the user edits before
+// anything is used, and nothing is ever auto-posted. Abuse controls:
+// a per-user DAILY cap from the plan config (PLANS.aiPerDay), counted
+// on the user record and charged BEFORE the call so retry loops
+// cannot drain the shared key; the ONLY thing sent to Gemini is the
+// topic text the user typed for this suggestion (plus our fixed
+// instruction) — no account data, no tokens, no post history.
+// The key comes from the GEMINI_API_KEY env var (the app's own free
+// Google AI Studio key). Without it the feature answers AI_OFF and
+// scheduling carries on untouched — AI must never block a post.
+function aiUsageOf(user) {
+  const today = new Date().toISOString().slice(0, 10);
+  const u = (user && user.aiUsage) || {};
+  return { day: today, count: u.day === today && Number.isFinite(u.count) ? u.count : 0 };
+}
+app.post('/api/ai/caption', ah(async (req, res) => {
+  const b = req.body || {};
+  const topic = typeof b.topic === 'string' ? b.topic.trim() : '';
+  if (topic.length < 3) return res.status(400).json({ ok: false, error: 'Write a few words about your post first — what is it about?' });
+  if (topic.length > 600) return res.status(400).json({ ok: false, error: 'That description is too long — keep it under 600 characters.' });
+  const user = await db.getUserById(req.userId);
+  const plan = effectivePlanOf(user);
+  const cap = plan.aiPerDay;
+  const usage = aiUsageOf(user);
+  if (Number.isFinite(cap) && usage.count >= cap) {
+    return res.status(429).json({ ok: false, code: 'AI_CAP', error: `You have used today's ${cap} AI suggestions on the ${plan.name} plan. More unlock tomorrow — or on a bigger plan.` });
+  }
+  const key = process.env.GEMINI_API_KEY || '';
+  if (!key) return res.status(503).json({ ok: false, code: 'AI_OFF', error: 'The AI caption assistant is not switched on yet. You can still write your caption as usual — nothing is blocked.' });
+  await db.updateUser(req.userId, { aiUsage: { day: usage.day, count: usage.count + 1 } }).catch(() => null);
+  const base = (process.env.GEMINI_API_BASE || 'https://generativelanguage.googleapis.com').replace(/\/+$/, '');
+  const model = process.env.GEMINI_MODEL || 'gemini-3-flash-preview';
+  const prompt = [
+    'You help an Indian creator write ONE Instagram post caption.',
+    'Reply with ONLY a JSON object, no markdown, no extra text:',
+    '{"caption":"...","hashtags":"#tag1 #tag2","cta":"..."}',
+    'Rules: caption at most 280 characters, warm and catchy, in the same language style as the topic (English or Hinglish); 8 to 15 relevant hashtags; cta is one short line asking for a like, comment, save or follow; no profanity, no hate, no medical or money claims.',
+    `Topic: ${topic}`,
+  ].join('\n');
+  let data = null;
+  try {
+    const r = await fetch(`${base}/v1beta/models/${model}:generateContent`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': key },
+      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.9, maxOutputTokens: 500 } }),
+      signal: AbortSignal.timeout(20000),
+    });
+    data = await r.json().catch(() => null);
+    if (!r.ok || !data) throw new Error('gemini http ' + r.status);
+  } catch {
+    return res.status(502).json({ ok: false, code: 'AI_ERROR', error: 'The AI assistant could not answer just now — try again in a moment, or write your caption as usual.' });
+  }
+  const text = (((data.candidates || [])[0] || {}).content || {}).parts?.map((p) => p.text || '').join('') || '';
+  let parsed = null;
+  try {
+    const m = text.match(/\{[\s\S]*\}/);
+    parsed = m ? JSON.parse(m[0]) : null;
+  } catch { parsed = null; }
+  if (!parsed || typeof parsed.caption !== 'string' || !parsed.caption.trim()) {
+    return res.status(502).json({ ok: false, code: 'AI_ERROR', error: 'The AI assistant gave an unusable answer — try again, or write your caption as usual.' });
+  }
+  const hashtags = Array.isArray(parsed.hashtags)
+    ? parsed.hashtags.map((h) => String(h || '').trim()).filter(Boolean).map((h) => (h.startsWith('#') ? h : `#${h}`)).join(' ')
+    : String(parsed.hashtags || '');
+  res.json({
+    ok: true,
+    caption: parsed.caption.trim().slice(0, 2200),
+    hashtags: hashtags.slice(0, 500),
+    cta: typeof parsed.cta === 'string' ? parsed.cta.trim().slice(0, 300) : '',
+    remaining: Number.isFinite(cap) ? Math.max(0, cap - (usage.count + 1)) : null,
+  });
+}));
+
+// ---------- my basic stats (batch 3, #14 foundation) ----------
+// Counts from KiluaAI's OWN publish records only — posts published,
+// how many finished posts went fully live, and per-account totals.
+// Views/likes are NOT here: Instagram insights need Meta App Review,
+// and this section never invents numbers.
+app.get('/api/my-stats', ah(async (req, res) => {
+  const posts = await db.listPosts(req.userId, { all: true });
+  const counts = { total: posts.length, published: 0, partial: 0, failed: 0, scheduled: 0, drafts: 0 };
+  const perAccount = new Map();
+  const bump = (name, kind) => {
+    const key = name || 'Unknown account';
+    const row = perAccount.get(key) || { account: key, published: 0, failed: 0 };
+    row[kind] += 1;
+    perAccount.set(key, row);
+  };
+  const monthKey = (d) => `${d.getFullYear()}-${d.getMonth()}`;
+  const nowMonth = monthKey(new Date());
+  let publishedThisMonth = 0;
+  for (const p of posts) {
+    if (p.status === 'published') counts.published++;
+    else if (p.status === 'partial') counts.partial++;
+    else if (p.status === 'failed') counts.failed++;
+    else if (p.status === 'draft') counts.drafts++;
+    else counts.scheduled++;
+    if (p.publishedAt && monthKey(new Date(p.publishedAt)) === nowMonth) publishedThisMonth++;
+    if (p.igEnabled === false) {
+      if (p.status === 'published') bump('YouTube', 'published');
+      else if (p.status === 'failed') bump('YouTube', 'failed');
+      continue;
+    }
+    for (const t of targetsOf(p)) {
+      if (t.status === 'published') bump(t.username ? `@${t.username}` : (t.igUserId || 'Instagram'), 'published');
+      else if (t.status === 'failed' && !t.retryPending) bump(t.username ? `@${t.username}` : (t.igUserId || 'Instagram'), 'failed');
+    }
+  }
+  const finished = counts.published + counts.partial + counts.failed;
+  res.json({
+    ok: true,
+    stats: {
+      ...counts,
+      finished,
+      successRate: finished ? Math.round((counts.published / finished) * 1000) / 10 : null,
+      publishedThisMonth,
+      perAccount: [...perAccount.values()].sort((a, b) => (b.published + b.failed) - (a.published + a.failed)),
+    },
+    note: 'Basic stats counted from your own posts in KiluaAI. Instagram views and likes will appear here after Meta App Review — they are not estimated.',
+  });
 }));
 
 // ---------- Phase D: referral, link-in-bio, preview link ----------

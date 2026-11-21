@@ -1,5 +1,7 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { api } from '../api.js'
+
+const TeamCard = lazy(() => import('./TeamCard.jsx'))
 
 async function copyText(text, setCopied) {
   try { await navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 2000) }
@@ -129,7 +131,7 @@ function InviteCard() {
   )
 }
 
-export default function Settings({ settings, dbStatus, onSave, saving, onInstagramChanged, user, onAccountDeleted, onNavigate, lang, onLangChange }) {
+export default function Settings({ settings, dbStatus, onSave, saving, onInstagramChanged, user, onAccountDeleted, onNavigate, lang, onLangChange, tr }) {
   const [handle, setHandle] = useState('')
   const [msg, setMsg] = useState('')
   const [err, setErr] = useState('')
@@ -293,6 +295,7 @@ export default function Settings({ settings, dbStatus, onSave, saving, onInstagr
       <BioCard />
       <PreviewCard />
       <InviteCard />
+      <Suspense fallback={null}><TeamCard tr={tr} /></Suspense>
 
       <section className="card" style={{ marginTop: 16 }}>
         <h2>Support</h2>

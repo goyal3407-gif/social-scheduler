@@ -48,6 +48,7 @@ const JSON_FILES = {
   instagram: 'instagram.json', importJobs: 'import-jobs.json',
   notifications: 'notifications.json', uploadSessions: 'upload-sessions.json',
   adminAudit: 'admin-audit.json',
+  teamInvites: 'team-invites.json',
 };
 
 // ---------- Mongoose models ----------
@@ -97,7 +98,11 @@ const mediaFileSchema = new mongoose.Schema({
 const templateSchema = new mongoose.Schema({
   id: { type: String, unique: true, index: true },
   userId: { type: String, index: true }, name: String, text: String,
-});
+  // Caption library (batch 3): a saved set is caption + hashtags + CTA,
+  // inserted into the composer in one tap. Older templates have only
+  // text; the new fields are simply empty for them.
+  hashtags: String, cta: String,
+}, { strict: false });
 // Drafts library (Phase C3): NAMED composer drafts — distinct from
 // draft-status posts. A snapshot of the composer (media ref, caption,
 // hashtags, format/account, YouTube setting, first comment, repeat)
@@ -223,6 +228,23 @@ const adminAuditSchema = new mongoose.Schema({
   targetUserId: String, targetEmail: String, summary: String,
 }, { strict: false });
 adminAuditSchema.index({ at: -1 });
+// Team invites (batch 3, agency foundation for Ultra): one doc per
+// invited email. ownerId = the workspace owner; memberUserId is set
+// when the invited email belongs to a registered account (bound at
+// invite time if the account already exists, otherwise at that
+// account's next login). status: 'invited' (no account yet — grants
+// nothing), 'active' (bound — grants the role), 'removed' (revoked;
+// the row stays so the history is visible). role: 'scheduler' |
+// 'viewer', enforced server-side on every request.
+const teamInviteSchema = new mongoose.Schema({
+  id: { type: String, unique: true, index: true },
+  ownerId: { type: String, index: true },
+  email: { type: String, index: true },
+  role: String, status: String,
+  memberUserId: { type: String, index: true },
+  createdAt: String, boundAt: String, removedAt: String,
+}, { strict: false });
+teamInviteSchema.index({ ownerId: 1, email: 1 });
 
 const User = mongoose.models.SsUser || mongoose.model('SsUser', userSchema, 'users');
 const Session = mongoose.models.SsSession || mongoose.model('SsSession', sessionSchema, 'sessions');
@@ -242,6 +264,7 @@ const Notification = mongoose.models.SsNotification || mongoose.model('SsNotific
 const UploadSession = mongoose.models.SsUploadSession || mongoose.model('SsUploadSession', uploadSessionSchema, 'uploadsessions');
 const UploadChunk = mongoose.models.SsUploadChunk || mongoose.model('SsUploadChunk', uploadChunkSchema, 'uploadchunks');
 const AdminAudit = mongoose.models.SsAdminAudit || mongoose.model('SsAdminAudit', adminAuditSchema, 'adminaudits');
+const TeamInvite = mongoose.models.SsTeamInvite || mongoose.model('SsTeamInvite', teamInviteSchema, 'teaminvites');
 
 // ---------- connect (cached promise + one retry, PureNest pattern) ----------
 let mongoReady = false;
@@ -445,6 +468,8 @@ async function deleteUserData(userId) {
       Notification.deleteMany({ userId }),
       UploadSession.deleteMany({ userId }),
       UploadChunk.deleteMany({ userId }),
+      TeamInvite.deleteMany({ ownerId: userId }),
+      TeamInvite.deleteMany({ memberUserId: userId }),
     ]);
     return;
   }
@@ -466,6 +491,7 @@ async function deleteUserData(userId) {
   const ig = load(JSON_FILES.instagram, {});
   if (ig && typeof ig === 'object') { delete ig[userId]; save(JSON_FILES.instagram, ig); }
   jsonSave('importJobs', jsonList('importJobs').filter((x) => x.userId !== userId));
+  jsonSave('teamInvites', jsonList('teamInvites').filter((x) => x.ownerId !== userId && x.memberUserId !== userId));
   jsonSave('notifications', jsonList('notifications').filter((x) => x.userId !== userId));
   for (const s of jsonList('uploadSessions').filter((x) => x.userId === userId)) deleteUploadChunkFiles(s.id);
   jsonSave('uploadSessions', jsonList('uploadSessions').filter((x) => x.userId !== userId));
@@ -1238,6 +1264,37 @@ async function listAdminAudit({ limit = 100 } = {}) {
     .slice(0, lim);
 }
 
+// ---------- team invites (batch 3, agency foundation) ----------
+async function listTeamInvites(ownerId) {
+  await ensureMongo();
+  if (isMongo()) return stripAll(await TeamInvite.find({ ownerId }).lean());
+  return jsonList('teamInvites').filter((t) => t.ownerId === ownerId);
+}
+async function listTeamInvitesByEmail(email) {
+  await ensureMongo();
+  const e = String(email || '').trim().toLowerCase();
+  if (isMongo()) return stripAll(await TeamInvite.find({ email: e }).lean());
+  return jsonList('teamInvites').filter((t) => t.email === e);
+}
+async function listMemberships(memberUserId) {
+  await ensureMongo();
+  if (isMongo()) return stripAll(await TeamInvite.find({ memberUserId }).lean());
+  return jsonList('teamInvites').filter((t) => t.memberUserId === memberUserId);
+}
+async function saveTeamInvite(doc) {
+  await ensureMongo();
+  if (isMongo()) { await TeamInvite.create(doc); return doc; }
+  const list = jsonList('teamInvites'); list.push(doc); jsonSave('teamInvites', list); return doc;
+}
+async function updateTeamInvite(id, patch) {
+  await ensureMongo();
+  if (isMongo()) { const d = await TeamInvite.findOneAndUpdate({ id }, patch, { new: true }).lean(); return d ? strip(d) : null; }
+  const list = jsonList('teamInvites');
+  const item = list.find((x) => x.id === id);
+  if (!item) return null;
+  Object.assign(item, patch); jsonSave('teamInvites', list); return item;
+}
+
 async function countUnreadNotifications(userId) {
   await ensureMongo();
   if (isMongo()) return Notification.countDocuments({ userId, read: { $ne: true } });
@@ -1363,4 +1420,5 @@ module.exports = {
   saveNotification, listNotifications, countUnreadNotifications, markNotificationsRead,
   createUploadSession, getUploadSession, saveUploadChunk, getUploadChunks, deleteUploadSession, deleteExpiredUploadSessions,
   addAdminAudit, listAdminAudit,
+  listTeamInvites, listTeamInvitesByEmail, listMemberships, saveTeamInvite, updateTeamInvite,
 };

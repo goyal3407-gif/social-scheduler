@@ -4,10 +4,10 @@ import { queueOrder } from '../queueOrder.js'
 import { PostRow, Skeleton, Empty, StatusBadge, PlatformBadge, Thumb } from './shared.jsx'
 
 const STATUSES = ['scheduled', 'draft', 'published', 'partial', 'failed']
-const LABELS = { scheduled: 'Scheduled', draft: 'Drafts', published: 'Published', partial: 'Partial', failed: 'Failed' }
 
-export default function Queue({ posts, loading, onEdit, onDelete, onPublish, publishingId, onCreate, onDuplicate, onPostAgain, onReschedule, onRescheduleNextBest, overdue, onPublishDue, onDeleteMany, onReconnect, tr, searchSeed, searchNonce }) {
+export default function Queue({ posts, loading, onEdit, onDelete, onPublish, publishingId, onCreate, onDuplicate, onPostAgain, onReschedule, onRescheduleNextBest, overdue, onPublishDue, onDeleteMany, onReconnect, tr, searchSeed, searchNonce, onRetry, retryingId }) {
   const t = tr || ((k) => k)
+  const LABELS = { scheduled: t('scheduled'), draft: t('drafts'), published: t('published'), partial: t('partial'), failed: t('failed') }
   const [view, setView] = useState('list')
   const [filter, setFilter] = useState('all')
   const [platform, setPlatform] = useState('all')
@@ -127,7 +127,7 @@ export default function Queue({ posts, loading, onEdit, onDelete, onPublish, pub
             <div key={p.id} style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}
               onTouchStart={(e) => swipeStart(e, p)} onTouchEnd={(e) => swipeEnd(e, p)}>
               <input type="checkbox" aria-label={`Select post: ${(p.caption || 'No caption').slice(0, 40)}`} checked={selected.has(p.id)} onChange={() => toggleSelect(p.id)} style={{ width: 18, height: 18, marginTop: 16, flex: 'none' }} />
-              <div style={{ flex: 1, minWidth: 0 }}><PostRow post={p} onEdit={onEdit} onDelete={onDelete} onPublish={onPublish} publishing={publishingId === p.id} onDuplicate={onDuplicate} onPostAgain={onPostAgain} onReschedule={onReschedule} onRescheduleNextBest={onRescheduleNextBest} onReconnect={onReconnect} /></div>
+              <div style={{ flex: 1, minWidth: 0 }}><PostRow post={p} onEdit={onEdit} onDelete={onDelete} onPublish={onPublish} publishing={publishingId === p.id} onDuplicate={onDuplicate} onPostAgain={onPostAgain} onReschedule={onReschedule} onRescheduleNextBest={onRescheduleNextBest} onReconnect={onReconnect} onRetry={onRetry} retrying={retryingId === p.id} /></div>
             </div>
           ))}
         </div>
@@ -150,6 +150,7 @@ export default function Queue({ posts, loading, onEdit, onDelete, onPublish, pub
                     <div className="post-meta"><span>{fmtDateTime(p.scheduleTime)}</span></div>
                     <div style={{ display: 'flex', gap: 6, marginTop: 9, flexWrap: 'wrap' }}>
                       {p.status !== 'published' && <button type="button" className="btn primary small" disabled={publishingId === p.id} onClick={() => onPublish(p)}>Publish</button>}
+                      {onRetry && (p.status === 'failed' || p.status === 'partial') && <button type="button" className="btn ghost small" disabled={retryingId === p.id} onClick={() => onRetry(p)} title="Re-checks the connection, media and plan first, then publishes again">{retryingId === p.id ? t('retrying') : t('retry')}</button>}
                       {onPostAgain && <button type="button" className="btn ghost small" onClick={() => onPostAgain(p)}>Post again</button>}
                       {onDuplicate && <button type="button" className="btn ghost small" onClick={() => onDuplicate(p)}>Duplicate</button>}
                       {onReschedule && p.status !== 'published' && <button type="button" className="btn ghost small" onClick={() => onReschedule(p, { addDays: 1 })}>+1 day</button>}

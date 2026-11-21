@@ -224,7 +224,7 @@ export function StatusTracker({ post, publishing, onReconnect }) {
   )
 }
 
-export function PostRow({ post, onEdit, onDelete, onPublish, publishing, onDuplicate, onPostAgain, onReschedule, onRescheduleNextBest, onReconnect }) {
+export function PostRow({ post, onEdit, onDelete, onPublish, publishing, onDuplicate, onPostAgain, onReschedule, onRescheduleNextBest, onReconnect, onRetry, retrying }) {
   const [menuOpen, setMenuOpen] = useState(false)
   const menuRef = useRef(null)
   useEffect(() => {
@@ -272,6 +272,11 @@ export function PostRow({ post, onEdit, onDelete, onPublish, publishing, onDupli
           {post.status !== 'published' && (
             <button type="button" className="btn primary small" disabled={publishing} onClick={() => onPublish && onPublish(post)}>
               {publishing ? 'Publishing…' : 'Publish now'}
+            </button>
+          )}
+          {onRetry && (post.status === 'failed' || post.status === 'partial') && (
+            <button type="button" className="btn ghost small" disabled={retrying} onClick={() => onRetry(post)} title="Re-checks the connection, media and plan first, then publishes again">
+              {retrying ? 'Retrying…' : 'Retry'}
             </button>
           )}
           {hasMenu && (
