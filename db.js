@@ -47,6 +47,7 @@ const JSON_FILES = {
   bios: 'bios.json',
   instagram: 'instagram.json', importJobs: 'import-jobs.json',
   notifications: 'notifications.json', uploadSessions: 'upload-sessions.json',
+  adminAudit: 'admin-audit.json',
 };
 
 // ---------- Mongoose models ----------
@@ -212,6 +213,16 @@ const uploadChunkSchema = new mongoose.Schema({
   userId: String, index: Number, data: Buffer,
 }, { strict: false });
 uploadChunkSchema.index({ sessionId: 1, index: 1 }, { unique: true });
+// Owner admin-panel audit log (batch 2): one doc per admin action —
+// plan change, comp grant/revoke, expiry change, limit override, PIN
+// set/change. Global (not per-user): written by the owner, read only
+// by the owner, and kept even if the target user is later deleted.
+const adminAuditSchema = new mongoose.Schema({
+  id: { type: String, unique: true, index: true },
+  at: String, adminId: String, action: String,
+  targetUserId: String, targetEmail: String, summary: String,
+}, { strict: false });
+adminAuditSchema.index({ at: -1 });
 
 const User = mongoose.models.SsUser || mongoose.model('SsUser', userSchema, 'users');
 const Session = mongoose.models.SsSession || mongoose.model('SsSession', sessionSchema, 'sessions');
@@ -230,6 +241,7 @@ const ImportJob = mongoose.models.SsImportJob || mongoose.model('SsImportJob', i
 const Notification = mongoose.models.SsNotification || mongoose.model('SsNotification', notificationSchema, 'notifications');
 const UploadSession = mongoose.models.SsUploadSession || mongoose.model('SsUploadSession', uploadSessionSchema, 'uploadsessions');
 const UploadChunk = mongoose.models.SsUploadChunk || mongoose.model('SsUploadChunk', uploadChunkSchema, 'uploadchunks');
+const AdminAudit = mongoose.models.SsAdminAudit || mongoose.model('SsAdminAudit', adminAuditSchema, 'adminaudits');
 
 // ---------- connect (cached promise + one retry, PureNest pattern) ----------
 let mongoReady = false;
@@ -1208,6 +1220,24 @@ async function listNotifications(userId, { limit = 50 } = {}) {
     .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
     .slice(0, lim);
 }
+// ---------- admin audit log (batch 2) ----------
+async function addAdminAudit(entry) {
+  await ensureMongo();
+  if (isMongo()) { await AdminAudit.create(entry); return entry; }
+  const list = jsonList('adminAudit'); list.push(entry); jsonSave('adminAudit', list); return entry;
+}
+async function listAdminAudit({ limit = 100 } = {}) {
+  await ensureMongo();
+  const lim = Math.min(Math.max(Number(limit) || 100, 1), 500);
+  if (isMongo()) {
+    const docs = await AdminAudit.find({}).sort({ at: -1 }).limit(lim).lean();
+    return stripAll(docs);
+  }
+  return jsonList('adminAudit')
+    .sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')))
+    .slice(0, lim);
+}
+
 async function countUnreadNotifications(userId) {
   await ensureMongo();
   if (isMongo()) return Notification.countDocuments({ userId, read: { $ne: true } });
@@ -1332,4 +1362,5 @@ module.exports = {
   getImportJob, saveImportJob,
   saveNotification, listNotifications, countUnreadNotifications, markNotificationsRead,
   createUploadSession, getUploadSession, saveUploadChunk, getUploadChunks, deleteUploadSession, deleteExpiredUploadSessions,
+  addAdminAudit, listAdminAudit,
 };

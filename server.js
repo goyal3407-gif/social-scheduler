@@ -155,6 +155,15 @@ if (fs.existsSync(path.join(DIST, 'index.html'))) {
 function uid(prefix) { return prefix + '-' + Date.now().toString(36) + '-' + crypto.randomBytes(3).toString('hex'); }
 const ah = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
+// Owner console (batch 2): a server-rendered page + API under one
+// deliberately non-obvious path segment. It is gated server-side by
+// the owner's account identity plus a PIN; every other visitor —
+// logged in or not — gets the plain 404 an unknown route gets, and
+// nothing in the client app references it. The path is recorded only
+// in the goal's hidden build-progress file, never in user-facing docs.
+// Keep this constant in sync with the /api middleware exemption below.
+const ADMIN_SLUG = 'hq-7f3k9';
+
 // The app's own public origin, used to build URLs that outside services
 // (Instagram's media fetcher) download from — same host derivation as
 // the connect links: the request's host, falling back to production.
@@ -380,6 +389,14 @@ function publicUser(u) {
   if (!u) return null;
   const out = { id: u.id, email: u.email, role: u.role || 'member', createdAt: u.createdAt };
   if (u.name) out.name = u.name;
+  // Plan summary (batch 2): the EFFECTIVE plan (comp grants, expiry
+  // and the owner bypass already applied) so the client can label the
+  // account honestly. Never the stored admin fields themselves.
+  const eff = effectivePlanOf(u);
+  out.plan = eff.id;
+  out.planName = eff.name;
+  if (u.comp) out.comp = true;
+  if (u.planExpiresAt && eff.id !== 'free') out.planExpiresAt = u.planExpiresAt;
   return out;
 }
 function signSession(sessionId, userId) {
@@ -453,7 +470,7 @@ async function requireAuth(req, res, next) {
 // requires login.
 app.use('/api', apiRateLimit, (req, res, next) => { if (req.path.startsWith('/auth/')) return authRateLimit(req, res, next); return next(); });
 app.use('/api', ah(async (req, res, next) => {
-  if (req.path === '/health' || req.path === '/db-status' || req.path === '/version' || req.path.startsWith('/auth/') || req.path.startsWith('/cron/')) return next();
+  if (req.path === '/health' || req.path === '/db-status' || req.path === '/version' || req.path.startsWith('/auth/') || req.path.startsWith('/cron/') || req.path.startsWith(`/${ADMIN_SLUG}/`)) return next();
   // Make sure the database connection is up (no-op when already connected
   // or when no MONGODB_URI is set — JSON fallback is used then).
   await db.ensureMongo();
@@ -2546,6 +2563,154 @@ function summarizeTargets(post, targets) {
     status: computeOverallStatus(post, targets),
   };
 }
+// ---------- plans (batch 2) ----------
+// The four plans from the 2026-11-21 report (§7 item 5), as data.
+// accounts = total connected accounts covered (Instagram + YouTube);
+// igAccounts = Instagram accounts covered. Free is 2 connected
+// accounts with at most 1 Instagram (+ 1 YouTube). fullBridge plans
+// (Max/Ultra) get their whole queue's media bridged to the server
+// ahead of time and priority in the publish queue; Free/Pro bridge
+// only the NEXT due post (the refined server rule, report §3).
+const PLANS = {
+  free: { id: 'free', name: 'Free', accounts: 2, igAccounts: 1, postsPerDay: 2, postsPerMonth: 30, fullBridge: false },
+  pro: { id: 'pro', name: 'Pro', accounts: 3, igAccounts: 3, postsPerDay: Infinity, postsPerMonth: 100, fullBridge: false },
+  max: { id: 'max', name: 'Max', accounts: 10, igAccounts: 10, postsPerDay: Infinity, postsPerMonth: Infinity, fullBridge: true },
+  ultra: { id: 'ultra', name: 'Ultra', accounts: Infinity, igAccounts: Infinity, postsPerDay: Infinity, postsPerMonth: Infinity, fullBridge: true },
+};
+const PLAN_RANK = { free: 0, pro: 1, max: 2, ultra: 3 };
+// The effective plan for a user doc: the account OWNER is never plan-
+// limited (he operates the app; his stored plan field is untouched),
+// a comp grant is full Ultra forever, an expired paid plan falls back
+// to Free, and anything unknown is Free — the migration-safe default
+// for every existing user (their already-queued posts still publish;
+// limits bite only on NEW schedules).
+function effectivePlanOf(user) {
+  if (!user) return PLANS.free;
+  if (user.role === 'owner') return PLANS.ultra;
+  if (user.comp) return PLANS.ultra;
+  const raw = PLANS[user.plan] ? user.plan : 'free';
+  if (raw !== 'free' && user.planExpiresAt && new Date(user.planExpiresAt).getTime() <= Date.now()) return PLANS.free;
+  return PLANS[raw];
+}
+// Plan limits with the owner's per-user override applied: a positive
+// postLimitOverride replaces the plan's monthly post cap.
+function planLimitsOf(user) {
+  const plan = effectivePlanOf(user);
+  const limits = { accounts: plan.accounts, igAccounts: plan.igAccounts, postsPerDay: plan.postsPerDay, postsPerMonth: plan.postsPerMonth, fullBridge: plan.fullBridge };
+  const o = user ? Number(user.postLimitOverride) : 0;
+  if (Number.isFinite(o) && o > 0) limits.postsPerMonth = Math.floor(o);
+  return limits;
+}
+function planInfoOf(user) {
+  const plan = effectivePlanOf(user);
+  const limits = planLimitsOf(user);
+  const ser = (n) => (Number.isFinite(n) ? n : null);
+  return {
+    plan: plan.id, planName: plan.name,
+    basePlan: user && PLANS[user.plan] ? user.plan : 'free',
+    comp: !!(user && user.comp),
+    planExpiresAt: (user && user.planExpiresAt) || '',
+    limits: { accounts: ser(limits.accounts), igAccounts: ser(limits.igAccounts), postsPerDay: ser(limits.postsPerDay), postsPerMonth: ser(limits.postsPerMonth) },
+  };
+}
+// How many Instagram accounts the plan covers for THIS user: the
+// total-accounts cap minus the YouTube slot when a channel is
+// connected, and never more than the Instagram cap.
+function igAllowanceOf(limits, ytConnected) {
+  const byTotal = Number.isFinite(limits.accounts) ? Math.max(0, limits.accounts - (ytConnected ? 1 : 0)) : Infinity;
+  return Math.min(limits.igAccounts, byTotal);
+}
+async function igAccountContext(userId) {
+  const { accounts } = await db.getInstagramAccounts(userId);
+  const sorted = [...accounts].sort((a, b) => String(a.connectedAt || '').localeCompare(String(b.connectedAt || '')));
+  const yt = await db.getYouTube(userId).catch(() => null);
+  return { accounts: sorted, ytConnected: !!yt };
+}
+// Non-draft posts already counting against the day/month that a new
+// post is being scheduled into (counted by the post's own scheduled
+// time, so filling next month never eats this month's quota).
+async function planUsageCounts(userId, when, { excludePostId = '', extraPosts = [] } = {}) {
+  const posts = await db.listPosts(userId, { all: true });
+  const dayKey = (d) => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+  const monthKey = (d) => `${d.getFullYear()}-${d.getMonth()}`;
+  let day = 0; let month = 0;
+  const consider = (p) => {
+    if (!p || p.status === 'draft' || !p.scheduleTime) return;
+    if (excludePostId && p.id === excludePostId) return;
+    const t = new Date(p.scheduleTime);
+    if (Number.isNaN(t.getTime())) return;
+    if (monthKey(t) === monthKey(when)) month++;
+    if (dayKey(t) === dayKey(when)) day++;
+  };
+  posts.forEach(consider);
+  extraPosts.forEach(consider);
+  return { day, month };
+}
+const UPGRADE_HINT = 'To upgrade, ask the app owner — online payment is coming soon.';
+// One schedule-time plan check shared by create, bulk, edit,
+// reschedule and the pre-flight endpoint. candidate = {
+// scheduleTime, status, igEnabled, targets: [{igAccountId|igUserId}],
+// excludePostId }. Returns { ok:true, plan } or { ok:false, error,
+// kind, plan } — the error always names the limit and the way out
+// (satisfaction rule: never a dead end).
+async function planScheduleCheck(userId, candidate, { extraPosts = [] } = {}) {
+  const user = await db.getUserById(userId);
+  const plan = effectivePlanOf(user);
+  const limits = planLimitsOf(user);
+  const info = planInfoOf(user);
+  const fail = (error, kind) => ({ ok: false, error, kind, plan: info });
+  if (candidate.igEnabled !== false) {
+    const targetIds = [...new Set((candidate.targets || []).map((t) => String((t && (t.igAccountId || t.igUserId)) || '')).filter(Boolean))];
+    if (targetIds.length) {
+      const { accounts, ytConnected } = await igAccountContext(userId);
+      const igCap = igAllowanceOf(limits, ytConnected);
+      if (targetIds.length > igCap) {
+        return fail(`Your ${plan.name} plan covers up to ${igCap} Instagram account${igCap === 1 ? '' : 's'} per post, but this post targets ${targetIds.length}. Untick the extra accounts, or upgrade for more (Pro covers 3 accounts, Max 10, Ultra unlimited). ${UPGRADE_HINT}`, 'accounts');
+      }
+      const covered = new Set(accounts.slice(0, Number.isFinite(igCap) ? igCap : accounts.length).map((a) => String(a.igUserId)));
+      const outside = targetIds.find((id) => !covered.has(id));
+      if (outside) {
+        const acc = accounts.find((a) => String(a.igUserId) === outside);
+        return fail(`@${(acc && acc.username) || outside} is not covered by your ${plan.name} plan — it covers your first ${igCap === Infinity ? 'connected accounts (all of them)' : `${igCap} connected Instagram account${igCap === 1 ? '' : 's'}`}. Post to a covered account, disconnect an account you no longer use, or upgrade your plan. ${UPGRADE_HINT}`, 'accounts');
+      }
+    }
+  }
+  if (candidate.status !== 'draft' && candidate.scheduleTime) {
+    const when = new Date(candidate.scheduleTime);
+    if (!Number.isNaN(when.getTime())) {
+      const counts = await planUsageCounts(userId, when, { excludePostId: candidate.excludePostId || '', extraPosts });
+      if (Number.isFinite(limits.postsPerDay) && counts.day >= limits.postsPerDay) {
+        return fail(`Your ${plan.name} plan allows ${limits.postsPerDay} posts on one day, and that day already has ${counts.day}. Move this post to another day, or upgrade — Pro has no daily cap (100 posts a month) and Max/Ultra are unlimited. ${UPGRADE_HINT}`, 'daily');
+      }
+      if (Number.isFinite(limits.postsPerMonth) && counts.month >= limits.postsPerMonth) {
+        return fail(`Your ${plan.name} plan allows ${limits.postsPerMonth} posts in a month, and that month already has ${counts.month}. Move this post to another month, or upgrade — Pro allows 100 posts a month and Max/Ultra are unlimited. ${UPGRADE_HINT}`, 'monthly');
+      }
+    }
+  }
+  return { ok: true, plan: info };
+}
+function planDeny(res, check) {
+  return res.status(403).json({ ok: false, code: 'PLAN_LIMIT', error: check.error, plan: check.plan });
+}
+// Server-rule bridge preparation (report §3): a scheduled post whose
+// media still lives in an inline data: URL has no server copy yet.
+// Max/Ultra queues are bridged in full ahead of time; Free/Pro bridge
+// only the single next-due post, so the server holds almost nothing
+// for free users. Runs inside the existing cron passes (no new
+// infrastructure); publishing itself re-checks at publish time, so a
+// post that was never pre-bridged still publishes.
+async function prepareBridges(userId, base) {
+  const user = await db.getUserById(userId).catch(() => null);
+  const plan = effectivePlanOf(user);
+  const posts = await db.listPosts(userId, { all: true });
+  const pending = posts
+    .filter((p) => p.status === 'scheduled' && typeof p.mediaUrl === 'string' && p.mediaUrl.startsWith('data:'))
+    .sort((a, b) => new Date(a.scheduleTime || 0) - new Date(b.scheduleTime || 0));
+  const chosen = planLimitsOf(user).fullBridge ? pending : pending.slice(0, 1);
+  for (const p of chosen) await ensurePublishableMedia(userId, p, base).catch(() => null);
+  return chosen.length;
+}
+
 function buildPost(b, userId, targets = [], ytDefaultVisibility = '') {
   // Status and liveUrl are server-owned: a post becomes "published"
   // only through the publish flow, which also sets the real liveUrl
@@ -2630,10 +2795,89 @@ app.post('/api/posts', ah(async (req, res) => {
   if (resolved.error) return res.status(400).json({ ok: false, error: resolved.error });
   const mediaErr = await deadStoredMediaError(req.userId, b.mediaUrl);
   if (mediaErr) return res.status(400).json({ ok: false, error: mediaErr });
+  // Plan limits (batch 2): enforced at schedule time with the reason
+  // and the way out in the message — never a dead-end error.
+  const planCheck = await planScheduleCheck(req.userId, {
+    scheduleTime: b.scheduleTime || new Date().toISOString(),
+    status: b.status === 'draft' ? 'draft' : 'scheduled',
+    igEnabled: b.igEnabled === false ? false : (Array.isArray(b.igTargets) ? resolved.targets.length > 0 : true),
+    targets: resolved.targets,
+  });
+  if (!planCheck.ok) return planDeny(res, planCheck);
   const settings = await db.getSettings(req.userId);
   const post = buildPost(b, req.userId, resolved.targets, settings && settings.ytDefaultVisibility);
   await db.savePost(post);
   res.json({ ok: true, post });
+}));
+// Pre-flight check (batch 2, improvement #2): one pass BEFORE saving —
+// connection healthy? media present and alive? within plan limits? —
+// so the Studio can show green/red with the exact problem and its fix
+// instead of the user discovering trouble at publish time. Advisory:
+// saving still re-runs the real enforcement.
+app.post('/api/posts/preflight', ah(async (req, res) => {
+  const b = req.body || {};
+  const checks = [];
+  const resolver = await postTargetResolver(req.userId);
+  const resolved = resolver.resolveForBody(b);
+  const igEnabled = b.igEnabled === false ? false : (Array.isArray(b.igTargets) ? (resolved.targets || []).length > 0 : true);
+  const ytEnabled = !!(b.youtube && b.youtube.enabled);
+  // --- connection ---
+  if (resolved.error) {
+    checks.push({ id: 'connection', ok: false, message: resolved.error, fix: 'Connect that account on the Connections page, then check again.' });
+  } else if (!igEnabled && !ytEnabled) {
+    checks.push({ id: 'connection', ok: false, message: 'No platform is ticked for this post.', fix: 'Tick Instagram or YouTube in Step 3.' });
+  } else {
+    let connOk = true; let connMsg = ''; let connFix = '';
+    if (igEnabled) {
+      const { accounts } = await db.getInstagramAccounts(req.userId);
+      if (!accounts.length) { connOk = false; connMsg = 'Instagram is not connected yet.'; connFix = 'Connect Instagram on the Connections page, then check again.'; }
+      else {
+        const ids = [...new Set((resolved.targets || []).map((t) => String(t.igAccountId || '')).filter(Boolean))];
+        const broken = ids.map((id) => accounts.find((a) => String(a.igUserId) === id)).find((a) => a && a.tokenRefreshError === 'revoked-or-expired');
+        if (broken) { connOk = false; connMsg = `The connection for @${broken.username || ''} is broken — posts to it cannot publish.`; connFix = 'Reconnect that account on the Connections page (one tap), then check again.'; }
+        else connMsg = 'Instagram connection is healthy.';
+      }
+    }
+    if (connOk && ytEnabled) {
+      const yt = await db.getYouTube(req.userId).catch(() => null);
+      if (!yt) { connOk = false; connMsg = 'YouTube is not connected yet.'; connFix = 'Connect YouTube on the Connections page, then check again.'; }
+      else connMsg = connMsg ? `${connMsg} YouTube is connected.` : 'YouTube is connected.';
+    }
+    checks.push({ id: 'connection', ok: connOk, message: connMsg, fix: connFix });
+  }
+  // --- media ---
+  if (!b.mediaUrl) {
+    checks.push({ id: 'media', ok: false, message: 'No media added yet.', fix: 'Pick a file or paste a link in Step 1.' });
+  } else {
+    const dead = await deadStoredMediaError(req.userId, b.mediaUrl);
+    if (dead) checks.push({ id: 'media', ok: false, message: dead, fix: 'Upload the file again in Media Library, then pick the fresh copy.' });
+    else if (String(b.mediaUrl).startsWith('data:')) checks.push({ id: 'media', ok: true, message: 'Media is ready — a server copy is made before publishing.' });
+    else checks.push({ id: 'media', ok: true, message: 'Media is ready.' });
+  }
+  // --- plan ---
+  const status = b.status === 'draft' ? 'draft' : 'scheduled';
+  const user = await db.getUserById(req.userId);
+  const info = planInfoOf(user);
+  if (status === 'draft') {
+    checks.push({ id: 'plan', ok: true, message: 'Drafts do not count towards plan limits.' });
+  } else {
+    const chk = await planScheduleCheck(req.userId, {
+      scheduleTime: b.scheduleTime || new Date().toISOString(),
+      status,
+      igEnabled,
+      targets: resolved.targets || [],
+      excludePostId: typeof b.excludePostId === 'string' ? b.excludePostId : '',
+    });
+    if (chk.ok) {
+      const when = new Date(b.scheduleTime || Date.now());
+      const counts = await planUsageCounts(req.userId, when, { excludePostId: typeof b.excludePostId === 'string' ? b.excludePostId : '' });
+      const lim = info.limits.postsPerMonth;
+      checks.push({ id: 'plan', ok: true, message: `Within your ${info.planName} plan — ${counts.month}${lim ? ` of ${lim}` : ''} posts already in that month.` });
+    } else {
+      checks.push({ id: 'plan', ok: false, message: chk.error, fix: 'Move the post to another day or month, or upgrade your plan.' });
+    }
+  }
+  res.json({ ok: checks.every((c) => c.ok), checks, plan: info });
 }));
 // Bulk import: one request for many rows instead of one request per row
 // (a 100-row CSV used to take 100 round trips and often timed out).
@@ -2653,6 +2897,15 @@ app.post('/api/posts/bulk', ah(async (req, res) => {
     if (resolved.error) { errors.push(`Row ${i + 1}: ${resolved.error}`); continue; }
     const mediaErr = await deadStoredMediaError(req.userId, (b || {}).mediaUrl);
     if (mediaErr) { errors.push(`Row ${i + 1}: ${mediaErr}`); continue; }
+    // Plan limits per row, counted cumulatively over the rows this
+    // import has already accepted (batch 2).
+    const planCheck = await planScheduleCheck(req.userId, {
+      scheduleTime: b.scheduleTime || new Date().toISOString(),
+      status: b.status === 'draft' ? 'draft' : 'scheduled',
+      igEnabled: b.igEnabled === false ? false : (Array.isArray(b.igTargets) ? resolved.targets.length > 0 : true),
+      targets: resolved.targets,
+    }, { extraPosts: valid });
+    if (!planCheck.ok) { errors.push(`Row ${i + 1}: ${planCheck.error}`); continue; }
     valid.push(buildPost(b, req.userId, resolved.targets, settings && settings.ytDefaultVisibility));
   }
   if (valid.length) await db.savePostsBulk(valid);
@@ -2717,6 +2970,27 @@ app.patch('/api/posts/:id', ah(async (req, res) => {
     const mediaErr = await deadStoredMediaError(req.userId, patch.mediaUrl);
     if (mediaErr) return res.status(400).json({ ok: false, error: mediaErr });
   }
+  // Plan limits (batch 2): an edit that leaves the post scheduled —
+  // newly scheduled, moved, or retargeted — is checked against the
+  // plan, excluding the post itself. Quiet edits to an already-
+  // scheduled post (caption only) are not re-checked.
+  const touchesSchedule = patch.status !== undefined || patch.scheduleTime !== undefined || patch.igTargets !== undefined || patch.igAccountId !== undefined;
+  if (touchesSchedule) {
+    const current = await db.getPost(req.userId, req.params.id);
+    if (!current) return res.status(404).json({ ok: false, error: 'That post no longer exists — it may have been deleted. Refresh the queue.' });
+    const nextStatus = patch.status !== undefined ? patch.status : current.status;
+    if (nextStatus === 'scheduled') {
+      const nextTargets = patch.igTargets !== undefined ? patch.igTargets : targetsOf(current);
+      const planCheck = await planScheduleCheck(req.userId, {
+        scheduleTime: patch.scheduleTime !== undefined ? patch.scheduleTime : current.scheduleTime,
+        status: 'scheduled',
+        igEnabled: patch.igEnabled !== undefined ? patch.igEnabled : current.igEnabled,
+        targets: nextTargets,
+        excludePostId: current.id,
+      });
+      if (!planCheck.ok) return planDeny(res, planCheck);
+    }
+  }
   const updated = await db.updatePost(req.userId, req.params.id, patch);
   if (!updated) return res.status(404).json({ ok: false, error: 'That post no longer exists — it may have been deleted. Refresh the queue.' });
   res.json({ ok: true, post: updated });
@@ -2770,6 +3044,19 @@ app.post('/api/posts/:id/reschedule', ah(async (req, res) => {
   }
   if (Number.isNaN(next.getTime())) return res.status(400).json({ ok: false, error: 'That date/time is not valid — pick a date and time from the calendar picker.' });
   const patch = { scheduleTime: next.toISOString() };
+  // Plan limits (batch 2): moving a scheduled post — or reviving a
+  // finished one — into a new slot is checked against the plan,
+  // excluding the post itself.
+  if (post.status === 'scheduled' || post.status === 'published' || post.status === 'failed' || post.status === 'partial') {
+    const planCheck = await planScheduleCheck(req.userId, {
+      scheduleTime: patch.scheduleTime,
+      status: 'scheduled',
+      igEnabled: post.igEnabled,
+      targets: targetsOf(post),
+      excludePostId: post.id,
+    });
+    if (!planCheck.ok) return planDeny(res, planCheck);
+  }
   // A published/failed/partial post moved to a new time goes back to
   // the queue, with every target reset so it publishes again.
   if (post.status === 'published' || post.status === 'failed' || post.status === 'partial') {
@@ -3433,7 +3720,10 @@ app.post('/api/publish-due', ah(async (req, res) => {
   await ensureInstagramTokenFresh(req.userId).catch(() => null);
   const { accounts } = await db.getInstagramAccounts(req.userId);
   const defaultIg = await getInstagramCreds(req.userId);
-  const due = await duePostsFor(req.userId, 5);
+  // Full-bridge plans (Max/Ultra) may drain more per tap — their
+  // media is already server-side (batch 2).
+  const me = await db.getUserById(req.userId).catch(() => null);
+  const due = await duePostsFor(req.userId, planLimitsOf(me).fullBridge ? 10 : 5);
   // The not-connected guard only applies when something due actually
   // needs Instagram — a queue of YouTube-only posts publishes fine
   // without any Instagram connection.
@@ -3478,12 +3768,19 @@ const cronPublishDue = ah(async (req, res) => {
     return res.status(401).json({ ok: false, error: 'Not authorised.' });
   }
   const users = await db.listUsers();
+  // Publish priority (batch 2): Max/Ultra queues are worked first,
+  // then Pro, then Free.
+  users.sort((a, b) => (PLAN_RANK[effectivePlanOf(b).id] || 0) - (PLAN_RANK[effectivePlanOf(a).id] || 0));
   const summary = [];
   for (const user of users) {
     await ensureInstagramTokenFresh(user.id).catch(() => null);
     const { accounts } = await db.getInstagramAccounts(user.id);
     const defaultIg = await getInstagramCreds(user.id);
-    const due = await duePostsFor(user.id, 3);
+    // Server rule: pre-bridge media before publishing — the whole
+    // queue for Max/Ultra, just the next due post for Free/Pro. The
+    // per-run cap follows the same split.
+    await prepareBridges(user.id, publicBase(req)).catch(() => null);
+    const due = await duePostsFor(user.id, planLimitsOf(user).fullBridge ? 10 : 3);
     // Skip only when nothing due can publish: YouTube-only posts do
     // not need an Instagram connection.
     if ((!defaultIg.token || !defaultIg.igUserId) && accounts.length === 0 && !due.some((p) => p.igEnabled === false)) { summary.push({ userId: user.id, skipped: 'instagram-not-connected' }); continue; }
@@ -3536,6 +3833,9 @@ const cronTokenRefresh = ah(async (req, res) => {
       const h = await ensureInstagramTokenFresh(user.id, { igUserId: a.igUserId }).catch(() => null);
       accountHealths.push({ igUserId: a.igUserId, username: a.username || '', instagram: h });
     }
+    // Server-rule bridge prep rides along with the token pass
+    // (batch 2): full queue for Max/Ultra, next due post otherwise.
+    await prepareBridges(user.id, publicBase(req)).catch(() => null);
     summary.push({ userId: user.id, instagram: health, accounts: accountHealths });
   }
   res.json({ ok: true, ranAt: new Date().toISOString(), summary });
@@ -4107,6 +4407,494 @@ app.get('/preview/:token', ah(async (req, res) => {
 <h1 style="font-size:22px;margin:8px 0 4px">Upcoming posts</h1>
 <p style="opacity:.7;margin:0 0 14px;font-size:14px">A read-only preview shared for approval. Times are UTC.</p>
 ${rows}`));
+}));
+
+// ---------- owner console (batch 2) ----------
+// A server-rendered admin page + JSON API under the non-obvious
+// ADMIN_SLUG path. Hard rules: (1) nothing in the client app links to
+// or mentions it; (2) every route resolves the session server-side
+// and answers with the app's plain 404 unless the caller is the OWNER
+// account — a 403 or a login redirect would admit it exists; (3) the
+// data endpoints additionally require a short-lived PIN-unlock token,
+// so even the owner's own session cookie alone is not enough.
+const ADMIN_TOKEN_TTL_MS = 30 * 60 * 1000;
+const adminPinAttempts = new Map();
+function adminPinBlocked() {
+  const rec = adminPinAttempts.get('pin');
+  if (!rec) return false;
+  if (Date.now() > rec.resetAt) { adminPinAttempts.delete('pin'); return false; }
+  return rec.count >= 5;
+}
+function adminPinFail() {
+  const rec = adminPinAttempts.get('pin') || { count: 0, resetAt: Date.now() + 10 * 60 * 1000 };
+  rec.count += 1;
+  adminPinAttempts.set('pin', rec);
+}
+function signAdminToken(userId) {
+  const payload = `${userId}.${Date.now() + ADMIN_TOKEN_TTL_MS}`;
+  const sig = crypto.createHmac('sha256', SESSION_SECRET).update(`admin.${payload}`).digest('hex');
+  return `${Buffer.from(payload).toString('base64url')}.${sig}`;
+}
+function verifyAdminToken(token, userId) {
+  try {
+    if (!token || typeof token !== 'string') return false;
+    const dot = token.lastIndexOf('.');
+    if (dot < 0) return false;
+    const payload = Buffer.from(token.slice(0, dot), 'base64url').toString('utf8');
+    const expected = crypto.createHmac('sha256', SESSION_SECRET).update(`admin.${payload}`).digest('hex');
+    const a = Buffer.from(token.slice(dot + 1)); const b = Buffer.from(expected);
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return false;
+    const cut = payload.lastIndexOf('.');
+    if (payload.slice(0, cut) !== userId) return false;
+    return Number(payload.slice(cut + 1)) > Date.now();
+  } catch { return false; }
+}
+const adminApi404 = (res) => res.status(404).json({ ok: false, error: 'That API route does not exist.' });
+async function adminOwner(req) {
+  const me = await getAuthUser(req).catch(() => null);
+  if (!me) return null;
+  const owner = await db.ownerId().catch(() => null);
+  return owner && me.id === owner ? me : null;
+}
+// Owner + valid PIN-unlock token, or the plain API 404.
+async function requireAdminApi(req, res) {
+  const me = await adminOwner(req);
+  if (!me) { adminApi404(res); return null; }
+  if (!verifyAdminToken(req.get('x-admin-token') || '', me.id)) { adminApi404(res); return null; }
+  return me;
+}
+async function writeAdminAudit(admin, action, target, summary) {
+  await db.addAdminAudit({
+    id: uid('audit'), at: new Date().toISOString(), adminId: admin.id,
+    action, targetUserId: target ? target.id : '', targetEmail: target ? target.email : '', summary,
+  }).catch(() => null);
+}
+function adminFailedRow(u, p) {
+  const t = targetsOf(p).find((x) => x.status === 'failed');
+  const reason = p.lastPublishError || (t && t.error) || '';
+  return {
+    userEmail: u.email, postId: p.id, caption: String(p.caption || '').slice(0, 80),
+    failedAt: p.failedAt || '', status: p.status, reason,
+    friendly: friendlyFailureText(reason),
+  };
+}
+async function adminOverviewData() {
+  const users = await db.listUsers();
+  const now = new Date();
+  const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const startMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+  const weekAgo = now.getTime() - 7 * 86400000;
+  const ts = (iso) => { const x = new Date(iso || '').getTime(); return Number.isNaN(x) ? 0 : x; };
+  let postsTotal = 0; let postsToday = 0; let postsMonth = 0;
+  let published = 0; let failed = 0; let partial = 0; let scheduled = 0;
+  const failedList = []; const perUserMonth = [];
+  const byPlan = { free: 0, pro: 0, max: 0, ultra: 0 };
+  let igTotal = 0; let igBroken = 0; let ytTotal = 0;
+  for (const u of users) {
+    const eff = effectivePlanOf(u).id;
+    byPlan[eff] = (byPlan[eff] || 0) + 1;
+    const posts = await db.listPosts(u.id, { all: true }).catch(() => []);
+    let monthCount = 0;
+    for (const p of posts) {
+      postsTotal++;
+      const c = ts(p.createdAt);
+      if (c >= startToday) postsToday++;
+      if (c >= startMonth) { postsMonth++; monthCount++; }
+      if (p.status === 'published') published++;
+      else if (p.status === 'failed') { failed++; failedList.push(adminFailedRow(u, p)); }
+      else if (p.status === 'partial') { partial++; failedList.push(adminFailedRow(u, p)); }
+      else if (p.status === 'scheduled') scheduled++;
+    }
+    perUserMonth.push({ email: u.email, count: monthCount });
+    const { accounts } = await db.getInstagramAccounts(u.id).catch(() => ({ accounts: [] }));
+    igTotal += accounts.length;
+    igBroken += accounts.filter((a) => a.tokenRefreshError === 'revoked-or-expired').length;
+    const yt = await db.getYouTube(u.id).catch(() => null);
+    if (yt) ytTotal++;
+  }
+  failedList.sort((a, b) => String(b.failedAt || '').localeCompare(String(a.failedAt || '')));
+  perUserMonth.sort((a, b) => b.count - a.count);
+  const decided = published + failed;
+  return {
+    ok: true, generatedAt: now.toISOString(),
+    users: {
+      total: users.length,
+      today: users.filter((u) => ts(u.createdAt) >= startToday).length,
+      week: users.filter((u) => ts(u.createdAt) >= weekAgo).length,
+      month: users.filter((u) => ts(u.createdAt) >= startMonth).length,
+      byPlan,
+    },
+    posts: {
+      total: postsTotal, today: postsToday, month: postsMonth,
+      published, failed, partial, scheduled,
+      successPct: decided ? Math.round((published / decided) * 100) : null,
+    },
+    failedPosts: failedList.slice(0, 25),
+    mostActive: perUserMonth.filter((x) => x.count > 0).slice(0, 10),
+    accounts: { instagram: igTotal, instagramBroken: igBroken, youtube: ytTotal },
+  };
+}
+async function adminUserRow(u) {
+  const posts = await db.listPosts(u.id, { all: true }).catch(() => []);
+  const startMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1).getTime();
+  const monthCount = posts.filter((p) => { const t = new Date(p.createdAt || '').getTime(); return !Number.isNaN(t) && t >= startMonth; }).length;
+  const { accounts } = await db.getInstagramAccounts(u.id).catch(() => ({ accounts: [] }));
+  const yt = await db.getYouTube(u.id).catch(() => null);
+  return {
+    id: u.id, email: u.email, name: u.name || '', role: u.role || 'member', createdAt: u.createdAt,
+    plan: planInfoOf(u),
+    postLimitOverride: Number(u.postLimitOverride) || 0,
+    postsTotal: posts.length, postsThisMonth: monthCount,
+    accounts: accounts.map((a) => ({ username: a.username || '', broken: a.tokenRefreshError === 'revoked-or-expired' })),
+    youtubeConnected: !!yt,
+  };
+}
+
+app.get(`/api/${ADMIN_SLUG}/status`, ah(async (req, res) => {
+  const me = await adminOwner(req);
+  if (!me) return adminApi404(res);
+  res.json({
+    ok: true,
+    pinSet: !!me.adminPinHash,
+    unlocked: verifyAdminToken(req.get('x-admin-token') || '', me.id),
+    pinBlocked: adminPinBlocked(),
+  });
+}));
+app.post(`/api/${ADMIN_SLUG}/set-pin`, ah(async (req, res) => {
+  const me = await adminOwner(req);
+  if (!me || me.adminPinHash) return adminApi404(res);
+  const pin = String((req.body || {}).pin || '');
+  if (pin.length < 4 || pin.length > 64) return res.status(400).json({ ok: false, error: 'Choose a PIN of at least 4 characters.' });
+  const salt = crypto.randomBytes(16).toString('hex');
+  await db.updateUser(me.id, { adminPinHash: hashPassword(pin, salt), adminPinSalt: salt });
+  await writeAdminAudit(me, 'pin-set', me, 'Console PIN set');
+  res.json({ ok: true, adminToken: signAdminToken(me.id) });
+}));
+app.post(`/api/${ADMIN_SLUG}/change-pin`, ah(async (req, res) => {
+  const me = await requireAdminApi(req, res);
+  if (!me) return;
+  const pin = String((req.body || {}).pin || '');
+  if (pin.length < 4 || pin.length > 64) return res.status(400).json({ ok: false, error: 'Choose a PIN of at least 4 characters.' });
+  const salt = crypto.randomBytes(16).toString('hex');
+  await db.updateUser(me.id, { adminPinHash: hashPassword(pin, salt), adminPinSalt: salt });
+  await writeAdminAudit(me, 'pin-change', me, 'Console PIN changed');
+  res.json({ ok: true, adminToken: signAdminToken(me.id) });
+}));
+app.post(`/api/${ADMIN_SLUG}/unlock`, ah(async (req, res) => {
+  const me = await adminOwner(req);
+  if (!me || !me.adminPinHash) return adminApi404(res);
+  if (adminPinBlocked()) return adminApi404(res);
+  const pin = String((req.body || {}).pin || '');
+  const attempt = hashPassword(pin, me.adminPinSalt || '');
+  const a = Buffer.from(attempt); const b = Buffer.from(me.adminPinHash || '');
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) { adminPinFail(); return adminApi404(res); }
+  adminPinAttempts.delete('pin');
+  res.json({ ok: true, adminToken: signAdminToken(me.id) });
+}));
+app.get(`/api/${ADMIN_SLUG}/overview`, ah(async (req, res) => {
+  const me = await requireAdminApi(req, res);
+  if (!me) return;
+  res.json(await adminOverviewData());
+}));
+app.get(`/api/${ADMIN_SLUG}/users`, ah(async (req, res) => {
+  const me = await requireAdminApi(req, res);
+  if (!me) return;
+  const q = String(req.query.q || '').trim().toLowerCase();
+  let users = await db.listUsers();
+  if (q) users = users.filter((u) => String(u.email || '').toLowerCase().includes(q) || String(u.name || '').toLowerCase().includes(q));
+  const rows = [];
+  for (const u of users) rows.push(await adminUserRow(u));
+  res.json({ ok: true, users: rows });
+}));
+app.patch(`/api/${ADMIN_SLUG}/users/:id`, ah(async (req, res) => {
+  const me = await requireAdminApi(req, res);
+  if (!me) return;
+  const target = await db.getUserById(req.params.id);
+  if (!target) return adminApi404(res);
+  const b = req.body || {};
+  const patch = {}; const changes = [];
+  if (b.plan !== undefined) {
+    if (!PLANS[b.plan]) return res.status(400).json({ ok: false, error: 'Unknown plan.' });
+    if ((target.plan || 'free') !== b.plan) { patch.plan = b.plan; changes.push(['plan-change', `Plan: ${target.plan || 'free'} → ${b.plan}`]); }
+  }
+  if (b.planExpiresAt !== undefined) {
+    const v = b.planExpiresAt === null ? '' : String(b.planExpiresAt);
+    if (v && Number.isNaN(new Date(v).getTime())) return res.status(400).json({ ok: false, error: 'That expiry date is not valid.' });
+    if ((target.planExpiresAt || '') !== v) { patch.planExpiresAt = v; changes.push(['plan-expiry', v ? `Plan expiry set to ${v.slice(0, 10)}` : 'Plan expiry cleared']); }
+  }
+  if (b.comp !== undefined) {
+    const v = b.comp === true;
+    if (!!target.comp !== v) { patch.comp = v; changes.push([v ? 'comp-grant' : 'comp-revoke', v ? 'Comp granted — full Ultra, free forever' : 'Comp removed']); }
+  }
+  if (b.postLimitOverride !== undefined) {
+    if (b.postLimitOverride === null || b.postLimitOverride === '') {
+      if (Number(target.postLimitOverride) > 0) { patch.postLimitOverride = 0; changes.push(['limit-override', 'Monthly post limit override cleared']); }
+    } else {
+      const n = Math.floor(Number(b.postLimitOverride));
+      if (!Number.isFinite(n) || n < 1 || n > 100000) return res.status(400).json({ ok: false, error: 'The limit override must be a whole number between 1 and 100000.' });
+      if (Number(target.postLimitOverride || 0) !== n) { patch.postLimitOverride = n; changes.push(['limit-override', `Monthly post limit override set to ${n}`]); }
+    }
+  }
+  if (Object.keys(patch).length) await db.updateUser(target.id, patch);
+  for (const [action, summary] of changes) await writeAdminAudit(me, action, target, summary);
+  const updated = await db.getUserById(target.id);
+  res.json({ ok: true, user: await adminUserRow(updated) });
+}));
+app.get(`/api/${ADMIN_SLUG}/audit`, ah(async (req, res) => {
+  const me = await requireAdminApi(req, res);
+  if (!me) return;
+  res.json({ ok: true, entries: await db.listAdminAudit({ limit: 100 }) });
+}));
+
+// The console page itself: served ONLY to the owner's session; every
+// other visitor gets the plain 404 below. All data loads through the
+// PIN-gated API above — the page shell alone contains nothing about
+// any user. Plain numbers and simple bars, no chart library (house
+// rule: fast and ₹0).
+const ADMIN_PAGE_HTML = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Owner Console — KiluaAI</title>
+<style>
+body{margin:0;background:#0b1026;color:#e8ebf8;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+header{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid #2b3560;background:#101736;position:sticky;top:0;z-index:5}
+header b{color:#e8c268}
+main{max-width:980px;margin:0 auto;padding:16px}
+.card{background:#141b36;border:1px solid #2b3560;border-radius:14px;padding:16px;margin:0 0 14px}
+h2{margin:0 0 10px;font-size:17px}
+.muted{opacity:.72;font-size:13px}
+.err{color:#ff9a9a;font-size:14px;min-height:18px}
+label{display:block;font-size:13px;opacity:.8;margin:10px 0 4px}
+input,select{background:#0d1330;border:1px solid #2b3560;border-radius:9px;color:#e8ebf8;padding:9px 11px;font-size:14px;width:100%;box-sizing:border-box}
+input[type=date]{width:auto}
+.btn{background:#1c2650;border:1px solid #3a478a;color:#e8ebf8;border-radius:9px;padding:8px 14px;font-size:14px;cursor:pointer}
+.btn.primary{background:#e8c268;border-color:#e8c268;color:#191204;font-weight:700}
+.btn.small{padding:5px 10px;font-size:13px}
+.btn.active{background:#e8c268;border-color:#e8c268;color:#191204;font-weight:700}
+.btn:disabled{opacity:.45;cursor:default}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(128px,1fr));gap:10px}
+.stat{background:#0d1330;border:1px solid #2b3560;border-radius:11px;padding:11px}
+.stat b{display:block;font-size:21px;color:#e8c268}
+.stat span{font-size:12px;opacity:.75}
+.chips{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.chip{border:1px solid #3a478a;border-radius:999px;padding:5px 12px;font-size:13px}
+.row{border-top:1px solid #232c55;padding:11px 0}
+.row:first-of-type{border-top:none}
+.bar{height:8px;background:#232c55;border-radius:99px;overflow:hidden;margin-top:5px}
+.bar i{display:block;height:100%;background:#e8c268}
+.uhead{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:baseline}
+.uemail{font-weight:700}
+.badge{font-size:12px;border:1px solid #3a478a;border-radius:999px;padding:2px 9px}
+.badge.bad{border-color:#a03d3d;color:#ff9a9a}
+.controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px}
+.controls input{width:auto}
+.klabel{font-size:12px;opacity:.7;width:100%}
+</style></head>
+<body>
+<header><b>KiluaAI — Owner Console</b>
+<span id="hdrBtns" hidden>
+<button class="btn small" id="refreshBtn">Refresh</button>
+<button class="btn small" id="pinBtn">Change PIN</button>
+<button class="btn small" id="lockBtn">Lock</button>
+</span></header>
+<main>
+<section class="card" id="gate">
+<h2>Console locked</h2>
+<p class="muted" id="gateMsg">Checking…</p>
+<div id="setPinForm" hidden>
+<label for="pin1">New PIN (at least 4 characters)</label>
+<input id="pin1" type="password" autocomplete="new-password">
+<label for="pin2">Repeat the PIN</label>
+<input id="pin2" type="password" autocomplete="new-password">
+<p style="margin-top:12px"><button class="btn primary" id="setPinBtn">Set PIN and open</button></p>
+</div>
+<div id="unlockForm" hidden>
+<label for="pinU">PIN</label>
+<input id="pinU" type="password" autocomplete="current-password">
+<p style="margin-top:12px"><button class="btn primary" id="unlockBtn">Unlock</button></p>
+</div>
+<p class="err" id="gateErr"></p>
+</section>
+<div id="app" hidden>
+<section class="card"><h2>Overview</h2><div class="grid" id="stats"></div>
+<div class="chips" id="planDist"></div>
+<p class="muted" id="acctHealth" style="margin-top:10px"></p></section>
+<section class="card"><h2>Most active this month</h2><div id="active"></div></section>
+<section class="card"><h2>Recent failed posts</h2><div id="failed"></div></section>
+<section class="card"><h2>Users</h2>
+<input id="search" type="search" placeholder="Search by email or name">
+<div id="users" style="margin-top:8px"></div></section>
+<section class="card" id="pinCard" hidden><h2>Change PIN</h2>
+<input id="newPin" type="password" placeholder="New PIN (at least 4 characters)" autocomplete="new-password">
+<p style="margin-top:10px"><button class="btn" id="changePinBtn">Change PIN</button> <span class="muted" id="pinMsg"></span></p></section>
+<section class="card"><h2>Audit log</h2><div id="audit"></div></section>
+</div>
+</main>
+<script>
+var BASE = '/api' + location.pathname;
+var token = sessionStorage.getItem('oc-token') || '';
+function el(id){ return document.getElementById(id); }
+function esc(s){ return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function when(iso){ var d = new Date(iso || ''); return isNaN(d.getTime()) ? '' : d.toLocaleString(); }
+function post(path, body){ return fetch(BASE + path, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-admin-token': token }, body: JSON.stringify(body || {}) }); }
+function api(path, opts){
+  opts = opts || {};
+  opts.headers = { 'Content-Type': 'application/json', 'x-admin-token': token };
+  return fetch(BASE + path, opts).then(function(r){
+    if (r.status === 404) { lock('Locked — enter the PIN again.'); throw new Error('locked'); }
+    return r.json();
+  });
+}
+function lock(msg){
+  token = ''; sessionStorage.removeItem('oc-token');
+  el('app').hidden = true; el('hdrBtns').hidden = true; el('gate').hidden = false;
+  el('gateErr').textContent = msg || '';
+  gateForms();
+}
+function gateForms(){
+  fetch(BASE + '/status', { headers: { 'x-admin-token': token } }).then(function(r){ return r.json(); }).then(function(s){
+    el('setPinForm').hidden = !!s.pinSet;
+    el('unlockForm').hidden = !s.pinSet;
+    el('gateMsg').textContent = s.pinSet ? 'Enter your PIN to open the console.' : 'First visit: set a PIN for this console. Only your account can open this page at all; the PIN is a second lock on top.';
+    if (s.pinBlocked) el('gateErr').textContent = 'Too many wrong PIN tries — wait 10 minutes, then try again.';
+  }).catch(function(){ el('gateMsg').textContent = 'Could not check the console status.'; });
+}
+function openApp(){ el('gate').hidden = true; el('app').hidden = false; el('hdrBtns').hidden = false; loadAll(); }
+function boot(){
+  if (!token) { gateForms(); return; }
+  fetch(BASE + '/status', { headers: { 'x-admin-token': token } }).then(function(r){ return r.json(); }).then(function(s){
+    if (s.unlocked) openApp(); else gateForms();
+  }).catch(function(){ gateForms(); });
+}
+el('setPinBtn').addEventListener('click', function(){
+  var p1 = el('pin1').value, p2 = el('pin2').value;
+  if (p1.length < 4) { el('gateErr').textContent = 'The PIN needs at least 4 characters.'; return; }
+  if (p1 !== p2) { el('gateErr').textContent = 'The two PINs do not match.'; return; }
+  post('/set-pin', { pin: p1 }).then(function(r){ return r.json().then(function(d){ return { s: r.status, d: d }; }); }).then(function(x){
+    if (x.s === 200 && x.d.adminToken) { token = x.d.adminToken; sessionStorage.setItem('oc-token', token); openApp(); }
+    else el('gateErr').textContent = (x.d && x.d.error) || 'Could not set the PIN.';
+  }).catch(function(){ el('gateErr').textContent = 'Could not set the PIN.'; });
+});
+el('unlockBtn').addEventListener('click', function(){
+  post('/unlock', { pin: el('pinU').value }).then(function(r){ return r.json().then(function(d){ return { s: r.status, d: d }; }); }).then(function(x){
+    if (x.s === 200 && x.d.adminToken) { token = x.d.adminToken; sessionStorage.setItem('oc-token', token); el('gateErr').textContent = ''; openApp(); }
+    else el('gateErr').textContent = 'That PIN did not work.';
+  }).catch(function(){ el('gateErr').textContent = 'That PIN did not work.'; });
+});
+el('lockBtn').addEventListener('click', function(){ lock(''); });
+el('refreshBtn').addEventListener('click', function(){ loadAll(); });
+el('pinBtn').addEventListener('click', function(){ el('pinCard').hidden = !el('pinCard').hidden; });
+el('changePinBtn').addEventListener('click', function(){
+  var p = el('newPin').value;
+  if (p.length < 4) { el('pinMsg').textContent = 'At least 4 characters.'; return; }
+  api('/change-pin', { method: 'POST', body: JSON.stringify({ pin: p }) }).then(function(d){
+    if (d.adminToken) { token = d.adminToken; sessionStorage.setItem('oc-token', token); }
+    el('pinMsg').textContent = 'PIN changed.'; el('newPin').value = '';
+    api('/audit').then(renderAudit).catch(function(){});
+  }).catch(function(){});
+});
+el('search').addEventListener('input', function(){ loadUsers(el('search').value.trim()); });
+function loadAll(){ api('/overview').then(renderOverview).catch(function(){}); loadUsers(el('search').value.trim()); api('/audit').then(renderAudit).catch(function(){}); }
+function loadUsers(q){ api('/users' + (q ? '?q=' + encodeURIComponent(q) : '')).then(function(d){ renderUsers(d.users || []); }).catch(function(){}); }
+function stat(label, value){ return '<div class="stat"><b>' + esc(value) + '</b><span>' + esc(label) + '</span></div>'; }
+function renderOverview(o){
+  var s = '';
+  s += stat('Total users', o.users.total); s += stat('New today', o.users.today); s += stat('New this week', o.users.week); s += stat('New this month', o.users.month);
+  s += stat('Posts total', o.posts.total); s += stat('Posts today', o.posts.today); s += stat('Posts this month', o.posts.month);
+  s += stat('Published', o.posts.published); s += stat('Failed', o.posts.failed); s += stat('Partly published', o.posts.partial); s += stat('Scheduled now', o.posts.scheduled);
+  s += stat('Publish success', o.posts.successPct == null ? '—' : o.posts.successPct + '%');
+  el('stats').innerHTML = s;
+  var bp = o.users.byPlan || {};
+  el('planDist').innerHTML = ['free','pro','max','ultra'].map(function(k){ return '<span class="chip">' + esc(k.toUpperCase()) + ' · ' + esc(bp[k] || 0) + ' users</span>'; }).join('');
+  el('acctHealth').textContent = 'Connected accounts — Instagram: ' + o.accounts.instagram + ' (' + o.accounts.instagramBroken + ' broken, need reconnect) · YouTube channels: ' + o.accounts.youtube;
+  var max = 0; (o.mostActive || []).forEach(function(x){ if (x.count > max) max = x.count; });
+  el('active').innerHTML = (o.mostActive && o.mostActive.length) ? o.mostActive.map(function(x){
+    return '<div class="row"><div style="display:flex;justify-content:space-between;gap:10px"><span>' + esc(x.email) + '</span><b>' + esc(x.count) + ' posts</b></div><div class="bar"><i style="width:' + (max ? Math.round(x.count / max * 100) : 0) + '%"></i></div></div>';
+  }).join('') : '<p class="muted">No posts yet this month.</p>';
+  el('failed').innerHTML = (o.failedPosts && o.failedPosts.length) ? o.failedPosts.map(function(f){
+    return '<div class="row"><div class="uhead"><span class="uemail">' + esc(f.userEmail) + '</span><span class="muted">' + esc(when(f.failedAt)) + '</span></div>'
+      + '<div>' + esc(f.caption || '(no caption)') + '</div>'
+      + '<div style="color:#ff9a9a">' + esc(f.friendly || f.reason || 'Failed') + '</div>'
+      + (f.reason && f.reason !== f.friendly ? '<div class="muted">' + esc(f.reason) + '</div>' : '') + '</div>';
+  }).join('') : '<p class="muted">No failed posts. </p>';
+}
+function planChips(u){
+  if (u.role === 'owner') return '<span class="badge">OWNER — always Ultra</span>';
+  if (u.plan.comp) return '<span class="badge">COMP — Ultra free forever</span> ' + ['free','pro','max','ultra'].map(function(k){
+    return '<button class="btn small' + (u.plan.basePlan === k ? ' active' : '') + '" data-act="plan" data-id="' + u.id + '" data-plan="' + k + '">' + k.toUpperCase() + '</button>';
+  }).join('');
+  return ['free','pro','max','ultra'].map(function(k){
+    return '<button class="btn small' + (u.plan.plan === k ? ' active' : '') + '" data-act="plan" data-id="' + u.id + '" data-plan="' + k + '">' + k.toUpperCase() + '</button>';
+  }).join('');
+}
+function renderUsers(rows){
+  if (!rows.length) { el('users').innerHTML = '<p class="muted">No users match.</p>'; return; }
+  el('users').innerHTML = rows.map(function(u){
+    var accts = (u.accounts || []).map(function(a){ return '@' + esc(a.username || '?') + (a.broken ? ' <span class="badge bad">BROKEN</span>' : ''); }).join(', ');
+    var h = '<div class="row"><div class="uhead"><span class="uemail">' + esc(u.email) + (u.name ? ' <span class="muted">(' + esc(u.name) + ')</span>' : '') + '</span>'
+      + '<span class="badge">' + esc(u.plan.planName) + ' plan</span></div>'
+      + '<div class="muted">Joined ' + esc(when(u.createdAt)) + ' · Posts: ' + esc(u.postsTotal) + ' total, ' + esc(u.postsThisMonth) + ' this month · Instagram: ' + (accts || 'none') + ' · YouTube: ' + (u.youtubeConnected ? 'connected' : 'no') + '</div>'
+      + '<div class="controls"><span class="klabel">Plan (one tap)</span>' + planChips(u) + '</div>';
+    if (u.role !== 'owner') {
+      h += '<div class="controls"><span class="klabel">Paid-plan expiry (blank = no expiry)</span>'
+        + '<input type="date" id="exp-' + u.id + '" value="' + esc((u.plan.planExpiresAt || '').slice(0, 10)) + '">'
+        + '<button class="btn small" data-act="expiry" data-id="' + u.id + '">Save expiry</button>'
+        + '<button class="btn small" data-act="expiry-clear" data-id="' + u.id + '">Clear</button></div>'
+        + '<div class="controls"><span class="klabel">Comp (free Ultra forever, for friends)</span>'
+        + (u.plan.comp
+          ? '<button class="btn small" data-act="comp-off" data-id="' + u.id + '">Remove comp</button>'
+          : '<button class="btn small" data-act="comp-on" data-id="' + u.id + '">Grant comp</button>') + '</div>'
+        + '<div class="controls"><span class="klabel">Monthly post limit override (blank = plan default)</span>'
+        + '<input type="number" min="1" max="100000" id="ovr-' + u.id + '" value="' + (u.postLimitOverride ? esc(u.postLimitOverride) : '') + '" placeholder="e.g. 500">'
+        + '<button class="btn small" data-act="override" data-id="' + u.id + '">Save override</button>'
+        + '<button class="btn small" data-act="override-clear" data-id="' + u.id + '">Clear</button></div>';
+    }
+    return h + '</div>';
+  }).join('');
+}
+function patchUser(id, body){
+  api('/users/' + id, { method: 'PATCH', body: JSON.stringify(body) }).then(function(){
+    loadUsers(el('search').value.trim());
+    api('/overview').then(renderOverview).catch(function(){});
+    api('/audit').then(renderAudit).catch(function(){});
+  }).catch(function(){});
+}
+function setPlan(id, plan){ patchUser(id, { plan: plan }); }
+function setComp(id, comp){ patchUser(id, { comp: comp }); }
+function saveExpiry(id){ var v = el('exp-' + id).value; patchUser(id, { planExpiresAt: v ? new Date(v + 'T23:59:59').toISOString() : '' }); }
+function clearExpiry(id){ patchUser(id, { planExpiresAt: '' }); }
+function saveOverride(id){ var v = el('ovr-' + id).value; patchUser(id, { postLimitOverride: v === '' ? '' : Number(v) }); }
+function clearOverride(id){ patchUser(id, { postLimitOverride: '' }); }
+// One delegated handler for every user-row action button (data-act),
+// so the generated markup needs no inline handler strings at all.
+document.addEventListener('click', function(ev){
+  var b = ev.target && ev.target.closest ? ev.target.closest('[data-act]') : null;
+  if (!b) return;
+  var id = b.getAttribute('data-id');
+  var act = b.getAttribute('data-act');
+  if (act === 'plan') setPlan(id, b.getAttribute('data-plan'));
+  else if (act === 'expiry') saveExpiry(id);
+  else if (act === 'expiry-clear') clearExpiry(id);
+  else if (act === 'comp-on') setComp(id, true);
+  else if (act === 'comp-off') setComp(id, false);
+  else if (act === 'override') saveOverride(id);
+  else if (act === 'override-clear') clearOverride(id);
+});
+function renderAudit(d){
+  var rows = d.entries || [];
+  el('audit').innerHTML = rows.length ? rows.map(function(e){
+    return '<div class="row"><div class="uhead"><span><b>' + esc(e.action) + '</b> · ' + esc(e.targetEmail || '') + '</span><span class="muted">' + esc(when(e.at)) + '</span></div><div class="muted">' + esc(e.summary || '') + '</div></div>';
+  }).join('') : '<p class="muted">No admin actions yet.</p>';
+}
+boot();
+</script>
+</body></html>`;
+app.get(`/${ADMIN_SLUG}`, ah(async (req, res) => {
+  const me = await adminOwner(req);
+  if (!me) {
+    return res.status(404).type('html').send('<!doctype html><html><head><title>404 Not Found</title></head><body><h1>404 Not Found</h1><p>The page you requested could not be found.</p></body></html>');
+  }
+  return res.type('html').send(ADMIN_PAGE_HTML);
 }));
 
 // Unknown /api routes — and method mismatches on known ones — answer

@@ -150,6 +150,9 @@ export const api = {
   // wrapper) so callers can use it directly — returning the wrapper used
   // to insert a broken post with no id into the queue until a reload.
   createPost: async (post) => (await req('/api/posts', { method: 'POST', body: JSON.stringify(post) })).post,
+  // Pre-flight check (batch 2): connection + media + plan verdict for
+  // a not-yet-saved post, shown inline in Studio Step 3 before saving.
+  preflightPost: (post) => req('/api/posts/preflight', { method: 'POST', body: JSON.stringify(post) }),
   createPostsBulk: (posts) => req('/api/posts/bulk', { method: 'POST', body: JSON.stringify({ posts }) }),
   updatePost: async (id, patch) => (await req(`/api/posts/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) })).post,
   deletePost: (id) => req(`/api/posts/${encodeURIComponent(id)}`, { method: 'DELETE' }),

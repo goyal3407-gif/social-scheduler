@@ -221,14 +221,9 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
     ? new Date(suggestion).toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })
     : null
 
-  const submit = async (statusOverride) => {
-    setError('')
-    const status = statusOverride || form.status || 'scheduled'
-    if (!form.mediaUrl.trim()) { setError('Add a media URL or pick one from your library first (Step 1).'); setStep(1); return }
-    // Platform picker: at least one platform must be ticked.
-    if (!igTicked && !(form.youtubeEnabled && ytStatus?.connected)) { setError('Tick at least one platform in Step 3 — Instagram, YouTube, or both.'); setStep(3); return }
-    // Drafts need no time; scheduled posts do.
-    if (status !== 'draft' && !form.scheduleTime) { setError('Pick a date and time to schedule (Step 3).'); setStep(3); return }
+  // The save payload, shared by submit() and the pre-flight check so
+  // the check always judges exactly what would be saved.
+  const buildPayload = (status) => {
     const payload = {
       ...form,
       mediaUrl: form.mediaUrl.trim(),
@@ -252,6 +247,35 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
     delete payload.youtubeEnabled
     delete payload.youtubeTitle
     delete payload.repeatWeekly
+    return payload
+  }
+
+  // Pre-flight check (batch 2): connection + media + plan verdict,
+  // shown inline in Step 3 before saving. Runs when Step 3 opens and
+  // on demand via the Re-check button.
+  const [preflight, setPreflight] = useState(null)
+  const [preflightBusy, setPreflightBusy] = useState(false)
+  const runPreflight = async () => {
+    setPreflightBusy(true)
+    try {
+      const r = await api.preflightPost({ ...buildPayload(form.status || 'scheduled'), ...(editing?.id ? { excludePostId: editing.id } : {}) })
+      setPreflight(r)
+    } catch (e) {
+      setPreflight({ ok: false, checks: [{ id: 'preflight', ok: false, message: e.message || 'The check could not run.', fix: 'Try again in a moment.' }] })
+    }
+    setPreflightBusy(false)
+  }
+  useEffect(() => { if (step === 3) { runPreflight() } }, [step]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const submit = async (statusOverride) => {
+    setError('')
+    const status = statusOverride || form.status || 'scheduled'
+    if (!form.mediaUrl.trim()) { setError('Add a media URL or pick one from your library first (Step 1).'); setStep(1); return }
+    // Platform picker: at least one platform must be ticked.
+    if (!igTicked && !(form.youtubeEnabled && ytStatus?.connected)) { setError('Tick at least one platform in Step 3 — Instagram, YouTube, or both.'); setStep(3); return }
+    // Drafts need no time; scheduled posts do.
+    if (status !== 'draft' && !form.scheduleTime) { setError('Pick a date and time to schedule (Step 3).'); setStep(3); return }
+    const payload = buildPayload(status)
     try {
       await onSave(payload, Boolean(editing?.id))
       if (!editing?.id) clearDrafts()
@@ -656,6 +680,32 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
               {feedVerticalWarn && <div className="warn red"><IconWarn size={17} /><div>Vertical video (ratio {ratio?.toFixed(2)}) with FEED format — this is likely to fail or crop. Switch to REELS above.</div></div>}
               {error && <div className="alert error">{error}</div>}
               {savedNote && <div className="alert success">{savedNote}</div>}
+              <div style={{ border: '1px solid var(--line)', borderRadius: 12, padding: '12px 14px', marginTop: 16 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                  <b>Pre-flight check</b>
+                  <button type="button" className="btn ghost small" disabled={preflightBusy} onClick={runPreflight}>{preflightBusy ? 'Checking…' : 'Re-check'}</button>
+                </div>
+                <p className="muted small" style={{ margin: '4px 0 6px' }}>Connection, media and plan limits — checked now, so nothing surprises you at publish time.</p>
+                {preflightBusy && !preflight && <p className="muted small">Checking…</p>}
+                {preflight && (preflight.checks || []).map((c) => (
+                  <div key={c.id} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginTop: 6 }}>
+                    {c.ok ? <IconCheck size={17} /> : <IconWarn size={17} />}
+                    <div>
+                      <span style={{ color: c.ok ? '#4caf7d' : 'var(--red)', fontWeight: 600 }}>{c.ok ? 'Good: ' : 'Problem: '}</span>{c.message}
+                      {!c.ok && c.fix && (
+                        <div className="muted small">Fix: {c.fix}
+                          {c.id === 'connection' && onNavigate ? <> <button type="button" className="btn ghost small" onClick={() => onNavigate('connections')}>Open Connections</button></> : null}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+                {preflight && (
+                  <p className="small" style={{ marginTop: 8, fontWeight: 600, color: preflight.ok ? '#4caf7d' : 'var(--red)' }}>
+                    {preflight.ok ? 'All checks passed — this post is ready to save.' : 'Fix the problems above — plan problems block saving, and connection problems would stop the publish.'}
+                  </p>
+                )}
+              </div>
               <div style={{ display: 'flex', gap: 8, marginTop: 16, flexWrap: 'wrap' }}>
                 <button type="button" className="btn ghost" onClick={() => setStep(2)}>← Back</button>
                 <button type="button" className="btn ghost" disabled={!canSaveDraft || saving} onClick={() => submit('draft')}>Save draft</button>
