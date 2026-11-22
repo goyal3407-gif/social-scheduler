@@ -1284,7 +1284,7 @@ export default function App() {
       {(offline || updateAvailable) && (
         // Phase 3 (Batch C): ONE status bar (design system §4.11) —
         // offline outranks the update notice, carries a Retry action,
-        // and uses tokens (the old offline bar hardcoded #3a3f52).
+        // and uses tokens (the old offline bar hardcoded a raw colour).
         <div className={`update-bar${offline ? ' is-offline' : ''}`} role="status">
           {offline ? (
             <>

@@ -105,7 +105,7 @@ export default function Queue({ posts, loading, onEdit, onDelete, onPublish, pub
       <div className="toolbar">
         <Segmented ariaLabel="Queue view" value={view} onChange={setView} options={[{ value: 'list', label: t('listView') }, { value: 'kanban', label: t('kanbanView') }]} />
         <input type="search" placeholder={t('searchQueuePh')} value={q} onChange={(e) => setQ(e.target.value)} aria-label={t('ariaSearchPosts')} />
-        <button type="button" className={`btn ${filtersActive ? 'primary' : 'ghost'}`} onClick={() => setFiltersOpen(true)}>{t('queueFilters')}{filtersActive ? ' •' : ''}</button>
+        <button type="button" className={`btn ghost${filtersActive ? ' is-on' : ''}`} aria-pressed={filtersActive} onClick={() => setFiltersOpen(true)}>{t('queueFilters')}{filtersActive ? ' •' : ''}</button>
         {!showEmpty && <button type="button" className="btn primary" onClick={onCreate}>{t('newPostBtn')}</button>}
       </div>
 
