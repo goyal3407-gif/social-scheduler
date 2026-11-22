@@ -1076,7 +1076,7 @@ export default function App() {
 
   // --- Login gate: nothing but the Auth screen until the server says who this is.
   if (!authChecked) {
-    return <div className="app"><div className="wrap" style={{ paddingTop: 60, textAlign: 'center' }}><p className="muted">Loading…</p></div></div>
+    return <div className="app"><div className="boot-load" role="status"><span className="logo-mark offline-logo" aria-hidden="true"><img src="/icon-192.png" alt="" width="52" height="52" /></span><span className="boot-spinner" aria-hidden="true" /><span className="muted small">Loading…</span></div></div>
   }
   if (!user && authBlocked) {
     // Offline cold start (Batch C, C-02): the auth check could not
@@ -1098,7 +1098,7 @@ export default function App() {
     // does before creating an account. Signed-in users never see it.
     return (
       <div className="app">
-        <Suspense fallback={<div className="wrap" style={{ paddingTop: 60, textAlign: 'center' }}><p className="muted">Loading…</p></div>}>
+        <Suspense fallback={<div className="boot-load" role="status"><span className="logo-mark offline-logo" aria-hidden="true"><img src="/icon-192.png" alt="" width="52" height="52" /></span><span className="boot-spinner" aria-hidden="true" /><span className="muted small">Loading…</span></div>}>
           <Landing onAuth={(u) => { setUser(u); setTab('home') }} />
         </Suspense>
       </div>
@@ -1108,7 +1108,7 @@ export default function App() {
   // --- Dictionary gate: the signed-in shell waits for the lazy
   // dictionary chunk so no screen can flash untranslated strings.
   if (dict === null) {
-    return <div className="app"><div className="wrap" style={{ paddingTop: 60, textAlign: 'center' }}><p className="muted">{tr('loading')}</p></div></div>
+    return <div className="app"><div className="boot-load" role="status"><span className="logo-mark offline-logo" aria-hidden="true"><img src="/icon-192.png" alt="" width="52" height="52" /></span><span className="boot-spinner" aria-hidden="true" /><span className="muted small">{tr('loading')}</span></div></div>
   }
 
   // --- Setup wizard: first login only, until it is finished or skipped.

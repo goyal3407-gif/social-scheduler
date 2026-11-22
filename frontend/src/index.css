@@ -588,3 +588,6 @@ a,[role="button"],input,select,textarea,label{touch-action:manipulation}
 .swipe-hint{display:flex;align-items:center;gap:10px;background:var(--gold-soft);color:var(--gold-text);border-radius:var(--radius-md);padding:9px 12px;font-size:13px;font-weight:600;margin:0 0 12px}
 .swipe-hint span{flex:1}
 .swipe-hint .update-close{color:var(--gold-text)}
+
+.boot-load{min-height:100dvh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:24px}
+.boot-spinner{width:22px;height:22px;border-radius:50%;border:3px solid var(--brand-soft);border-top-color:var(--brand);animation:ptrspin .7s linear infinite}
