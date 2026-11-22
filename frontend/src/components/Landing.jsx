@@ -1,4 +1,14 @@
 import Auth from './Auth.jsx'
+import { openExternalUrl } from '../openExternal.js'
+
+// Static pages (privacy/terms/contact): inside the app they open in
+// the system browser so the user is never stranded away from the
+// shell (Phase 3 Batch C — audit H-05); on the web they navigate
+// normally (the pages carry their own way back — Batch D).
+const staticLink = (path) => ({
+  href: path,
+  onClick: (e) => { if (openExternalUrl(new URL(path, window.location.origin).href)) e.preventDefault() },
+})
 
 // Public landing page (Phase F) — what a logged-out visitor sees at
 // the root: a real page about KiluaAI around the login/sign-up form.
@@ -75,9 +85,9 @@ export default function Landing({ onAuth }) {
 
       <footer className="landing-foot">
         <nav>
-          <a href="/privacy.html">Privacy Policy</a>
-          <a href="/terms.html">Terms of Service</a>
-          <a href="/contact.html">Contact</a>
+          <a {...staticLink('/privacy.html')}>Privacy Policy</a>
+          <a {...staticLink('/terms.html')}>Terms of Service</a>
+          <a {...staticLink('/contact.html')}>Contact</a>
         </nav>
         <p className="muted small">KiluaAI — schedule once, post on time.</p>
       </footer>

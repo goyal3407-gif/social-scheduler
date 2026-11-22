@@ -579,3 +579,22 @@ html.is-native .bottom-nav{display:flex}
 .bn-disc{width:44px;height:44px;border-radius:50%;background:var(--brand);color:#fff;display:grid;place-items:center;margin-top:-16px;box-shadow:var(--shadow-sm);border:3px solid var(--surface)}
 .bn-item.active .bn-disc{background:var(--brand-text)}
 .bn-dot{position:absolute;top:8px;right:calc(50% - 21px);width:9px;height:9px;border-radius:50%;background:var(--red);border:2px solid var(--surface)}
+
+/* ---- Phase 3 Batch C: app-mode polish + offline surfaces
+   (design system §6.2 + §4.11) ---- */
+body{overscroll-behavior:none}
+.topbar,.bottom-nav,.drawer-bg{overscroll-behavior:none}
+.drawer-nav,.post-menu,.modal,.avatar-menu,.topnav{overscroll-behavior:contain}
+button,.tab,.chip,.drawer-item,.topnav,.bottom-nav{user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
+a,[role="button"],input,select,textarea,label{touch-action:manipulation}
+.update-bar.is-offline{background:var(--ink);color:var(--bg)}
+.update-bar.is-offline .update-refresh{background:var(--gold-bright);color:var(--ink)}
+.offline-screen{min-height:100dvh;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:24px}
+.offline-screen .offline-logo{width:72px;height:72px;border-radius:18px}
+.offline-screen .offline-logo img{width:52px;height:52px}
+.offline-screen h1{font-size:24px;margin-top:18px}
+.offline-screen p{color:var(--ink-2);max-width:420px;margin-top:8px}
+.offline-screen .btn{margin-top:22px;min-width:180px}
+.ptr-indicator{position:fixed;top:calc(8px + env(safe-area-inset-top, 0px));left:50%;z-index:125;background:var(--surface);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:999px;padding:10px 14px;display:flex;align-items:center;pointer-events:none;transition:opacity .18s ease}
+.ptr-spinner{width:16px;height:16px;border-radius:50%;border:2px solid var(--brand-soft);border-top-color:var(--brand);animation:ptrspin .7s linear infinite;flex:none}
+@keyframes ptrspin{to{transform:rotate(360deg)}}

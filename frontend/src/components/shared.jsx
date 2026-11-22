@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { registerOverlayCloser } from '../overlayRegistry.js'
+import { openExternalUrl } from '../openExternal.js'
 import { fmtDateTime } from '../api.js'
 import { trFor, dictSync } from '../i18n.js'
 import { IconPlay } from './icons.jsx'
@@ -9,6 +10,14 @@ import { IconPlay } from './icons.jsx'
 // sources App uses: the persisted language + the lazily loaded full
 // dictionary (dictSync is warm by the time any row renders; the CORE
 // set covers the badge words even before it lands).
+// Published-post links (Phase 3 Batch C — audit H-05): inside the
+// app they open in the system browser; on the web they keep
+// their normal new-tab behaviour.
+const extLink = (url) => ({
+  href: url, target: '_blank', rel: 'noreferrer',
+  onClick: (e) => { if (openExternalUrl(url)) e.preventDefault() },
+})
+
 function localTr() {
   let lang = 'en'
   try { lang = localStorage.getItem('ss-lang') || 'en' } catch { /* storage unavailable */ }
@@ -197,7 +206,7 @@ export function StatusTracker({ post, publishing, onReconnect }) {
   const ytNote = ytOn && !ytOnly ? (
     <span className="trk-note" title={post.youtubeError || undefined}>
       {post.youtubeStatus === 'uploaded' && post.youtubeVideoId
-        ? <>{t('ytAlsoOn')} <a className="trk-live" href={`https://www.youtube.com/watch?v=${post.youtubeVideoId}`} target="_blank" rel="noreferrer">{t('ytWatchPrivate')}</a></>
+        ? <>{t('ytAlsoOn')} <a className="trk-live" {...extLink(`https://www.youtube.com/watch?v=${post.youtubeVideoId}`)}>{t('ytWatchPrivate')}</a></>
         : post.youtubeStatus === 'failed'
           ? t('ytUploadFailed')
           : post.youtubeStatus === 'skipped'
@@ -220,7 +229,7 @@ export function StatusTracker({ post, publishing, onReconnect }) {
         <span className="trk-note">
           {t('partialLine').replace('{live}', names(live)).replace('{failed}', names(failedT))}{retrying ? ` ${t('partialRetryNote')}` : ''}
         </span>
-        {live[0]?.liveUrl && <a className="trk-live" href={live[0].liveUrl} target="_blank" rel="noreferrer">{t('viewOnInstagram')}</a>}
+        {live[0]?.liveUrl && <a className="trk-live" {...extLink(live[0].liveUrl)}>{t('viewOnInstagram')}</a>}
         {ytNote}
       </div>
     )
@@ -238,7 +247,7 @@ export function StatusTracker({ post, publishing, onReconnect }) {
         )
       })}
       {post.status === 'failed' && post.retryPending && <span className="trk-note">{t('autoRetryPending')}</span>}
-      {published && post.liveUrl && <a className="trk-live" href={post.liveUrl} target="_blank" rel="noreferrer">{ytOnly ? t('viewOnYouTube') : t('viewOnInstagram')}</a>}
+      {published && post.liveUrl && <a className="trk-live" {...extLink(post.liveUrl)}>{ytOnly ? t('viewOnYouTube') : t('viewOnInstagram')}</a>}
       {ytNote}
     </div>
   )
@@ -279,12 +288,12 @@ export function PostRow({ post, onEdit, onDelete, onPublish, publishing, onDupli
           <PlatformBadge platform={post.platform} />
           <span className="badge brand">{post.format || 'REELS'}</span>
           {post.repeat === 'weekly' && <span className="badge neutral" title={t('repeatsWeeklyTitle')}>{t('repeatsWeekly')}</span>}
-          {post.liveUrl && <a className="badge neutral" href={post.liveUrl} target="_blank" rel="noreferrer">{t('liveBadge')}</a>}
+          {post.liveUrl && <a className="badge neutral" {...extLink(post.liveUrl)}>{t('liveBadge')}</a>}
           {targets.length > 1 && targets.map((t) => {
             const mark = t.status === 'published' ? '✓' : t.status === 'failed' ? '✗' : t.status === 'publishing' ? '…' : '•'
             const label = `@${t.username || t.igUserId || 'account'} ${mark}`
             return t.status === 'published' && t.liveUrl
-              ? <a key={t.igUserId || label} className="badge neutral" href={t.liveUrl} target="_blank" rel="noreferrer">{label}</a>
+              ? <a key={t.igUserId || label} className="badge neutral" {...extLink(t.liveUrl)}>{label}</a>
               : <span key={t.igUserId || label} className="badge neutral">{label}</span>
           })}
         </div>

@@ -1,4 +1,5 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
+import { openExternalUrl } from '../openExternal.js'
 import { api } from '../api.js'
 
 const TeamCard = lazy(() => import('./TeamCard.jsx'))
@@ -63,7 +64,7 @@ function BioCard({ tr }) {
       <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
         <button type="button" className="btn primary" disabled={busy} onClick={save}>{busy ? t('savingWord') : t('bioSavePage')}</button>
         {enabled && pageUrl && <button type="button" className="btn ghost" onClick={() => copyText(pageUrl, setCopied)}>{copied ? t('copiedWord') : t('copyPageLink')}</button>}
-        {enabled && pageUrl && <a className="btn ghost" href={pageUrl} target="_blank" rel="noreferrer">{t('openPage')}</a>}
+        {enabled && pageUrl && <a className="btn ghost" href={pageUrl} target="_blank" rel="noreferrer" onClick={(e) => { if (openExternalUrl(new URL(pageUrl, window.location.origin).href)) e.preventDefault() }}>{t('openPage')}</a>}
       </div>
     </section>
   )

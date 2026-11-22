@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState } from 'react'
+import { openExternalUrl } from '../openExternal.js'
 import { parseCsv, fmtDateTime } from '../api.js'
 
 // Probe a picked file for dimensions/duration (same approach as the
@@ -315,7 +316,7 @@ export default function Bulk({ onImport, posts, onUploadFile, igAccounts, defaul
               <tbody>
                 {rows.slice(0, 50).map((r, i) => (
                   <tr key={i} style={!r.mediaUrl ? { opacity: .55 } : undefined}>
-                    <td>{r.mediaUrl ? <a href={r.mediaUrl} target="_blank" rel="noreferrer">{r.mediaUrl.slice(0, 42)}</a> : <span style={{ color: 'var(--red-text)' }}>Missing media</span>}</td>
+                    <td>{r.mediaUrl ? <a href={r.mediaUrl} target="_blank" rel="noreferrer" onClick={(e) => { if (openExternalUrl(r.mediaUrl)) e.preventDefault() }}>{r.mediaUrl.slice(0, 42)}</a> : <span style={{ color: 'var(--red-text)' }}>Missing media</span>}</td>
                     <td>{r.caption || '—'}</td>
                     <td>{r.hashtags || '—'}</td>
                     <td>{r.cta || '—'}</td>

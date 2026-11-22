@@ -2,13 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense } fro
 import { api, nextBestTime, getWorkspaceId, setWorkspaceId } from './api.js'
 import { trFor, loadDict, dictSync } from './i18n.js'
 import { closeTopOverlay } from './overlayRegistry.js'
-// Native-shell check WITHOUT importing localMedia.js: that module
-// pulls @capacitor/filesystem into whatever chunk imports it, and
-// the shell must stay inside the main-chunk budget. The Capacitor
-// bridge injects window.Capacitor before any app code runs.
-function isNativeShell() {
-  try { return !!(window.Capacitor && typeof window.Capacitor.isNativePlatform === 'function' && window.Capacitor.isNativePlatform()) } catch { return false }
-}
+import { isNativeShell, openExternalUrl } from './openExternal.js'
 import { ResetPassword } from './components/Auth.jsx'
 import { IconHome, IconCal, IconQueue, IconPlus, IconMedia, IconBulk, IconTools, IconSpark, IconSettings, IconSun, IconMoon, IconMenu, IconX, IconBell, IconLink, IconSearch, IconTag } from './components/icons.jsx'
 import { Skeleton, isOwnMediaUrl } from './components/shared.jsx'
@@ -131,6 +125,9 @@ export default function App() {
   })
   const [user, setUser] = useState(null)
   const [authChecked, setAuthChecked] = useState(false)
+  // Phase 3 (Batch C): the auth check failed while offline — the
+  // user gets the offline screen (with Retry), never the login page.
+  const [authBlocked, setAuthBlocked] = useState(false)
   const [updateAvailable, setUpdateAvailable] = useState(false)
   const [posts, setPosts] = useState([])
   const [media, setMedia] = useState([])
@@ -449,14 +446,25 @@ export default function App() {
   }, [])
 
   // Who is logged in? Logged-out visitors see only the Auth screen.
-  useEffect(() => {
-    let alive = true
+  // A network failure while offline is NOT "logged out" (Batch C):
+  // it raises the offline screen instead of the login gate.
+  const checkAuth = useCallback(() => {
     api.me()
-      .then((res) => { if (alive) setUser(res.user || null) })
-      .catch(() => { if (alive) setUser(null) })
-      .finally(() => { if (alive) setAuthChecked(true) })
-    return () => { alive = false }
+      .then((res) => { setUser(res.user || null); setAuthBlocked(false) })
+      .catch(() => {
+        setUser(null)
+        setAuthBlocked(typeof navigator !== 'undefined' && navigator.onLine === false)
+      })
+      .finally(() => setAuthChecked(true))
   }, [])
+  useEffect(() => { checkAuth() }, [checkAuth])
+  // Coming back online while the offline screen is up retries by itself.
+  useEffect(() => {
+    if (!authBlocked) return undefined
+    const onOn = () => { setAuthChecked(false); checkAuth() }
+    window.addEventListener('online', onOn)
+    return () => window.removeEventListener('online', onOn)
+  }, [authBlocked, checkAuth])
 
   const loadAll = useCallback(async () => {
     setLoading(true); setError(null)
@@ -606,6 +614,75 @@ export default function App() {
   // been imported).
   const refreshAll = useCallback(async () => { await loadAll() }, [loadAll])
 
+  // Pull-to-refresh (Phase 3 Batch C — audit M-03, spec §6.2)
+  // [device-unverified]: a passive touch tracker — it never blocks
+  // scrolling; a vertical pull starting at the very top of Home /
+  // Queue / Library arms the indicator, releasing past the threshold
+  // reloads. Row swipes are horizontal and unaffected.
+  const [ptrPull, setPtrPull] = useState(0)
+  const [ptrBusy, setPtrBusy] = useState(false)
+  const ptrPullRef = useRef(0)
+  useEffect(() => {
+    if (typeof window === 'undefined' || !('ontouchstart' in window)) return undefined
+    let startY = 0; let startX = 0; let tracking = false
+    const eligible = () => {
+      const s = shellStateRef.current
+      return !!s.user && !s.menuOpen && !s.confirmDelete && (s.tab === 'home' || s.tab === 'queue' || s.tab === 'media') && window.scrollY <= 0
+    }
+    const setPull = (v) => { ptrPullRef.current = v; setPtrPull(v) }
+    const onStart = (e) => {
+      tracking = e.touches.length === 1 && eligible()
+      if (tracking) { startY = e.touches[0].clientY; startX = e.touches[0].clientX }
+    }
+    const onMove = (e) => {
+      if (!tracking) return
+      const dy = e.touches[0].clientY - startY
+      const dx = e.touches[0].clientX - startX
+      if (dy > 10 && Math.abs(dy) > Math.abs(dx) * 1.5) setPull(Math.min(80, (dy - 10) * 0.55))
+      else if (dy <= 0 && ptrPullRef.current) setPull(0)
+    }
+    const onEnd = () => {
+      if (!tracking) return
+      tracking = false
+      if (ptrPullRef.current >= 64) { setPtrBusy(true); loadAll() }
+      setPull(0)
+    }
+    document.addEventListener('touchstart', onStart, { passive: true })
+    document.addEventListener('touchmove', onMove, { passive: true })
+    document.addEventListener('touchend', onEnd)
+    document.addEventListener('touchcancel', onEnd)
+    return () => {
+      document.removeEventListener('touchstart', onStart)
+      document.removeEventListener('touchmove', onMove)
+      document.removeEventListener('touchend', onEnd)
+      document.removeEventListener('touchcancel', onEnd)
+    }
+  }, [loadAll])
+  useEffect(() => { if (!loading) setPtrBusy(false) }, [loading])
+
+  // Keyboard overlap (Batch C — audit H-04, web-side half)
+  // [device-unverified]: on coarse pointers / in the app, a focused
+  // field is scrolled to centre after the keyboard has had a moment
+  // to open. The native half (windowSoftInputMode) ships with the APK.
+  useEffect(() => {
+    let coarse = false
+    try { coarse = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches) } catch { /* older engines */ }
+    if (!coarse && !isNativeShell()) return undefined
+    const onFocusIn = (e) => {
+      const el = e.target
+      if (!el || !/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName || '')) return
+      if (el.type === 'checkbox' || el.type === 'radio' || el.type === 'file') return
+      window.setTimeout(() => {
+        try {
+          const reduced = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches)
+          el.scrollIntoView({ block: 'center', behavior: reduced ? 'auto' : 'smooth' })
+        } catch { /* scrollIntoView options unsupported — ignore */ }
+      }, 350)
+    }
+    document.addEventListener('focusin', onFocusIn)
+    return () => document.removeEventListener('focusin', onFocusIn)
+  }, [])
+
   const handleLogout = useCallback(async () => {
     try { await api.logout() } catch { /* cookie cleared server-side anyway */ }
     setWorkspaceId(''); wsIdRef.current = ''; setWsId(''); setMemberships([])
@@ -680,7 +757,7 @@ export default function App() {
         return
       }
       setPosts((prev) => prev.map((p) => (p.id === post.id ? { ...p, status: 'published', ...(liveUrl ? { liveUrl } : {}) } : p)))
-      if (liveUrl) pushToast({ message: tt('toastPublishedLive'), actionLabel: tt('toastViewOnInstagram'), onAction: () => window.open(liveUrl, '_blank', 'noopener') })
+      if (liveUrl) pushToast({ message: tt('toastPublishedLive'), actionLabel: tt('toastViewOnInstagram'), onAction: () => { if (!openExternalUrl(liveUrl)) window.open(liveUrl, '_blank', 'noopener') } })
       else showToast(tt('toastPublished'))
       refreshStats()
     } catch (e) {
@@ -1001,6 +1078,20 @@ export default function App() {
   if (!authChecked) {
     return <div className="app"><div className="wrap" style={{ paddingTop: 60, textAlign: 'center' }}><p className="muted">Loading…</p></div></div>
   }
+  if (!user && authBlocked) {
+    // Offline cold start (Batch C, C-02): the auth check could not
+    // reach the server — show the offline screen, not the login gate.
+    return (
+      <div className="app">
+        <div className="offline-screen">
+          <span className="logo-mark offline-logo" aria-hidden="true"><img src="/icon-192.png" alt="" width="52" height="52" /></span>
+          <h1>{tr('offlineTitle')}</h1>
+          <p>{tr('offlineBody')}</p>
+          <button type="button" className="btn primary" onClick={() => { setAuthChecked(false); checkAuth() }}>{tr('retry')}</button>
+        </div>
+      </div>
+    )
+  }
   if (!user) {
     // Logged-out root: the public landing page (Phase F) with the
     // login/sign-up form inside it — a visitor can read what KiluaAI
@@ -1034,18 +1125,32 @@ export default function App() {
   return (
     <div className="app with-bottomnav">
       <a className="skip-link" href="#main">Skip to content</a>
-      {updateAvailable && (
-        <div className="update-bar" role="status">
-          <span>{tr('updateAvailable')}</span>
-          <button type="button" className="update-refresh" onClick={() => window.location.reload()}>{tr('refreshWord')}</button>
-          <button type="button" className="update-close" aria-label={tr('dismiss')} onClick={() => setUpdateAvailable(false)}>✕</button>
+      {(offline || updateAvailable) && (
+        // Phase 3 (Batch C): ONE status bar (design system §4.11) —
+        // offline outranks the update notice, carries a Retry action,
+        // and uses tokens (the old offline bar hardcoded #3a3f52).
+        <div className={`update-bar${offline ? ' is-offline' : ''}`} role="status">
+          {offline ? (
+            <>
+              <span>{tr('offlineMsg')}</span>
+              <button type="button" className="update-refresh" onClick={() => loadAll()}>{tr('retry')}</button>
+            </>
+          ) : (
+            <>
+              <span>{tr('updateAvailable')}</span>
+              <button type="button" className="update-refresh" onClick={() => window.location.reload()}>{tr('refreshWord')}</button>
+              <button type="button" className="update-close" aria-label={tr('dismiss')} onClick={() => setUpdateAvailable(false)}>✕</button>
+            </>
+          )}
         </div>
       )}
-      {offline && (
-        <div className="update-bar" role="status" style={{ background: '#3a3f52' }}>
-          <span>{tr('offlineMsg')}</span>
-        </div>
-      )}
+      <div
+        className="ptr-indicator"
+        aria-hidden="true"
+        style={{ transform: `translate(-50%, ${ptrBusy ? 4 : ptrPull - 72}px)`, opacity: ptrBusy || ptrPull > 0 ? 1 : 0 }}
+      >
+        <span className="ptr-spinner" />
+      </div>
       <header className="topbar">
         <div className="topbar-in">
           <button type="button" className="icon-btn burger-btn" onClick={() => setMenuOpen(true)} aria-label="Open menu" aria-expanded={menuOpen}>
@@ -1110,7 +1215,7 @@ export default function App() {
                       </>
                     )}
                     {!wsId && <button type="button" role="menuitem" onClick={() => { setAvatarMenuOpen(false); setTab('settings') }}>{tr('settings')}</button>}
-                    <a role="menuitem" href="/contact.html" onClick={() => setAvatarMenuOpen(false)}>{tr('contact')}</a>
+                    <a role="menuitem" href="/contact.html" onClick={(e) => { setAvatarMenuOpen(false); if (openExternalUrl(new URL('/contact.html', window.location.origin).href)) e.preventDefault() }}>{tr('contact')}</a>
                     <button type="button" role="menuitem" onClick={() => { setAvatarMenuOpen(false); setTheme(theme === 'dark' ? 'light' : 'dark') }}>{theme === 'dark' ? tr('lightTheme') : tr('darkTheme')}</button>
                     <button type="button" role="menuitem" onClick={() => { setAvatarMenuOpen(false); setLang(lang === 'hi' ? 'en' : 'hi') }}>{tr('language')}: {lang === 'hi' ? 'Hinglish' : 'English'} · {tr('switchWord')}</button>
                     {user.isOwner && user.adminUrl && (
@@ -1181,7 +1286,7 @@ export default function App() {
                 </button>
               )}
               <p className="muted small" style={{ marginTop: 10 }}>{user.email}</p>
-              <p style={{ marginTop: 8 }}><a href="/contact.html" className="small">{tr('contact')}</a></p>
+              <p style={{ marginTop: 8 }}><a href="/contact.html" className="small" onClick={(e) => { if (openExternalUrl(new URL('/contact.html', window.location.origin).href)) e.preventDefault() }}>{tr('contact')}</a></p>
               <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
                 <button type="button" className="btn ghost small" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
                   {theme === 'dark' ? tr('lightTheme') : tr('darkTheme')}
@@ -1279,7 +1384,7 @@ export default function App() {
         <footer className="footer">
           <b>KiluaAI</b> — {tr('footerTag')}<br />
           {tr('footerLine')}<br />
-          <span className="muted small">{MY_BUILD_ID ? (MY_BUILD_ID.startsWith('local-') ? 'local build' : `build ${MY_BUILD_ID.slice(0, 7)}`) : ''}{dbStatus?.db ? ` · storage: ${dbStatus.db}` : ''} · <a href="/contact.html">{tr('contact')}</a></span>
+          <span className="muted small">{MY_BUILD_ID ? (MY_BUILD_ID.startsWith('local-') ? 'local build' : `build ${MY_BUILD_ID.slice(0, 7)}`) : ''}{dbStatus?.db ? ` · storage: ${dbStatus.db}` : ''} · <a href="/contact.html" onClick={(e) => { if (openExternalUrl(new URL('/contact.html', window.location.origin).href)) e.preventDefault() }}>{tr('contact')}</a></span>
         </footer>
       </main>
 
