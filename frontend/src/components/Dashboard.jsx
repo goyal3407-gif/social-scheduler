@@ -233,7 +233,7 @@ export default function Dashboard({ posts, media, user, loading, error, onRetry,
           <div>
             {notifications.slice(0, 5).map((n) => (
               <p key={n.id} className="small" style={{ padding: '6px 0', color: n.read ? 'var(--muted)' : 'var(--ink)' }}>
-                {n.type === 'publish-success' ? '✅ ' : '⚠️ '}<b>{n.type === 'publish-success' ? t('published') : t('publishProblem')}</b>
+                {n.type === 'publish-success' ? '✅ ' : n.type === 'announcement' ? '📣 ' : '⚠️ '}<b>{n.type === 'publish-success' ? t('published') : n.type === 'announcement' ? (n.title || 'KiluaAI') : t('publishProblem')}</b>
                 <span className="muted"> · {fmtDateTime(n.createdAt)}</span>
                 <br /><span>{String(n.message || '').replace(/^Publish (failed|ed)[^:]*: /, '')}</span>
               </p>

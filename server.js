@@ -470,7 +470,7 @@ async function requireAuth(req, res, next) {
 // requires login.
 app.use('/api', apiRateLimit, (req, res, next) => { if (req.path.startsWith('/auth/')) return authRateLimit(req, res, next); return next(); });
 app.use('/api', ah(async (req, res, next) => {
-  if (req.path === '/health' || req.path === '/db-status' || req.path === '/version' || req.path.startsWith('/auth/') || req.path.startsWith('/cron/') || req.path.startsWith(`/${ADMIN_SLUG}/`)) return next();
+  if (req.path === '/health' || req.path === '/db-status' || req.path === '/version' || req.path === '/app-status' || req.path.startsWith('/auth/') || req.path.startsWith('/cron/') || req.path.startsWith(`/${ADMIN_SLUG}/`)) return next();
   // Make sure the database connection is up (no-op when already connected
   // or when no MONGODB_URI is set — JSON fallback is used then).
   await db.ensureMongo();
@@ -538,6 +538,28 @@ app.use('/api', ah(async (req, res, next) => {
   }
   return deny();
 }));
+// Maintenance gate (batch 6): when the owner flips maintenance mode
+// on in the console, WRITE calls from ordinary users pause with a 503
+// and the owner's message — reads keep working so users can see their
+// data and the message, auth keeps working so they can log in and read
+// it, and the app owner is never locked out of his own app. Cron and
+// console paths are exempt (the publisher must not stall, and the
+// owner needs the console to switch maintenance back off).
+app.use('/api', ah(async (req, res, next) => {
+  if (req.method === 'GET' || req.method === 'HEAD') return next();
+  const p = req.path;
+  if (p.startsWith('/auth/') || p.startsWith('/cron/') || p.startsWith(`/${ADMIN_SLUG}/`)
+    || p === '/health' || p === '/db-status' || p === '/version' || p === '/app-status') return next();
+  if (!req.userId) return next(); // public/exempt path — the auth gate already answered
+  const gs = await globalSettings();
+  if (!gs.maintenance) return next();
+  const owner = await db.ownerId().catch(() => null);
+  if (owner && (req.selfId || req.userId) === owner) return next();
+  return res.status(503).json({
+    ok: false, maintenance: true,
+    error: String(gs.maintenanceMessage || '').trim() || MAINTENANCE_FALLBACK_MSG,
+  });
+}));
 
 function validEmail(email) { return typeof email === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()); }
 
@@ -567,6 +589,13 @@ app.post('/api/auth/signup', ah(async (req, res) => {
   if (password.length < 8) return res.status(400).json({ ok: false, error: 'Password must be at least 8 characters long.' });
   if (password.length > 128) return res.status(400).json({ ok: false, error: 'Password must be at most 128 characters long.' });
   const users = await db.listUsers();
+  // Owner console toggle (batch 6): signups can be paused globally.
+  // The very first account (the owner bootstrap) is never blocked —
+  // a fresh install must always be able to create its owner.
+  if (users.length > 0) {
+    const gs = await globalSettings();
+    if (gs.signupOpen === false) return res.status(403).json({ ok: false, error: 'Signups are paused right now — please try again later.' });
+  }
   // Generic wording on purpose: the response must not confirm whether
   // this exact email is the one that is already registered.
   if (users.some((u) => u.email === email)) return res.status(409).json({ ok: false, error: 'We could not create an account with those details. If you already have an account, log in instead.' });
@@ -622,7 +651,19 @@ app.get('/api/auth/me', ah(async (req, res) => {
   const user = await applyOwnerComp(await getAuthUser(req));
   if (!user) return res.status(401).json({ ok: false, error: 'Not logged in. Please log in again.' });
   await bindTeamInvites(user).catch(() => null);
-  res.json({ ok: true, user: publicUser(user) });
+  const out = publicUser(user);
+  // Batch 6 (owner's final model): the app's "Switch to Admin" entry
+  // exists ONLY for the console's owner account. The flag and the
+  // console URL travel inside the owner's own /me response and
+  // nowhere else — the slug is never a literal in the shipped client
+  // bundle (the Batch 2 secrecy invariant still holds; tests grep
+  // src + dist for it). Every other account's /me carries neither.
+  const ownerId = await db.ownerId().catch(() => null);
+  if (ownerId && user.id === ownerId) {
+    out.isOwner = true;
+    out.adminUrl = `/api/${ADMIN_SLUG}/console`;
+  }
+  res.json({ ok: true, user: out });
 }));
 app.post('/api/auth/logout', ah(async (req, res) => {
   await clearSessionCookie(req, res);
@@ -671,18 +712,24 @@ app.delete('/api/auth/account', ah(async (req, res) => {
   res.json({ ok: true });
 }));
 
-// ---------- transactional email (password resets) ----------
-// The ONLY email this app sends is the password-reset link. Sender is
-// configured purely by env: SMTP_HOST, SMTP_PORT (465 = implicit TLS;
-// anything else starts plain and upgrades via STARTTLS when the server
-// offers it), SMTP_USER, SMTP_PASS, MAIL_FROM. No new dependency — the
-// client below is a minimal SMTP speaker over net/tls.
-// When NO sender is configured the reset flow still works end to end
-// (token created, /reset page functional); in non-production the link
-// is written to the SERVER LOG ONLY so local development can complete
-// the flow, and in production a sender-less request is logged without
-// the link. A send is never faked: the API answers the same generic
-// response either way, exactly like an unknown email does.
+// ---------- transactional email (password resets + team invites) ----------
+// The app sends exactly two kinds of email: the password-reset link
+// and the team-invite notice (batch 6). Sender is configured purely by
+// env: SMTP_HOST, SMTP_PORT (465 = implicit TLS; anything else starts
+// plain and upgrades via STARTTLS when the server offers it),
+// SMTP_USER, SMTP_PASS, MAIL_FROM. No new dependency — the client
+// below is a minimal SMTP speaker over net/tls.
+// MAIL_FROM may be a bare address (goyaldhiman00@gmail.com) or the
+// display form (KiluaAI <goyaldhiman00@gmail.com>) — mailFromParts()
+// splits it so the SMTP envelope always carries the bare address.
+// When NO sender is configured the flows still work end to end
+// (reset token created, /reset page functional, invite recorded); in
+// non-production the reset link is written to the SERVER LOG ONLY so
+// local development can complete the flow, and in production a
+// sender-less request is logged without the link. A send is never
+// faked: the reset API answers the same generic response either way,
+// exactly like an unknown email does, and the invite API reports
+// honestly whether the email went out (emailed: true/false).
 const SMTP_CONF = {
   host: (process.env.SMTP_HOST || '').trim(),
   port: Number(process.env.SMTP_PORT || 0) || 587,
@@ -690,7 +737,13 @@ const SMTP_CONF = {
   pass: process.env.SMTP_PASS || '',
   from: (process.env.MAIL_FROM || '').trim(),
 };
-function mailerConfigured() { return !!(SMTP_CONF.host && SMTP_CONF.user && SMTP_CONF.pass && SMTP_CONF.from); }
+function mailFromParts() {
+  const raw = SMTP_CONF.from;
+  const m = /^(.*?)<([^<>]+)>$/.exec(raw);
+  if (m) return { address: m[2].trim(), header: raw };
+  return { address: raw, header: `KiluaAI <${raw}>` };
+}
+function mailerConfigured() { return !!(SMTP_CONF.host && SMTP_CONF.user && SMTP_CONF.pass && mailFromParts().address); }
 
 function smtpSend({ to, subject, text }) {
   return new Promise((resolve, reject) => {
@@ -749,14 +802,14 @@ function smtpSend({ to, subject, text }) {
         await expect([334]);
         send(Buffer.from(SMTP_CONF.pass, 'utf8').toString('base64'));
         await expect([235]);
-        send(`MAIL FROM:<${SMTP_CONF.from}>`);
+        send(`MAIL FROM:<${mailFromParts().address}>`);
         await expect([250]);
         send(`RCPT TO:<${to}>`);
         await expect([250, 251]);
         send('DATA');
         await expect([354]);
         const headers = [
-          `From: KiluaAI <${SMTP_CONF.from}>`,
+          `From: ${mailFromParts().header}`,
           `To: <${to}>`,
           `Subject: ${subject}`,
           'MIME-Version: 1.0',
@@ -812,6 +865,51 @@ async function sendPasswordResetEmail(user, link) {
     return true;
   } catch (e) {
     console.error('[password-reset] Send failed:', String((e && e.message) || e).slice(0, 200));
+    return false;
+  }
+}
+
+// Team-invite email (batch 6): tells the invited address who invited
+// them, what their role lets them do, and where to sign in. The invite
+// carries no secret link — access binds to the ACCOUNT with this
+// email when it signs up / logs in — so the message is safe to log in
+// development. Never throws: a mail failure must not fail the invite
+// itself; the caller reports the honest `emailed` flag either way.
+async function sendTeamInviteEmail(owner, invite, baseUrl) {
+  if (!mailerConfigured()) {
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(`[team-invite] No email sender configured (set SMTP_HOST, SMTP_USER, SMTP_PASS, MAIL_FROM). Invite for ${invite.email} was recorded but not emailed.`);
+    } else {
+      console.log('[team-invite] An invite was recorded but no email sender is configured (set SMTP_HOST, SMTP_USER, SMTP_PASS, MAIL_FROM) — nothing was sent.');
+    }
+    return false;
+  }
+  const roleLine = invite.role === 'scheduler'
+    ? 'As a Scheduler you can create and schedule posts in their workspace. You cannot change their connections, settings or plan.'
+    : 'As a Viewer you can look at their workspace — posts, queue and stats — but not change anything.';
+  try {
+    await smtpSend({
+      to: invite.email,
+      subject: 'You are invited to a KiluaAI team',
+      text: [
+        'Hello,',
+        '',
+        `${owner.name || owner.email} (${owner.email}) has invited you to join their team on KiluaAI, the Instagram + YouTube scheduler.`,
+        '',
+        roleLine,
+        '',
+        'To accept, open KiluaAI and sign up or log in with THIS email address — your access starts right away, no invite link needed:',
+        '',
+        baseUrl,
+        '',
+        'If you were not expecting this invitation, you can ignore this email.',
+        '',
+        '— KiluaAI',
+      ].join('\n'),
+    });
+    return true;
+  } catch (e) {
+    console.error('[team-invite] Send failed:', String((e && e.message) || e).slice(0, 200));
     return false;
   }
 }
@@ -1367,6 +1465,32 @@ function serverBuildId() {
 app.get('/api/version', (req, res) => {
   res.json({ ok: true, buildId: serverBuildId() });
 });
+// ---------- global app settings (batch 6) ----------
+// The owner console's safe global toggles (signup open/closed,
+// maintenance mode + message), stored via db.getGlobalSettings and
+// read through a 30-second in-process cache so enforcement costs no
+// database hit per request. Fails OPEN on any read error: a settings
+// glitch must never lock every user out of the app.
+let globalSettingsCache = { at: 0, value: null };
+async function globalSettings() {
+  if (globalSettingsCache.value && Date.now() - globalSettingsCache.at < 30000) return globalSettingsCache.value;
+  const value = await db.getGlobalSettings().catch(() => ({ signupOpen: true, maintenance: false, maintenanceMessage: '' }));
+  globalSettingsCache = { at: Date.now(), value };
+  return value;
+}
+function bustGlobalSettingsCache() { globalSettingsCache = { at: 0, value: null }; }
+const MAINTENANCE_FALLBACK_MSG = 'KiluaAI is under quick maintenance — posting is paused for a few minutes. Please try again shortly.';
+// Public status for the login screen + app shell: are signups open,
+// is maintenance on, and what should the user be told. No user data.
+app.get('/api/app-status', ah(async (req, res) => {
+  const gs = await globalSettings();
+  res.json({
+    ok: true,
+    signupOpen: gs.signupOpen !== false,
+    maintenance: !!gs.maintenance,
+    maintenanceMessage: gs.maintenance ? String(gs.maintenanceMessage || '') : '',
+  });
+}));
 app.get('/api/health', ah(async (req, res) => {
   res.json({ ok: true, service: 'social-scheduler', db: db.getStatus().db, instagramConfigured: await igConfigured(req).catch(() => false) });
 }));
@@ -2742,8 +2866,9 @@ async function applyOwnerComp(user) {
 // An Ultra workspace owner invites people by email with a limited
 // role. An invite binds to the account with that email (at invite
 // time if the account exists, otherwise at its next signup/login) —
-// no email is sent (there is no mailer yet), the owner tells the
-// person themselves. Access is resolved PER REQUEST by the workspace
+// and since batch 6 the invite is also EMAILED to that address when
+// a sender is configured (the invite API answers emailed: true/false
+// honestly). Access is resolved PER REQUEST by the workspace
 // middleware below: the member sends an x-workspace-id header naming
 // the owner, the server swaps the data scope to the owner's, and the
 // role gate decides what the request may do. Roles are enforced
@@ -3864,21 +3989,24 @@ app.post('/api/posts/:id/publish', ah(async (req, res) => {
 // targets reset to pending (published ones are never touched), the
 // post is made due now, and the normal publish machinery runs it
 // immediately; its result is reported exactly like a Publish press.
-app.post('/api/posts/:id/retry', ah(async (req, res) => {
-  const post = await db.getPost(req.userId, req.params.id);
-  if (!post) return res.status(404).json({ ok: false, error: 'That post no longer exists — it may have been deleted.' });
-  if (post.status === 'published') return res.status(409).json({ ok: false, error: 'This post is already published — there is nothing to retry. Duplicate it if you want to post it again.' });
-  if (post.status !== 'failed' && post.status !== 'partial') return res.status(409).json({ ok: false, error: 'Only a failed post can be retried — this one has not failed.' });
+// One-tap retry core (batch 3), shared since batch 6 by the user
+// route below and the owner console's admin retry — one machinery,
+// two doors. Returns { status, body } instead of touching res.
+async function retryPostForUser(userId, postId, base) {
+  const post = await db.getPost(userId, postId);
+  if (!post) return { status: 404, body: { ok: false, error: 'That post no longer exists — it may have been deleted.' } };
+  if (post.status === 'published') return { status: 409, body: { ok: false, error: 'This post is already published — there is nothing to retry. Duplicate it if you want to post it again.' } };
+  if (post.status !== 'failed' && post.status !== 'partial') return { status: 409, body: { ok: false, error: 'Only a failed post can be retried — this one has not failed.' } };
   const targets = targetsOf(post);
   const checks = [];
   // --- connection ---
   if (post.igEnabled === false) {
-    const yt = await db.getYouTube(req.userId).catch(() => null);
+    const yt = await db.getYouTube(userId).catch(() => null);
     checks.push(yt
       ? { id: 'connection', ok: true, message: 'YouTube is connected.' }
       : { id: 'connection', ok: false, message: 'YouTube is not connected.', fix: 'Connect YouTube on the Connections page, then retry.' });
   } else {
-    const { accounts } = await db.getInstagramAccounts(req.userId);
+    const { accounts } = await db.getInstagramAccounts(userId);
     const pending = targets.filter((t) => t.status !== 'published');
     const missing = pending.find((t) => t.igUserId && !accounts.some((a) => String(a.igUserId) === String(t.igUserId)));
     const broken = pending.map((t) => accounts.find((a) => String(a.igUserId) === String(t.igUserId))).find((a) => a && a.tokenRefreshError === 'revoked-or-expired');
@@ -3890,12 +4018,12 @@ app.post('/api/posts/:id/retry', ah(async (req, res) => {
   // --- media ---
   if (!post.mediaUrl) checks.push({ id: 'media', ok: false, message: 'This post has no media.', fix: 'Edit the post and add a photo or video, then retry.' });
   else {
-    const dead = await deadStoredMediaError(req.userId, post.mediaUrl);
+    const dead = await deadStoredMediaError(userId, post.mediaUrl);
     if (dead) checks.push({ id: 'media', ok: false, message: dead, fix: 'Upload the file again in Media Library, then schedule a fresh post with it.' });
     else checks.push({ id: 'media', ok: true, message: 'Media is ready.' });
   }
   // --- plan (the post itself is excluded — it already holds its slot) ---
-  const chk = await planScheduleCheck(req.userId, {
+  const chk = await planScheduleCheck(userId, {
     scheduleTime: new Date().toISOString(), status: 'scheduled',
     igEnabled: post.igEnabled !== false,
     targets: targets.map((t) => ({ igAccountId: t.igUserId })),
@@ -3905,7 +4033,7 @@ app.post('/api/posts/:id/retry', ah(async (req, res) => {
     ? { id: 'plan', ok: true, message: 'Within your plan limits.' }
     : { id: 'plan', ok: false, message: chk.error, fix: 'Upgrade your plan, or delete some scheduled posts, then retry.' });
   const failed = checks.find((c) => !c.ok);
-  if (failed) return res.status(422).json({ ok: false, error: failed.message, checks });
+  if (failed) return { status: 422, body: { ok: false, error: failed.message, checks } };
   // --- re-arm + publish now through the normal machinery ---
   const reset = targets.map((t) => (t.status === 'published' ? t : freshTarget(t)));
   const patch = {
@@ -3915,14 +4043,18 @@ app.post('/api/posts/:id/retry', ah(async (req, res) => {
     retryCount: 0, retryPending: false, retryAt: '',
     ...(post.igEnabled === false ? { youtubeStatus: '', youtubeError: '' } : {}),
   };
-  await db.updatePost(req.userId, post.id, patch);
-  const fresh = await db.getPost(req.userId, post.id);
-  const result = await attemptPublish(req.userId, fresh, {}, publicBase(req));
-  if (result.ok && result.partial) return res.json({ ok: true, retried: true, partial: true, liveUrl: result.liveUrl, mediaId: result.mediaId, error: result.error });
-  if (result.ok) return res.json({ ok: true, retried: true, liveUrl: result.liveUrl, mediaId: result.mediaId });
-  if (result.retry) return res.json({ ok: false, retried: true, retry: true, containerId: result.containerId, error: result.error });
-  if (result.missingAll || /no longer connected|not connected/.test(result.error || '')) return res.status(400).json({ ok: false, retried: true, error: result.error });
-  return res.status(502).json({ ok: false, retried: true, error: result.error });
+  await db.updatePost(userId, post.id, patch);
+  const fresh = await db.getPost(userId, post.id);
+  const result = await attemptPublish(userId, fresh, {}, base);
+  if (result.ok && result.partial) return { status: 200, body: { ok: true, retried: true, partial: true, liveUrl: result.liveUrl, mediaId: result.mediaId, error: result.error } };
+  if (result.ok) return { status: 200, body: { ok: true, retried: true, liveUrl: result.liveUrl, mediaId: result.mediaId } };
+  if (result.retry) return { status: 200, body: { ok: false, retried: true, retry: true, containerId: result.containerId, error: result.error } };
+  if (result.missingAll || /no longer connected|not connected/.test(result.error || '')) return { status: 400, body: { ok: false, retried: true, error: result.error } };
+  return { status: 502, body: { ok: false, retried: true, error: result.error } };
+}
+app.post('/api/posts/:id/retry', ah(async (req, res) => {
+  const r = await retryPostForUser(req.userId, req.params.id, publicBase(req));
+  return res.status(r.status).json(r.body);
 }));
 // Posts that are due for one user: scheduled posts whose time has passed
 // (uploaded-file posts are included — attemptPublish migrates their
@@ -4549,7 +4681,9 @@ app.post('/api/team/invite', ah(async (req, res) => {
   if (removed) {
     const patch = { role, status: account ? 'active' : 'invited', memberUserId: account ? account.id : (removed.memberUserId || ''), boundAt: account ? new Date().toISOString() : (removed.boundAt || ''), removedAt: '' };
     const updated = await db.updateTeamInvite(removed.id, patch);
-    return res.json({ ok: true, member: publicInvite(updated || { ...removed, ...patch }) });
+    const member = updated || { ...removed, ...patch };
+    const emailed = await sendTeamInviteEmail(user, member, publicBase(req));
+    return res.json({ ok: true, member: publicInvite(member), emailed });
   }
   const inv = {
     id: uid('team'), ownerId: req.userId, email, role,
@@ -4559,7 +4693,8 @@ app.post('/api/team/invite', ah(async (req, res) => {
     boundAt: account ? new Date().toISOString() : '',
   };
   await db.saveTeamInvite(inv);
-  res.json({ ok: true, member: publicInvite(inv) });
+  const emailed = await sendTeamInviteEmail(user, inv, publicBase(req));
+  res.json({ ok: true, member: publicInvite(inv), emailed });
 }));
 app.delete('/api/team/:id', ah(async (req, res) => {
   const user = await requireUltraOwner(req, res);
@@ -4871,8 +5006,11 @@ ${rows}`));
 // or mentions it; (2) every route resolves the session server-side
 // and answers with the app's plain 404 unless the caller is the OWNER
 // account — a 403 or a login redirect would admit it exists; (3) the
-// data endpoints additionally require a short-lived PIN-unlock token,
-// so even the owner's own session cookie alone is not enough.
+// data endpoints additionally require a short-lived unlock token.
+// The token is issued for the correct PIN, or — batch 6, at the
+// owner's request — directly to a request that already carries the
+// OWNER's own app session (he is already authenticated; any other
+// session, or none, still gets the plain 404 everywhere).
 const ADMIN_TOKEN_TTL_MS = 30 * 60 * 1000;
 const adminPinAttempts = new Map();
 function adminPinBlocked() {
@@ -4943,6 +5081,7 @@ async function adminOverviewData() {
   const ts = (iso) => { const x = new Date(iso || '').getTime(); return Number.isNaN(x) ? 0 : x; };
   let postsTotal = 0; let postsToday = 0; let postsMonth = 0;
   let published = 0; let failed = 0; let partial = 0; let scheduled = 0;
+  let pubToday = 0; let pubWeek = 0; let failToday = 0; let failWeek = 0;
   const failedList = []; const perUserMonth = [];
   const byPlan = { free: 0, pro: 0, max: 0, ultra: 0 };
   let igTotal = 0; let igBroken = 0; let ytTotal = 0;
@@ -4960,6 +5099,8 @@ async function adminOverviewData() {
       else if (p.status === 'failed') { failed++; failedList.push(adminFailedRow(u, p)); }
       else if (p.status === 'partial') { partial++; failedList.push(adminFailedRow(u, p)); }
       else if (p.status === 'scheduled') scheduled++;
+      const pubT = ts(p.publishedAt); if (pubT >= startToday) pubToday++; if (pubT >= weekAgo) pubWeek++;
+      const failT = ts(p.failedAt); if (failT >= startToday) failToday++; if (failT >= weekAgo) failWeek++;
     }
     perUserMonth.push({ email: u.email, count: monthCount });
     const { accounts } = await db.getInstagramAccounts(u.id).catch(() => ({ accounts: [] }));
@@ -4983,8 +5124,14 @@ async function adminOverviewData() {
     posts: {
       total: postsTotal, today: postsToday, month: postsMonth,
       published, failed, partial, scheduled,
+      publishedToday: pubToday, publishedWeek: pubWeek,
+      failedToday: failToday, failedWeek: failWeek,
       successPct: decided ? Math.round((published / decided) * 100) : null,
     },
+    recentSignups: [...users]
+      .sort((a, b) => ts(b.createdAt) - ts(a.createdAt))
+      .slice(0, 8)
+      .map((u) => ({ email: u.email, name: u.name || '', createdAt: u.createdAt || '', plan: planInfoOf(u).planName })),
     failedPosts: failedList.slice(0, 25),
     mostActive: perUserMonth.filter((x) => x.count > 0).slice(0, 10),
     accounts: { instagram: igTotal, instagramBroken: igBroken, youtube: ytTotal },
@@ -5045,6 +5192,20 @@ app.post(`/api/${ADMIN_SLUG}/unlock`, ah(async (req, res) => {
   const a = Buffer.from(attempt); const b = Buffer.from(me.adminPinHash || '');
   if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) { adminPinFail(); return adminApi404(res); }
   adminPinAttempts.delete('pin');
+  await writeAdminAudit(me, 'console-unlock', me, 'Console unlocked via PIN');
+  res.json({ ok: true, adminToken: signAdminToken(me.id) });
+}));
+// Batch 6 (owner: "make admin access easy for me" + "jb admin bali ho
+// tbhi open ho"): opening the console URL in a browser that holds a
+// valid OWNER app session unlocks it without the PIN — adminOwner()
+// resolves the session and only the owner account passes; every other
+// session and every anonymous request gets the plain 404, exactly
+// like the rest of the console. The PIN path above stays for browsers
+// without an owner session, with its attempt limits untouched.
+app.post(`/api/${ADMIN_SLUG}/session-unlock`, ah(async (req, res) => {
+  const me = await adminOwner(req);
+  if (!me) return adminApi404(res);
+  await writeAdminAudit(me, 'console-unlock', me, 'Console unlocked via owner app session');
   res.json({ ok: true, adminToken: signAdminToken(me.id) });
 }));
 app.get(`/api/${ADMIN_SLUG}/overview`, ah(async (req, res) => {
@@ -5052,15 +5213,68 @@ app.get(`/api/${ADMIN_SLUG}/overview`, ah(async (req, res) => {
   if (!me) return;
   res.json(await adminOverviewData());
 }));
+// Shared pagination for the console lists (batch 6): page/pageSize
+// query params, pageSize clamped to 1..100 (console pages ask for 50).
+function adminPaginate(req, items, defaultSize = 50) {
+  const total = items.length;
+  const pageSize = Math.min(Math.max(Number(req.query.pageSize) || defaultSize, 1), 100);
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  const page = Math.min(Math.max(Number(req.query.page) || 1, 1), pages);
+  return { page, pageSize, pages, total, slice: items.slice((page - 1) * pageSize, page * pageSize) };
+}
+// One console-shaped post row, whoever owns the post.
+function adminPostRow(u, p) {
+  const t = targetsOf(p);
+  const failedT = t.find((x) => x.status === 'failed');
+  const reason = p.lastPublishError || (failedT && failedT.error) || p.youtubeError || '';
+  return {
+    userId: u.id, userEmail: u.email, postId: p.id,
+    caption: String(p.caption || '').slice(0, 120),
+    status: p.status, format: p.format || '',
+    platforms: [...(p.igEnabled === false ? [] : ['instagram']), ...(p.youtubeEnabled ? ['youtube'] : [])],
+    accounts: t.map((x) => x.username || '').filter(Boolean),
+    scheduleTime: p.scheduleTime || '', createdAt: p.createdAt || '',
+    publishedAt: p.publishedAt || '', failedAt: p.failedAt || '',
+    reason, friendly: friendlyFailureText(reason),
+  };
+}
+async function adminAllPosts() {
+  const users = await db.listUsers();
+  const out = [];
+  for (const u of users) {
+    const posts = await db.listPosts(u.id, { all: true }).catch(() => []);
+    for (const p of posts) out.push({ u, p });
+  }
+  return out;
+}
+const adminTs = (iso) => { const x = new Date(iso || '').getTime(); return Number.isNaN(x) ? 0 : x; };
+
 app.get(`/api/${ADMIN_SLUG}/users`, ah(async (req, res) => {
   const me = await requireAdminApi(req, res);
   if (!me) return;
   const q = String(req.query.q || '').trim().toLowerCase();
   let users = await db.listUsers();
   if (q) users = users.filter((u) => String(u.email || '').toLowerCase().includes(q) || String(u.name || '').toLowerCase().includes(q));
+  users = [...users].sort((a, b) => adminTs(b.createdAt) - adminTs(a.createdAt));
+  const pg = adminPaginate(req, users);
   const rows = [];
-  for (const u of users) rows.push(await adminUserRow(u));
-  res.json({ ok: true, users: rows });
+  for (const u of pg.slice) rows.push(await adminUserRow(u));
+  res.json({ ok: true, users: rows, total: pg.total, page: pg.page, pages: pg.pages, pageSize: pg.pageSize });
+}));
+app.get(`/api/${ADMIN_SLUG}/users/:id`, ah(async (req, res) => {
+  const me = await requireAdminApi(req, res);
+  if (!me) return;
+  const target = await db.getUserById(req.params.id);
+  if (!target) return adminApi404(res);
+  const row = await adminUserRow(target);
+  const posts = (await db.listPosts(target.id, { all: true }).catch(() => []))
+    .sort((a, b) => adminTs(b.createdAt) - adminTs(a.createdAt))
+    .slice(0, 50)
+    .map((p) => adminPostRow(target, p));
+  const audit = (await db.listAdminAudit({ limit: 500 }))
+    .filter((e) => e.targetUserId === target.id)
+    .slice(0, 20);
+  res.json({ ok: true, user: row, posts, audit });
 }));
 app.patch(`/api/${ADMIN_SLUG}/users/:id`, ah(async (req, res) => {
   const me = await requireAdminApi(req, res);
@@ -5099,7 +5313,157 @@ app.patch(`/api/${ADMIN_SLUG}/users/:id`, ah(async (req, res) => {
 app.get(`/api/${ADMIN_SLUG}/audit`, ah(async (req, res) => {
   const me = await requireAdminApi(req, res);
   if (!me) return;
-  res.json({ ok: true, entries: await db.listAdminAudit({ limit: 100 }) });
+  const all = await db.listAdminAudit({ limit: 500 });
+  const pg = adminPaginate(req, all);
+  res.json({ ok: true, entries: pg.slice, total: pg.total, page: pg.page, pages: pg.pages, pageSize: pg.pageSize });
+}));
+app.get(`/api/${ADMIN_SLUG}/posts`, ah(async (req, res) => {
+  const me = await requireAdminApi(req, res);
+  if (!me) return;
+  const status = String(req.query.status || '').trim();
+  const q = String(req.query.q || '').trim().toLowerCase();
+  const userId = String(req.query.userId || '').trim();
+  const from = adminTs(req.query.from || '');
+  const to = req.query.to ? adminTs(req.query.to) : 0;
+  let items = (await adminAllPosts()).map(({ u, p }) => adminPostRow(u, p));
+  if (status) items = items.filter((r) => r.status === status);
+  if (userId) items = items.filter((r) => r.userId === userId);
+  if (q) items = items.filter((r) => r.caption.toLowerCase().includes(q) || r.userEmail.toLowerCase().includes(q));
+  if (from) items = items.filter((r) => adminTs(r.createdAt) >= from);
+  if (to) items = items.filter((r) => adminTs(r.createdAt) <= to);
+  items.sort((a, b) => adminTs(b.createdAt) - adminTs(a.createdAt));
+  const pg = adminPaginate(req, items);
+  res.json({ ok: true, posts: pg.slice, total: pg.total, page: pg.page, pages: pg.pages, pageSize: pg.pageSize });
+}));
+app.get(`/api/${ADMIN_SLUG}/failures`, ah(async (req, res) => {
+  const me = await requireAdminApi(req, res);
+  if (!me) return;
+  let items = (await adminAllPosts())
+    .filter(({ p }) => p.status === 'failed' || p.status === 'partial')
+    .map(({ u, p }) => adminPostRow(u, p));
+  items.sort((a, b) => (adminTs(b.failedAt) || adminTs(b.createdAt)) - (adminTs(a.failedAt) || adminTs(a.createdAt)));
+  const pg = adminPaginate(req, items);
+  res.json({ ok: true, posts: pg.slice, total: pg.total, page: pg.page, pages: pg.pages, pageSize: pg.pageSize });
+}));
+// Admin retry: the SAME one-tap retry core the user route uses,
+// aimed at another user's post. Always audit-logged with the outcome.
+app.post(`/api/${ADMIN_SLUG}/posts/:userId/:postId/retry`, ah(async (req, res) => {
+  const me = await requireAdminApi(req, res);
+  if (!me) return;
+  const target = await db.getUserById(req.params.userId);
+  if (!target) return adminApi404(res);
+  const post = await db.getPost(target.id, req.params.postId).catch(() => null);
+  if (!post) return adminApi404(res);
+  const r = await retryPostForUser(target.id, post.id, publicBase(req));
+  const outcome = r.body && r.body.ok
+    ? (r.body.partial ? 'retried — partly published' : 'retried — published')
+    : `retry did not publish (${(r.body && r.body.error) || r.status})`;
+  await writeAdminAudit(me, 'post-retry', target, `Retry of post ${post.id} for ${target.email}: ${outcome}`);
+  return res.status(r.status).json(r.body);
+}));
+app.get(`/api/${ADMIN_SLUG}/plans`, ah(async (req, res) => {
+  const me = await requireAdminApi(req, res);
+  if (!me) return;
+  const users = await db.listUsers();
+  const usersPerPlan = { free: 0, pro: 0, max: 0, ultra: 0 };
+  for (const u of users) { const id = effectivePlanOf(u).id; usersPerPlan[id] = (usersPerPlan[id] || 0) + 1; }
+  const ser = (n) => (Number.isFinite(n) ? n : null);
+  res.json({
+    ok: true,
+    // Honest state (batch 6): checkout is not wired yet, so no money
+    // is collected anywhere — never show revenue numbers we do not have.
+    paymentsLive: false,
+    paymentsNote: 'Payments are not live yet — nobody can pay inside the app today. Plans are granted by hand from the Users page, and no revenue figures exist to show.',
+    usersPerPlan,
+    plans: Object.values(PLANS).map((p) => ({
+      id: p.id, name: p.name, priceInr: p.priceInr,
+      limits: { accounts: ser(p.accounts), igAccounts: ser(p.igAccounts), postsPerDay: ser(p.postsPerDay), postsPerMonth: ser(p.postsPerMonth), aiPerDay: ser(p.aiPerDay) },
+      fullBridge: !!p.fullBridge,
+    })),
+  });
+}));
+app.get(`/api/${ADMIN_SLUG}/connections`, ah(async (req, res) => {
+  const me = await requireAdminApi(req, res);
+  if (!me) return;
+  const users = await db.listUsers();
+  const rows = []; const disconnected = [];
+  for (const u of users) {
+    const { accounts } = await db.getInstagramAccounts(u.id).catch(() => ({ accounts: [] }));
+    const yt = await db.getYouTube(u.id).catch(() => null);
+    const ig = accounts.map((a) => {
+      const broken = a.tokenRefreshError === 'revoked-or-expired';
+      if (broken) disconnected.push({ userId: u.id, userEmail: u.email, platform: 'instagram', username: a.username || '' });
+      return { username: a.username || '', broken };
+    });
+    rows.push({ userId: u.id, email: u.email, instagram: ig, youtube: !!yt, brokenCount: ig.filter((a) => a.broken).length });
+  }
+  res.json({ ok: true, rows, disconnected });
+}));
+// Broadcast: an in-app announcement to EVERY user through the normal
+// notifications system (Dashboard bell/list). The confirm flag is
+// required server-side — the console's checkbox alone is not the
+// guard — and the send is audit-logged with its recipient count.
+app.post(`/api/${ADMIN_SLUG}/broadcast`, ah(async (req, res) => {
+  const me = await requireAdminApi(req, res);
+  if (!me) return;
+  const b = req.body || {};
+  const title = String(b.title || '').trim().slice(0, 120);
+  const body = String(b.body || '').trim().slice(0, 1000);
+  if (!title || !body) return res.status(400).json({ ok: false, error: 'Write both a title and a message for the announcement.' });
+  if (b.confirm !== true) return res.status(400).json({ ok: false, error: 'Confirm the broadcast first — it goes to every user.' });
+  const users = await db.listUsers();
+  const at = new Date().toISOString();
+  let sent = 0;
+  for (const u of users) {
+    await db.saveNotification({
+      id: uid('ntf'), userId: u.id, type: 'announcement',
+      title, message: body, createdAt: at,
+    }).then(() => { sent++; }).catch(() => null);
+  }
+  await writeAdminAudit(me, 'broadcast', null, `Broadcast to ${sent} users: ${title}`);
+  res.json({ ok: true, sent });
+}));
+app.get(`/api/${ADMIN_SLUG}/settings`, ah(async (req, res) => {
+  const me = await requireAdminApi(req, res);
+  if (!me) return;
+  const ser = (n) => (Number.isFinite(n) ? n : null);
+  res.json({
+    ok: true,
+    settings: await db.getGlobalSettings(),
+    // Plan prices/limits are READ-ONLY here on purpose: they live in
+    // exactly one place (the PLANS config in the app code) so the
+    // app, the pricing page and this console can never disagree.
+    plansNote: 'Plan prices and limits live in one place in the app code (the PLANS config) so the app and this console can never show different numbers. They are read-only here — changing them is a code change, never a second source of truth.',
+    plans: Object.values(PLANS).map((p) => ({
+      id: p.id, name: p.name, priceInr: p.priceInr,
+      limits: { accounts: ser(p.accounts), postsPerDay: ser(p.postsPerDay), postsPerMonth: ser(p.postsPerMonth), aiPerDay: ser(p.aiPerDay) },
+    })),
+  });
+}));
+app.patch(`/api/${ADMIN_SLUG}/settings`, ah(async (req, res) => {
+  const me = await requireAdminApi(req, res);
+  if (!me) return;
+  const b = req.body || {};
+  const before = await db.getGlobalSettings();
+  const patch = {}; const changes = [];
+  if (b.signupOpen !== undefined) {
+    const v = b.signupOpen === true;
+    if (!!before.signupOpen !== v) { patch.signupOpen = v; changes.push(v ? 'Signups opened' : 'Signups paused'); }
+  }
+  if (b.maintenance !== undefined) {
+    const v = b.maintenance === true;
+    if (!!before.maintenance !== v) { patch.maintenance = v; changes.push(v ? 'Maintenance mode ON' : 'Maintenance mode OFF'); }
+  }
+  if (b.maintenanceMessage !== undefined) {
+    const v = String(b.maintenanceMessage || '').trim().slice(0, 300);
+    if (String(before.maintenanceMessage || '') !== v) { patch.maintenanceMessage = v; changes.push('Maintenance message updated'); }
+  }
+  if (Object.keys(patch).length) {
+    await db.saveGlobalSettings(patch);
+    bustGlobalSettingsCache();
+    await writeAdminAudit(me, 'settings-change', null, changes.join('; ') || 'Settings updated');
+  }
+  res.json({ ok: true, settings: await db.getGlobalSettings() });
 }));
 
 // Owner backup export: the app-side replacement for the blocked
@@ -5135,14 +5499,16 @@ const ADMIN_PAGE_HTML = `<!doctype html>
 body{margin:0;background:#0b1026;color:#e8ebf8;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
 header{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid #2b3560;background:#101736;position:sticky;top:0;z-index:5}
 header b{color:#e8c268}
-main{max-width:980px;margin:0 auto;padding:16px}
+main{max-width:1180px;margin:0 auto;padding:16px}
 .card{background:#141b36;border:1px solid #2b3560;border-radius:14px;padding:16px;margin:0 0 14px}
 h2{margin:0 0 10px;font-size:17px}
 .muted{opacity:.72;font-size:13px}
 .err{color:#ff9a9a;font-size:14px;min-height:18px}
+.okmsg{color:#8fe3b0;font-size:14px;min-height:18px}
 label{display:block;font-size:13px;opacity:.8;margin:10px 0 4px}
-input,select{background:#0d1330;border:1px solid #2b3560;border-radius:9px;color:#e8ebf8;padding:9px 11px;font-size:14px;width:100%;box-sizing:border-box}
+input,select,textarea{background:#0d1330;border:1px solid #2b3560;border-radius:9px;color:#e8ebf8;padding:9px 11px;font-size:14px;width:100%;box-sizing:border-box;font-family:inherit}
 input[type=date]{width:auto}
+input[type=checkbox]{width:auto}
 .btn{background:#1c2650;border:1px solid #3a478a;color:#e8ebf8;border-radius:9px;padding:8px 14px;font-size:14px;cursor:pointer}
 .btn.primary{background:#e8c268;border-color:#e8c268;color:#191204;font-weight:700}
 .btn.small{padding:5px 10px;font-size:13px}
@@ -5165,12 +5531,32 @@ input[type=date]{width:auto}
 .controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px}
 .controls input{width:auto}
 .klabel{font-size:12px;opacity:.7;width:100%}
+.layout{display:flex;gap:14px;align-items:flex-start}
+nav.side{flex:0 0 178px;background:#141b36;border:1px solid #2b3560;border-radius:14px;padding:10px;position:sticky;top:74px}
+nav.side button{display:block;width:100%;text-align:left;background:transparent;border:1px solid transparent;color:#e8ebf8;border-radius:9px;padding:9px 11px;font-size:14px;cursor:pointer;margin:2px 0}
+nav.side button:hover{border-color:#3a478a}
+nav.side button.active{background:#e8c268;color:#191204;font-weight:700}
+.views{flex:1;min-width:0}
+.view{display:none}
+.view.on{display:block}
+.pager{display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap}
+.filters{display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:6px}
+.filters>div{flex:1;min-width:140px}
+.filters label{margin-top:0}
+.toggle{display:flex;gap:9px;align-items:center;cursor:pointer;margin:12px 0}
+.toggle input{width:18px;height:18px}
+.banner{border:1px solid #a03d3d;background:#2a1420;border-radius:11px;padding:11px 13px;margin:0 0 12px;font-size:14px}
+.banner.info{border-color:#3a478a;background:#101736}
+table{width:100%;border-collapse:collapse;font-size:14px}
+td,th{padding:7px 8px;border-top:1px solid #232c55;text-align:left;vertical-align:top}
+tr:first-child td,tr:first-child th{border-top:none}
+@media (max-width:760px){.layout{flex-direction:column}nav.side{flex:none;width:100%;position:static;display:flex;flex-wrap:wrap;gap:4px}nav.side button{width:auto}}
 </style></head>
 <body>
 <header><b>KiluaAI — Owner Console</b>
 <span id="hdrBtns" hidden>
+<a class="btn small" href="/" style="text-decoration:none">Switch to User Panel</a>
 <button class="btn small" id="refreshBtn">Refresh</button>
-<button class="btn small" id="pinBtn">Change PIN</button>
 <button class="btn small" id="lockBtn">Lock</button>
 </span></header>
 <main>
@@ -5192,22 +5578,98 @@ input[type=date]{width:auto}
 <p class="err" id="gateErr"></p>
 </section>
 <div id="app" hidden>
-<section class="card"><h2>Overview</h2><div class="grid" id="stats"></div>
+<div class="layout">
+<nav class="side" id="sideNav">
+<button data-nav="dashboard" class="active">Dashboard</button>
+<button data-nav="users">Users</button>
+<button data-nav="userdetail" id="navUserDetail" hidden>User Detail</button>
+<button data-nav="posts">Posts</button>
+<button data-nav="plans">Plans</button>
+<button data-nav="connections">Connections</button>
+<button data-nav="failures">Failures</button>
+<button data-nav="broadcast">Broadcast</button>
+<button data-nav="audit">Audit Log</button>
+<button data-nav="settings">Settings</button>
+</nav>
+<div class="views">
+<section class="view on" id="view-dashboard">
+<div class="card"><h2>Dashboard</h2><div class="grid" id="stats"></div>
 <div class="chips" id="planDist"></div>
-<p class="muted" id="acctHealth" style="margin-top:10px"></p></section>
-<section class="card"><h2>Most active this month</h2><div id="active"></div></section>
-<section class="card"><h2>Recent failed posts</h2><div id="failed"></div></section>
-<section class="card"><h2>Users</h2>
+<p class="muted" id="acctHealth" style="margin-top:10px"></p></div>
+<div class="card"><h2>Recent signups</h2><div id="signups"></div></div>
+<div class="card"><h2>Most active this month</h2><div id="active"></div></div>
+</section>
+<section class="view" id="view-users">
+<div class="card"><h2>Users</h2>
 <input id="search" type="search" placeholder="Search by email or name">
-<div id="users" style="margin-top:8px"></div></section>
-<section class="card" id="pinCard" hidden><h2>Change PIN</h2>
+<div id="users" style="margin-top:8px"></div>
+<div class="pager" id="usersPager"></div></div>
+</section>
+<section class="view" id="view-userdetail">
+<div class="card"><button class="btn small" data-act="back-users">← Back to Users</button>
+<h2 style="margin-top:12px">User Detail</h2><div id="udetail"></div></div>
+<div class="card"><h2>Their posts (latest 50)</h2><div id="udetailPosts"></div></div>
+<div class="card"><h2>Audit entries for this user</h2><div id="udetailAudit"></div></div>
+</section>
+<section class="view" id="view-posts">
+<div class="card"><h2>Posts — all users</h2>
+<div class="filters">
+<div><label for="postStatus">Status</label><select id="postStatus">
+<option value="">All statuses</option><option value="scheduled">Scheduled</option>
+<option value="published">Published</option><option value="failed">Failed</option>
+<option value="partial">Partly published</option><option value="draft">Draft</option>
+</select></div>
+<div><label for="postQ">Search caption or email</label><input id="postQ" type="search" placeholder="Search…"></div>
+</div>
+<div id="posts"></div>
+<div class="pager" id="postsPager"></div></div>
+</section>
+<section class="view" id="view-plans">
+<div class="card"><h2>Plans</h2><div id="plansNote"></div><div id="plans"></div></div>
+</section>
+<section class="view" id="view-connections">
+<div class="card"><h2>Disconnected accounts</h2><div id="disconnected"></div></div>
+<div class="card"><h2>Connections by user</h2><div id="connections"></div></div>
+</section>
+<section class="view" id="view-failures">
+<div class="card"><h2>Failed posts — newest first</h2><div id="failures"></div>
+<div class="pager" id="failuresPager"></div></div>
+</section>
+<section class="view" id="view-broadcast">
+<div class="card"><h2>Broadcast — in-app announcement</h2>
+<p class="muted">Goes to every user's in-app notifications (the bell on their Dashboard). It is not an email.</p>
+<label for="bcTitle">Title</label>
+<input id="bcTitle" type="text" maxlength="120" placeholder="e.g. New: best-time suggestions are live">
+<label for="bcBody">Message</label>
+<textarea id="bcBody" rows="4" maxlength="1000" placeholder="Write the announcement…"></textarea>
+<p class="muted" id="bcCount"></p>
+<label class="toggle"><input type="checkbox" id="bcConfirm"> <span>Yes — send this to ALL users now</span></label>
+<p><button class="btn primary" id="bcSend" disabled>Send broadcast</button></p>
+<p class="okmsg" id="bcMsg"></p><p class="err" id="bcErr"></p></div>
+</section>
+<section class="view" id="view-audit">
+<div class="card"><h2>Audit log</h2><div id="audit"></div>
+<div class="pager" id="auditPager"></div></div>
+</section>
+<section class="view" id="view-settings">
+<div class="card"><h2>Settings — global toggles</h2>
+<label class="toggle"><input type="checkbox" id="setSignup"> <span><b>Signups open</b> — when off, new accounts cannot be created (existing users log in as usual)</span></label>
+<label class="toggle"><input type="checkbox" id="setMaint"> <span><b>Maintenance mode</b> — when on, posting and other changes pause for regular users; reading and login still work, and you (the owner) are never blocked</span></label>
+<label for="setMaintMsg">Maintenance message (shown to users while maintenance is on)</label>
+<textarea id="setMaintMsg" rows="2" maxlength="300" placeholder="e.g. Back in 10 minutes — fixing something quick."></textarea>
+<p style="margin-top:12px"><button class="btn primary" id="setSave">Save settings</button> <span class="muted" id="setMsg"></span></p></div>
+<div class="card"><h2>Plan prices &amp; limits (read-only)</h2><p class="muted" id="plansNote2"></p><div id="plansReadonly"></div></div>
+<div class="card"><h2>Change PIN</h2>
 <input id="newPin" type="password" placeholder="New PIN (at least 4 characters)" autocomplete="new-password">
-<p style="margin-top:10px"><button class="btn" id="changePinBtn">Change PIN</button> <span class="muted" id="pinMsg"></span></p></section>
-<section class="card"><h2>Audit log</h2><div id="audit"></div></section>
+<p style="margin-top:10px"><button class="btn" id="changePinBtn">Change PIN</button> <span class="muted" id="pinMsg"></span></p></div>
+</section>
+</div>
+</div>
 </div>
 </main>
 <script src="/api/${ADMIN_SLUG}/app.js"></script>
-</body></html>`;
+</body></html>
+`;
 const ADMIN_PAGE_JS = `
 var BASE = location.pathname.slice(0, location.pathname.lastIndexOf('/'));
 var token = sessionStorage.getItem('oc-token') || '';
@@ -5237,11 +5699,23 @@ function gateForms(){
     if (s.pinBlocked) el('gateErr').textContent = 'Too many wrong PIN tries — wait 10 minutes, then try again.';
   }).catch(function(){ el('gateMsg').textContent = 'Could not check the console status.'; });
 }
-function openApp(){ el('gate').hidden = true; el('app').hidden = false; el('hdrBtns').hidden = false; loadAll(); }
+function openApp(){ el('gate').hidden = true; el('app').hidden = false; el('hdrBtns').hidden = false; showView(startView(), true); }
 function boot(){
-  if (!token) { gateForms(); return; }
+  if (!token) { trySessionUnlock(); return; }
   fetch(BASE + '/status', { headers: { 'x-admin-token': token } }).then(function(r){ return r.json(); }).then(function(s){
-    if (s.unlocked) openApp(); else gateForms();
+    if (s.unlocked) openApp(); else trySessionUnlock();
+  }).catch(function(){ trySessionUnlock(); });
+}
+// Batch 6: if this browser already holds the owner's app session, the
+// server hands back an unlock token and no PIN is needed. Any other
+// session (or none) answers 404 and we fall through to the PIN gate.
+function trySessionUnlock(){
+  fetch(BASE + '/session-unlock', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).then(function(r){
+    if (r.status !== 200) throw new Error('no owner session');
+    return r.json();
+  }).then(function(d){
+    if (d && d.adminToken) { token = d.adminToken; sessionStorage.setItem('oc-token', token); el('gateErr').textContent = ''; openApp(); }
+    else gateForms();
   }).catch(function(){ gateForms(); });
 }
 el('setPinBtn').addEventListener('click', function(){
@@ -5261,57 +5735,132 @@ el('unlockBtn').addEventListener('click', function(){
 });
 el('lockBtn').addEventListener('click', function(){ lock(''); });
 el('refreshBtn').addEventListener('click', function(){ loadAll(); });
-el('pinBtn').addEventListener('click', function(){ el('pinCard').hidden = !el('pinCard').hidden; });
 el('changePinBtn').addEventListener('click', function(){
   var p = el('newPin').value;
   if (p.length < 4) { el('pinMsg').textContent = 'At least 4 characters.'; return; }
   api('/change-pin', { method: 'POST', body: JSON.stringify({ pin: p }) }).then(function(d){
     if (d.adminToken) { token = d.adminToken; sessionStorage.setItem('oc-token', token); }
     el('pinMsg').textContent = 'PIN changed.'; el('newPin').value = '';
-    api('/audit').then(renderAudit).catch(function(){});
   }).catch(function(){});
 });
-el('search').addEventListener('input', function(){ loadUsers(el('search').value.trim()); });
-function loadAll(){ api('/overview').then(renderOverview).catch(function(){}); loadUsers(el('search').value.trim()); api('/audit').then(renderAudit).catch(function(){}); }
-function loadUsers(q){ api('/users' + (q ? '?q=' + encodeURIComponent(q) : '')).then(function(d){ renderUsers(d.users || []); }).catch(function(){}); }
+
+// ---------- views / router ----------
+var currentView = 'dashboard';
+var currentUserId = '';
+var pageState = { users: 1, posts: 1, failures: 1, audit: 1 };
+var VIEWS = ['dashboard','users','userdetail','posts','plans','connections','failures','broadcast','audit','settings'];
+function startView(){
+  var h = String(location.hash || '').replace('#/', '');
+  if (h.indexOf('user/') === 0) { currentUserId = h.slice(5); return 'userdetail'; }
+  return VIEWS.indexOf(h) >= 0 && h !== 'userdetail' ? h : 'dashboard';
+}
+function showView(name, force){
+  if (name === 'userdetail' && !currentUserId) name = 'users';
+  currentView = name;
+  VIEWS.forEach(function(v){ el('view-' + v).classList.toggle('on', v === name); });
+  var btns = el('sideNav').querySelectorAll('[data-nav]');
+  btns.forEach(function(b){ b.classList.toggle('active', b.getAttribute('data-nav') === name); });
+  el('navUserDetail').hidden = !currentUserId;
+  var want = name === 'userdetail' ? '#/user/' + currentUserId : '#/' + name;
+  if (location.hash !== want) { try { history.replaceState(null, '', want); } catch (e) { /* file:// etc. */ } }
+  loadView(name, force);
+}
+function loadAll(){ loadView(currentView, true); }
+function loadView(name, force){
+  if (name === 'dashboard') loadDashboard();
+  else if (name === 'users') loadUsers();
+  else if (name === 'userdetail') openUser(currentUserId, true);
+  else if (name === 'posts') loadPosts();
+  else if (name === 'plans') loadPlans();
+  else if (name === 'connections') loadConnections();
+  else if (name === 'failures') loadFailures();
+  else if (name === 'broadcast') loadBroadcast();
+  else if (name === 'audit') loadAudit();
+  else if (name === 'settings') loadSettings();
+}
+el('sideNav').addEventListener('click', function(ev){
+  var b = ev.target && ev.target.closest ? ev.target.closest('[data-nav]') : null;
+  if (b) showView(b.getAttribute('data-nav'));
+});
+function pagerHtml(list, page, pages, total, label){
+  return '<button class="btn small" data-act="page" data-list="' + list + '" data-dir="-1"' + (page <= 1 ? ' disabled' : '') + '>← Prev</button>'
+    + '<span class="muted">Page ' + page + ' of ' + pages + ' · ' + total + ' ' + esc(label) + '</span>'
+    + '<button class="btn small" data-act="page" data-list="' + list + '" data-dir="1"' + (page >= pages ? ' disabled' : '') + '>Next →</button>';
+}
 function stat(label, value){ return '<div class="stat"><b>' + esc(value) + '</b><span>' + esc(label) + '</span></div>'; }
-function renderOverview(o){
-  var s = '';
-  s += stat('Total users', o.users.total); s += stat('New today', o.users.today); s += stat('New this week', o.users.week); s += stat('New this month', o.users.month);
-  s += stat('Posts total', o.posts.total); s += stat('Posts today', o.posts.today); s += stat('Posts this month', o.posts.month);
-  s += stat('Published', o.posts.published); s += stat('Failed', o.posts.failed); s += stat('Partly published', o.posts.partial); s += stat('Scheduled now', o.posts.scheduled);
-  s += stat('Publish success', o.posts.successPct == null ? '—' : o.posts.successPct + '%');
-  el('stats').innerHTML = s;
-  var bp = o.users.byPlan || {};
-  el('planDist').innerHTML = ['free','pro','max','ultra'].map(function(k){ return '<span class="chip">' + esc(k.toUpperCase()) + ' · ' + esc(bp[k] || 0) + ' users</span>'; }).join('');
-  el('acctHealth').textContent = 'Connected accounts — Instagram: ' + o.accounts.instagram + ' (' + o.accounts.instagramBroken + ' broken, need reconnect) · YouTube channels: ' + o.accounts.youtube;
-  var max = 0; (o.mostActive || []).forEach(function(x){ if (x.count > max) max = x.count; });
-  el('active').innerHTML = (o.mostActive && o.mostActive.length) ? o.mostActive.map(function(x){
-    return '<div class="row"><div style="display:flex;justify-content:space-between;gap:10px"><span>' + esc(x.email) + '</span><b>' + esc(x.count) + ' posts</b></div><div class="bar"><i style="width:' + (max ? Math.round(x.count / max * 100) : 0) + '%"></i></div></div>';
-  }).join('') : '<p class="muted">No posts yet this month.</p>';
-  el('failed').innerHTML = (o.failedPosts && o.failedPosts.length) ? o.failedPosts.map(function(f){
-    return '<div class="row"><div class="uhead"><span class="uemail">' + esc(f.userEmail) + '</span><span class="muted">' + esc(when(f.failedAt)) + '</span></div>'
-      + '<div>' + esc(f.caption || '(no caption)') + '</div>'
-      + '<div style="color:#ff9a9a">' + esc(f.friendly || f.reason || 'Failed') + '</div>'
-      + (f.reason && f.reason !== f.friendly ? '<div class="muted">' + esc(f.reason) + '</div>' : '') + '</div>';
-  }).join('') : '<p class="muted">No failed posts. </p>';
+
+// ---------- dashboard ----------
+function loadDashboard(){
+  api('/overview').then(function(o){
+    var s = '';
+    s += stat('Total users', o.users.total); s += stat('New today', o.users.today); s += stat('New in 7 days', o.users.week); s += stat('New this month', o.users.month);
+    s += stat('Posts total', o.posts.total); s += stat('Published today', o.posts.publishedToday); s += stat('Published in 7 days', o.posts.publishedWeek);
+    s += stat('Failed today', o.posts.failedToday); s += stat('Failed in 7 days', o.posts.failedWeek);
+    s += stat('Published (all time)', o.posts.published); s += stat('Failed (all time)', o.posts.failed); s += stat('Partly published', o.posts.partial); s += stat('Scheduled now', o.posts.scheduled);
+    s += stat('Publish success', o.posts.successPct == null ? '—' : o.posts.successPct + '%');
+    el('stats').innerHTML = s;
+    var bp = o.users.byPlan || {};
+    el('planDist').innerHTML = ['free','pro','max','ultra'].map(function(k){ return '<span class="chip">' + esc(k.toUpperCase()) + ' · ' + esc(bp[k] || 0) + ' users</span>'; }).join('');
+    el('acctHealth').textContent = 'Connected accounts — Instagram: ' + o.accounts.instagram + ' (' + o.accounts.instagramBroken + ' broken, need reconnect) · YouTube channels: ' + o.accounts.youtube;
+    el('signups').innerHTML = (o.recentSignups && o.recentSignups.length) ? o.recentSignups.map(function(u){
+      return '<div class="row"><div class="uhead"><span class="uemail">' + esc(u.email) + (u.name ? ' <span class="muted">(' + esc(u.name) + ')</span>' : '') + '</span><span class="badge">' + esc(u.plan) + ' plan</span></div><div class="muted">Joined ' + esc(when(u.createdAt)) + '</div></div>';
+    }).join('') : '<p class="muted">No signups yet.</p>';
+    var max = 0; (o.mostActive || []).forEach(function(x){ if (x.count > max) max = x.count; });
+    el('active').innerHTML = (o.mostActive && o.mostActive.length) ? o.mostActive.map(function(x){
+      return '<div class="row"><div style="display:flex;justify-content:space-between;gap:10px"><span>' + esc(x.email) + '</span><b>' + esc(x.count) + ' posts</b></div><div class="bar"><i style="width:' + (max ? Math.round(x.count / max * 100) : 0) + '%"></i></div></div>';
+    }).join('') : '<p class="muted">No posts yet this month.</p>';
+  }).catch(function(){});
+}
+
+// ---------- users ----------
+el('search').addEventListener('input', function(){ pageState.users = 1; loadUsers(); });
+function loadUsers(){
+  var q = el('search').value.trim();
+  api('/users?page=' + pageState.users + '&pageSize=50' + (q ? '&q=' + encodeURIComponent(q) : '')).then(function(d){
+    pageState.users = d.page || 1;
+    renderUsers(d.users || []);
+    el('usersPager').innerHTML = pagerHtml('users', d.page || 1, d.pages || 1, d.total || 0, 'users');
+  }).catch(function(){});
 }
 function planChips(u){
   if (u.role === 'owner') return '<span class="badge">OWNER — always Ultra</span>';
-  if (u.plan.comp) return '<span class="badge">COMP — Ultra free forever</span> ' + ['free','pro','max','ultra'].map(function(k){
-    return '<button class="btn small' + (u.plan.basePlan === k ? ' active' : '') + '" data-act="plan" data-id="' + u.id + '" data-plan="' + k + '">' + k.toUpperCase() + '</button>';
+  var activeKey = u.plan.comp ? u.plan.basePlan : u.plan.plan;
+  var chips = ['free','pro','max','ultra'].map(function(k){
+    return '<button class="btn small' + (activeKey === k ? ' active' : '') + '" data-act="plan" data-id="' + u.id + '" data-plan="' + k + '">' + k.toUpperCase() + '</button>';
   }).join('');
-  return ['free','pro','max','ultra'].map(function(k){
-    return '<button class="btn small' + (u.plan.plan === k ? ' active' : '') + '" data-act="plan" data-id="' + u.id + '" data-plan="' + k + '">' + k.toUpperCase() + '</button>';
-  }).join('');
+  return (u.plan.comp ? '<span class="badge">COMP — Ultra free forever</span> ' : '') + chips;
 }
 function renderUsers(rows){
   if (!rows.length) { el('users').innerHTML = '<p class="muted">No users match.</p>'; return; }
   el('users').innerHTML = rows.map(function(u){
     var accts = (u.accounts || []).map(function(a){ return '@' + esc(a.username || '?') + (a.broken ? ' <span class="badge bad">BROKEN</span>' : ''); }).join(', ');
-    var h = '<div class="row"><div class="uhead"><span class="uemail">' + esc(u.email) + (u.name ? ' <span class="muted">(' + esc(u.name) + ')</span>' : '') + '</span>'
-      + '<span class="badge">' + esc(u.plan.planName) + ' plan</span></div>'
+    return '<div class="row"><div class="uhead"><span class="uemail">' + esc(u.email) + (u.name ? ' <span class="muted">(' + esc(u.name) + ')</span>' : '') + '</span>'
+      + '<span><span class="badge">' + esc(u.plan.planName) + ' plan</span> <button class="btn small" data-act="open-user" data-id="' + u.id + '">Open</button></span></div>'
       + '<div class="muted">Joined ' + esc(when(u.createdAt)) + ' · Posts: ' + esc(u.postsTotal) + ' total, ' + esc(u.postsThisMonth) + ' this month · Instagram: ' + (accts || 'none') + ' · YouTube: ' + (u.youtubeConnected ? 'connected' : 'no') + '</div>'
+      + '<div class="controls"><span class="klabel">Plan (one tap)</span>' + planChips(u) + '</div></div>';
+  }).join('');
+}
+function patchUser(id, body, after){
+  api('/users/' + id, { method: 'PATCH', body: JSON.stringify(body) }).then(function(){
+    if (after) after();
+    if (currentView === 'users') loadUsers();
+    if (currentView === 'userdetail' && currentUserId === id) openUser(id, true);
+  }).catch(function(){});
+}
+
+// ---------- user detail ----------
+function openUser(id, stay){
+  if (!id) return;
+  currentUserId = id;
+  if (!stay) { showView('userdetail'); return; }
+  el('navUserDetail').hidden = false;
+  api('/users/' + id).then(function(d){
+    var u = d.user;
+    var accts = (u.accounts || []).map(function(a){ return '@' + esc(a.username || '?') + (a.broken ? ' <span class="badge bad">BROKEN</span>' : ''); }).join(', ');
+    var h = '<div class="uhead"><span class="uemail">' + esc(u.email) + (u.name ? ' <span class="muted">(' + esc(u.name) + ')</span>' : '') + '</span>'
+      + '<span class="badge">' + esc(u.plan.planName) + ' plan</span></div>'
+      + '<div class="muted">Joined ' + esc(when(u.createdAt)) + ' · Role: ' + esc(u.role) + ' · Posts: ' + esc(u.postsTotal) + ' total, ' + esc(u.postsThisMonth) + ' this month</div>'
+      + '<div class="muted">Instagram: ' + (accts || 'none') + ' · YouTube: ' + (u.youtubeConnected ? 'connected' : 'not connected') + '</div>'
       + '<div class="controls"><span class="klabel">Plan (one tap)</span>' + planChips(u) + '</div>';
     if (u.role !== 'owner') {
       h += '<div class="controls"><span class="klabel">Paid-plan expiry (blank = no expiry)</span>'
@@ -5327,24 +5876,141 @@ function renderUsers(rows){
         + '<button class="btn small" data-act="override" data-id="' + u.id + '">Save override</button>'
         + '<button class="btn small" data-act="override-clear" data-id="' + u.id + '">Clear</button></div>';
     }
-    return h + '</div>';
-  }).join('');
-}
-function patchUser(id, body){
-  api('/users/' + id, { method: 'PATCH', body: JSON.stringify(body) }).then(function(){
-    loadUsers(el('search').value.trim());
-    api('/overview').then(renderOverview).catch(function(){});
-    api('/audit').then(renderAudit).catch(function(){});
+    el('udetail').innerHTML = h;
+    el('udetailPosts').innerHTML = (d.posts && d.posts.length) ? d.posts.map(postRowHtml).join('') : '<p class="muted">No posts yet.</p>';
+    el('udetailAudit').innerHTML = (d.audit && d.audit.length) ? d.audit.map(auditRowHtml).join('') : '<p class="muted">No admin actions on this user yet.</p>';
   }).catch(function(){});
 }
+
+// ---------- posts / failures ----------
+function postRowHtml(r){
+  var h = '<div class="row"><div class="uhead"><span class="uemail">' + esc(r.userEmail) + '</span><span class="badge">' + esc(r.status) + '</span></div>'
+    + '<div>' + esc(r.caption || '(no caption)') + '</div>'
+    + '<div class="muted">' + esc((r.platforms || []).join(' + ')) + (r.accounts && r.accounts.length ? ' · @' + esc(r.accounts.join(', @')) : '')
+    + ' · Created ' + esc(when(r.createdAt)) + (r.scheduleTime ? ' · Scheduled ' + esc(when(r.scheduleTime)) : '')
+    + (r.publishedAt ? ' · Published ' + esc(when(r.publishedAt)) : '') + (r.failedAt ? ' · Failed ' + esc(when(r.failedAt)) : '') + '</div>';
+  if (r.status === 'failed' || r.status === 'partial') {
+    h += '<div style="color:#ff9a9a">' + esc(r.friendly || r.reason || 'Failed') + '</div>'
+      + (r.reason && r.reason !== r.friendly ? '<div class="muted">' + esc(r.reason) + '</div>' : '')
+      + '<div class="controls"><button class="btn small" data-act="retry" data-user="' + esc(r.userId) + '" data-id="' + esc(r.postId) + '">Retry this post</button> <span class="muted" id="retry-' + esc(r.postId) + '"></span></div>';
+  }
+  return h + '</div>';
+}
+el('postStatus').addEventListener('change', function(){ pageState.posts = 1; loadPosts(); });
+el('postQ').addEventListener('input', function(){ pageState.posts = 1; loadPosts(); });
+function loadPosts(){
+  var st = el('postStatus').value, q = el('postQ').value.trim();
+  api('/posts?page=' + pageState.posts + '&pageSize=50' + (st ? '&status=' + encodeURIComponent(st) : '') + (q ? '&q=' + encodeURIComponent(q) : '')).then(function(d){
+    pageState.posts = d.page || 1;
+    el('posts').innerHTML = (d.posts && d.posts.length) ? d.posts.map(postRowHtml).join('') : '<p class="muted">No posts match.</p>';
+    el('postsPager').innerHTML = pagerHtml('posts', d.page || 1, d.pages || 1, d.total || 0, 'posts');
+  }).catch(function(){});
+}
+function loadFailures(){
+  api('/failures?page=' + pageState.failures + '&pageSize=50').then(function(d){
+    pageState.failures = d.page || 1;
+    el('failures').innerHTML = (d.posts && d.posts.length) ? d.posts.map(postRowHtml).join('') : '<p class="muted">No failed posts. </p>';
+    el('failuresPager').innerHTML = pagerHtml('failures', d.page || 1, d.pages || 1, d.total || 0, 'failed posts');
+  }).catch(function(){});
+}
+function retryPost(userId, postId, btn){
+  var slot = el('retry-' + postId);
+  if (btn) btn.disabled = true;
+  if (slot) slot.textContent = 'Retrying…';
+  api('/posts/' + userId + '/' + postId + '/retry', { method: 'POST', body: '{}' }).then(function(d){
+    if (slot) slot.textContent = d.ok ? 'Published ✓' : ('Still failed: ' + (d.error || 'unknown'));
+    setTimeout(function(){
+      if (currentView === 'failures') loadFailures();
+      else if (currentView === 'posts') loadPosts();
+      else if (currentView === 'userdetail') openUser(currentUserId, true);
+    }, 900);
+  }).catch(function(){ if (slot) slot.textContent = 'Retry failed to run.'; if (btn) btn.disabled = false; });
+}
+
+// ---------- plans ----------
+function planCardsHtml(plans, perPlan){
+  return (plans || []).map(function(p){
+    var lim = p.limits || {};
+    var f = function(v){ return v == null ? 'Unlimited' : v; };
+    return '<div class="row"><div class="uhead"><span class="uemail">' + esc(p.name) + ' — ₹' + esc(p.priceInr) + '/month</span><span class="badge">' + esc(perPlan && perPlan[p.id] != null ? perPlan[p.id] : 0) + ' users</span></div>'
+      + '<div class="muted">Accounts: ' + f(lim.accounts) + ' · Posts/day: ' + f(lim.postsPerDay) + ' · Posts/month: ' + f(lim.postsPerMonth) + (lim.aiPerDay !== undefined ? ' · AI captions/day: ' + f(lim.aiPerDay) : '') + (p.fullBridge ? ' · Whole queue server-ready' : ' · Next post server-ready') + '</div></div>';
+  }).join('');
+}
+function loadPlans(){
+  api('/plans').then(function(d){
+    el('plansNote').innerHTML = d.paymentsLive ? '' : '<div class="banner">' + esc(d.paymentsNote || '') + '</div>';
+    el('plans').innerHTML = planCardsHtml(d.plans, d.usersPerPlan);
+  }).catch(function(){});
+}
+
+// ---------- connections ----------
+function loadConnections(){
+  api('/connections').then(function(d){
+    el('disconnected').innerHTML = (d.disconnected && d.disconnected.length) ? d.disconnected.map(function(x){
+      return '<div class="row"><span class="uemail">' + esc(x.userEmail) + '</span> — Instagram @' + esc(x.username || '?') + ' <span class="badge bad">DISCONNECTED</span><div class="muted">Their posts to this account cannot publish until they reconnect.</div></div>';
+    }).join('') : '<p class="muted">No disconnected accounts — every connection is healthy.</p>';
+    el('connections').innerHTML = (d.rows || []).map(function(r){
+      var ig = (r.instagram || []).map(function(a){ return '@' + esc(a.username || '?') + (a.broken ? ' <span class="badge bad">BROKEN</span>' : ''); }).join(', ');
+      return '<div class="row"><div class="uhead"><span class="uemail">' + esc(r.email) + '</span>' + (r.brokenCount ? '<span class="badge bad">' + esc(r.brokenCount) + ' broken</span>' : '<span class="badge">healthy</span>') + '</div>'
+        + '<div class="muted">Instagram: ' + (ig || 'none') + ' · YouTube: ' + (r.youtube ? 'connected' : 'no') + '</div></div>';
+    }).join('') || '<p class="muted">No users yet.</p>';
+  }).catch(function(){});
+}
+
+// ---------- broadcast ----------
+function loadBroadcast(){
+  api('/overview').then(function(o){ el('bcCount').textContent = 'This will go to ' + o.users.total + ' users.'; }).catch(function(){});
+}
+el('bcConfirm').addEventListener('change', function(){ el('bcSend').disabled = !el('bcConfirm').checked; });
+el('bcSend').addEventListener('click', function(){
+  var title = el('bcTitle').value.trim(), body = el('bcBody').value.trim();
+  el('bcMsg').textContent = ''; el('bcErr').textContent = '';
+  if (!title || !body) { el('bcErr').textContent = 'Write both a title and a message first.'; return; }
+  el('bcSend').disabled = true;
+  api('/broadcast', { method: 'POST', body: JSON.stringify({ title: title, body: body, confirm: true }) }).then(function(d){
+    el('bcMsg').textContent = 'Sent to ' + d.sent + ' users.';
+    el('bcTitle').value = ''; el('bcBody').value = ''; el('bcConfirm').checked = false;
+  }).catch(function(){ el('bcErr').textContent = 'The broadcast did not go out — try again.'; el('bcSend').disabled = false; });
+});
+
+// ---------- audit ----------
+function auditRowHtml(e){
+  return '<div class="row"><div class="uhead"><span><b>' + esc(e.action) + '</b> · ' + esc(e.targetEmail || '') + '</span><span class="muted">' + esc(when(e.at)) + '</span></div><div class="muted">' + esc(e.summary || '') + '</div></div>';
+}
+function loadAudit(){
+  api('/audit?page=' + pageState.audit + '&pageSize=50').then(function(d){
+    pageState.audit = d.page || 1;
+    el('audit').innerHTML = (d.entries && d.entries.length) ? d.entries.map(auditRowHtml).join('') : '<p class="muted">No admin actions yet.</p>';
+    el('auditPager').innerHTML = pagerHtml('audit', d.page || 1, d.pages || 1, d.total || 0, 'entries');
+  }).catch(function(){});
+}
+
+// ---------- settings ----------
+function loadSettings(){
+  api('/settings').then(function(d){
+    el('setSignup').checked = d.settings.signupOpen !== false;
+    el('setMaint').checked = !!d.settings.maintenance;
+    el('setMaintMsg').value = d.settings.maintenanceMessage || '';
+    el('plansNote2').textContent = d.plansNote || '';
+    el('plansReadonly').innerHTML = planCardsHtml(d.plans, null);
+    el('setMsg').textContent = '';
+  }).catch(function(){});
+}
+el('setSave').addEventListener('click', function(){
+  api('/settings', { method: 'PATCH', body: JSON.stringify({
+    signupOpen: el('setSignup').checked,
+    maintenance: el('setMaint').checked,
+    maintenanceMessage: el('setMaintMsg').value.trim(),
+  }) }).then(function(){ el('setMsg').textContent = 'Saved.'; }).catch(function(){ el('setMsg').textContent = 'Could not save — try again.'; });
+});
+
+// ---------- delegated actions ----------
 function setPlan(id, plan){ patchUser(id, { plan: plan }); }
 function setComp(id, comp){ patchUser(id, { comp: comp }); }
-function saveExpiry(id){ var v = el('exp-' + id).value; patchUser(id, { planExpiresAt: v ? new Date(v + 'T23:59:59').toISOString() : '' }); }
+function saveExpiry(id){ var n = el('exp-' + id); if (n) patchUser(id, { planExpiresAt: n.value ? new Date(n.value + 'T23:59:59').toISOString() : '' }); }
 function clearExpiry(id){ patchUser(id, { planExpiresAt: '' }); }
-function saveOverride(id){ var v = el('ovr-' + id).value; patchUser(id, { postLimitOverride: v === '' ? '' : Number(v) }); }
+function saveOverride(id){ var n = el('ovr-' + id); if (n) patchUser(id, { postLimitOverride: n.value === '' ? '' : Number(n.value) }); }
 function clearOverride(id){ patchUser(id, { postLimitOverride: '' }); }
-// One delegated handler for every user-row action button (data-act),
-// so the generated markup needs no inline handler strings at all.
 document.addEventListener('click', function(ev){
   var b = ev.target && ev.target.closest ? ev.target.closest('[data-act]') : null;
   if (!b) return;
@@ -5357,13 +6023,18 @@ document.addEventListener('click', function(ev){
   else if (act === 'comp-off') setComp(id, false);
   else if (act === 'override') saveOverride(id);
   else if (act === 'override-clear') clearOverride(id);
+  else if (act === 'open-user') { currentUserId = id; showView('userdetail'); }
+  else if (act === 'back-users') showView('users');
+  else if (act === 'retry') retryPost(b.getAttribute('data-user'), id, b);
+  else if (act === 'page') {
+    var list = b.getAttribute('data-list'), dir = Number(b.getAttribute('data-dir') || 0);
+    pageState[list] = Math.max(1, (pageState[list] || 1) + dir);
+    if (list === 'users') loadUsers();
+    else if (list === 'posts') loadPosts();
+    else if (list === 'failures') loadFailures();
+    else if (list === 'audit') loadAudit();
+  }
 });
-function renderAudit(d){
-  var rows = d.entries || [];
-  el('audit').innerHTML = rows.length ? rows.map(function(e){
-    return '<div class="row"><div class="uhead"><span><b>' + esc(e.action) + '</b> · ' + esc(e.targetEmail || '') + '</span><span class="muted">' + esc(when(e.at)) + '</span></div><div class="muted">' + esc(e.summary || '') + '</div></div>';
-  }).join('') : '<p class="muted">No admin actions yet.</p>';
-}
 boot();
 `;
 // The console lives under /api/ on purpose: on the production host

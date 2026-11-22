@@ -169,7 +169,9 @@ async function runScenario(scenario, bundleDir) {
     switch (p) {
       case '/build-id.json': return json(200, { buildId: scenario === 'C' ? 'a-different-build-id' : ownBuildId })
       case '/api/version': return json(200, { ok: true, buildId: scenario === 'C' ? 'a-different-build-id' : ownBuildId })
-      case '/api/auth/me': return json(200, { user: { id: 'u-smoke', email: 'smoke@test.local', name: 'Smoke' } })
+      case '/api/auth/me': return json(200, { user: scenario === 'D'
+        ? { id: 'u-smoke', email: 'smoke@test.local', name: 'Smoke', isOwner: true, adminUrl: '/api/smoke-admin/console' }
+        : { id: 'u-smoke', email: 'smoke@test.local', name: 'Smoke' } })
       case '/api/posts': return json(200, seeded)
       case '/api/media': return json(200, [])
       case '/api/templates': return json(200, [])
@@ -424,13 +426,20 @@ async function runScenario(scenario, bundleDir) {
       return els.find((el) => el.textContent.trim() === 'Pricing')
     }, 'Pricing nav control')
     pricingBtn.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }))
-    await waitFor(() => root.textContent.includes('My plan') && root.textContent.includes('₹499'), 'pricing tab to render')
+    await waitFor(() => root.textContent.includes('My plan') && root.textContent.includes('₹499') && root.textContent.includes('Your numbers'), 'pricing tab + stats card to render')
     const priceTxt = root.textContent
     if (!priceTxt.includes('Most popular')) fail('Max is not marked most popular on the Pricing tab')
     if (!priceTxt.includes('Best for you')) fail('best-for-you marker missing on the Pricing tab (seeded usage is over the Free account limit, so a recommendation must show)')
     if (!priceTxt.includes('Your numbers')) fail('stats card missing from the Pricing tab')
     if (!priceTxt.includes('Current plan')) fail('current-plan marker missing on the Pricing tab')
-    console.log('render-smoke scenario B: PASS (dashboard + queue + calendar + media + connections + studio render, scheduled-first order holds, tracker platform wording correct, YouTube visibility pre-fills from the saved default, compact glance + pricing tab render)')
+    // Batch 6 (owner's final model): a NON-owner account must never
+    // see the "Switch to Admin" entry — no flag on /me, no menu item.
+    const avatarBtnB = window.document.querySelector('.avatar-btn')
+    if (!avatarBtnB) fail('account (avatar) button missing')
+    avatarBtnB.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }))
+    await waitFor(() => window.document.querySelector('.avatar-menu'), 'account menu to open')
+    if ([...window.document.querySelectorAll('.avatar-menu a, .avatar-menu button')].some((el) => el.textContent.includes('Switch to Admin'))) fail('Switch to Admin renders for a non-owner account')
+    console.log('render-smoke scenario B: PASS (dashboard + queue + calendar + media + connections + studio render, scheduled-first order holds, tracker platform wording correct, YouTube visibility pre-fills from the saved default, compact glance + pricing tab render, no admin entry for a non-owner)')
   } else if (scenario === 'C') {
     await waitFor(() => root.innerHTML.length > 0, 'app shell to render')
     const skip = [...window.document.querySelectorAll('button, a')].find((el) => el.textContent.trim() === 'Skip setup')
@@ -440,6 +449,22 @@ async function runScenario(scenario, bundleDir) {
       'update guard banner to render on build-id mismatch'
     )
     console.log('render-smoke scenario C: PASS (update guard banner renders when the deployment build differs)')
+  } else if (scenario === 'D') {
+    // Batch 6: the OWNER account (stub /me carries the server-provided
+    // owner flag + console URL) gets a "Switch to Admin" entry in the
+    // account menu, pointing at exactly the URL /me delivered — the
+    // slug itself is never a literal in the bundle.
+    await waitFor(() => root.innerHTML.length > 0, 'app shell to render')
+    const skipD = [...window.document.querySelectorAll('button, a')].find((el) => el.textContent.trim() === 'Skip setup')
+    if (skipD) skipD.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }))
+    await waitFor(() => root.textContent.includes('Scheduled'), 'dashboard to render')
+    const avatarBtnD = await waitFor(() => window.document.querySelector('.avatar-btn'), 'account (avatar) button')
+    avatarBtnD.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }))
+    await waitFor(() => window.document.querySelector('.avatar-menu'), 'account menu to open')
+    const adminLink = [...window.document.querySelectorAll('.avatar-menu a')].find((el) => el.textContent.includes('Switch to Admin'))
+    if (!adminLink) fail('Switch to Admin missing from the owner account menu')
+    if (adminLink.getAttribute('href') !== '/api/smoke-admin/console') fail('Switch to Admin href is not the /me-provided URL (got "' + adminLink.getAttribute('href') + '")')
+    console.log('render-smoke scenario D: PASS (owner account menu carries Switch to Admin with the /me-provided URL)')
   }
   if (errors.length) fail('render errors captured: ' + errors[0])
   process.exit(0)
@@ -463,7 +488,7 @@ if (process.argv[2] === '--run') {
   let smokeBuildId = ''
   try { smokeBuildId = JSON.parse(fs.readFileSync(path.join(bundleDir, 'build-id.json'), 'utf8')).buildId || '' } catch { /* older bundle: guard stays quiet via the empty id */ }
   let failed = false
-  for (const s of ['A', 'B', 'C']) {
+  for (const s of ['A', 'B', 'C', 'D']) {
     const r = spawnSync(process.execPath, [__filename, '--run', s, bundleDir], { stdio: 'inherit', env: { ...process.env, SMOKE_BUILD_ID: smokeBuildId } })
     if (r.status !== 0) failed = true
   }

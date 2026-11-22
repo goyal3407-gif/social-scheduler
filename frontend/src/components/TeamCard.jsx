@@ -4,10 +4,11 @@ import { api } from '../api.js'
 // Team (batch 3, agency foundation — Ultra only): the workspace
 // owner invites members by email with a limited role and can remove
 // them at any time (access ends on their very next request — the
-// server checks membership on every call). No invite email is sent
-// by the app yet: the owner tells the person, and the invite binds
-// automatically when that email signs in. The card renders nothing
-// for non-Ultra plans.
+// server checks membership on every call). Since batch 6 the invite
+// is also emailed by the app when a sender is configured — the API
+// answers emailed: true/false and this card says which happened.
+// The invite binds automatically when that email signs in. The card
+// renders nothing for non-Ultra plans.
 export default function TeamCard({ tr }) {
   const t = tr || ((k) => k)
   const [plan, setPlan] = useState('')
@@ -34,9 +35,9 @@ export default function TeamCard({ tr }) {
   const invite = async () => {
     setBusy(true); setMsg('')
     try {
-      await api.inviteTeamMember(email.trim(), role)
+      const r = await api.inviteTeamMember(email.trim(), role)
       setEmail('')
-      setMsg(t('teamInvited'))
+      setMsg(r && r.emailed ? t('teamInvitedEmailed') : t('teamInvited'))
       await load()
     } catch (e) { setMsg(e.message || t('teamInviteFail')) }
     finally { setBusy(false) }

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api } from '../api.js'
 
 // Login / sign-up screen. Shown on its own — no app content, no queue,
@@ -18,6 +18,19 @@ export default function Auth({ onAuth, bare = false }) {
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
   const [showPw, setShowPw] = useState(false)
+  // Public app status (batch 6): signups paused / maintenance mode,
+  // set by the owner in the console. Fails silent — if the status
+  // cannot load, the screen behaves exactly as before.
+  const [appStatus, setAppStatus] = useState(null)
+  useEffect(() => {
+    let live = true
+    api.getAppStatus().then((s) => { if (live) setAppStatus(s) }).catch(() => {})
+    return () => { live = false }
+  }, [])
+  const signupsPaused = mode === 'signup' && !!appStatus && appStatus.signupOpen === false
+  const maintBanner = appStatus && appStatus.maintenance ? (
+    <div className="alert error" role="status" style={{ marginBottom: 14 }}>{appStatus.maintenanceMessage || 'KiluaAI is under quick maintenance — please try again in a few minutes.'}</div>
+  ) : null
 
   const submit = async (e) => {
     e.preventDefault()
@@ -64,6 +77,7 @@ export default function Auth({ onAuth, bare = false }) {
             <p className="muted">Reset your password</p>
           </div>
         )}
+        {maintBanner}
         <form onSubmit={submitForgot}>
           <label htmlFor="forgotEmail">Email</label>
           <input id="forgotEmail" type="email" autoComplete="email" placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} />
@@ -88,6 +102,7 @@ export default function Auth({ onAuth, bare = false }) {
           <p className="muted">{mode === 'signup' ? 'Create your account' : 'Log in to your account'}</p>
         </div>
       )}
+      {maintBanner}
       <form onSubmit={submit}>
         {mode === 'signup' && (
           <>
@@ -103,9 +118,13 @@ export default function Auth({ onAuth, bare = false }) {
           <button type="button" className="btn ghost small" style={{ flex: 'none' }} onClick={() => setShowPw(!showPw)} aria-label={showPw ? 'Hide password' : 'Show password'}>{showPw ? 'Hide' : 'Show'}</button>
         </div>
         {error && <div className="alert error">{error}</div>}
-        <button type="submit" className="btn block mt2" disabled={busy}>
-          {busy ? 'Please wait…' : mode === 'signup' ? 'Create account' : 'Log in'}
-        </button>
+        {signupsPaused ? (
+          <div className="alert error" style={{ marginTop: 16 }}>Signups are paused right now — please try again later. If you already have an account, log in instead.</div>
+        ) : (
+          <button type="submit" className="btn block mt2" disabled={busy}>
+            {busy ? 'Please wait…' : mode === 'signup' ? 'Create account' : 'Log in'}
+          </button>
+        )}
         {mode === 'login' && (
           <p className="muted small" style={{ marginTop: 12, textAlign: 'center' }}>
             <button type="button" className="auth-switch" onClick={() => { setMode('forgot'); setError('') }}>Forgot password?</button>

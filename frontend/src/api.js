@@ -255,6 +255,7 @@ export const api = {
     }
   },
   getNotifications: () => req('/api/notifications'),
+  getAppStatus: () => req('/api/app-status'),
   markNotificationsRead: () => req('/api/notifications/read', { method: 'POST', body: JSON.stringify({}) }),
   updateMedia: async (id, patch) => (await req(`/api/media/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) })).media,
   deleteMedia: (id) => req(`/api/media/${encodeURIComponent(id)}`, { method: 'DELETE' }),

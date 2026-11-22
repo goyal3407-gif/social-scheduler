@@ -122,6 +122,14 @@ export default function App() {
   const [wsId, setWsId] = useState(() => getWorkspaceId())
   const wsIdRef = useRef(wsId)
   const [notifications, setNotifications] = useState([])
+  // Public app status (batch 6): maintenance mode set by the owner in
+  // the console. Fetched once; fails silent (no banner) if it cannot load.
+  const [appStatus, setAppStatus] = useState(null)
+  useEffect(() => {
+    let live = true
+    api.getAppStatus().then((s) => { if (live) setAppStatus(s) }).catch(() => {})
+    return () => { live = false }
+  }, [])
   const [unread, setUnread] = useState(0)
   const [confirmDelete, setConfirmDelete] = useState(null) // {type:'post'|'media'|'posts', item|items}
   const [templateSeed, setTemplateSeed] = useState(null)
@@ -954,6 +962,9 @@ export default function App() {
                     <a role="menuitem" href="/contact.html" onClick={() => setAvatarMenuOpen(false)}>{tr('contact')}</a>
                     <button type="button" role="menuitem" onClick={() => { setAvatarMenuOpen(false); setTheme(theme === 'dark' ? 'light' : 'dark') }}>{theme === 'dark' ? tr('lightTheme') : tr('darkTheme')}</button>
                     <button type="button" role="menuitem" onClick={() => { setAvatarMenuOpen(false); setLang(lang === 'hi' ? 'en' : 'hi') }}>{tr('language')}: {lang === 'hi' ? 'Hinglish' : 'English'} · {tr('switchWord')}</button>
+                    {user.isOwner && user.adminUrl && (
+                      <a role="menuitem" href={user.adminUrl} onClick={() => setAvatarMenuOpen(false)}>{tr('switchToAdmin')}</a>
+                    )}
                     <button type="button" role="menuitem" onClick={() => { setAvatarMenuOpen(false); handleLogout() }}>{tr('logout')}</button>
                   </div>
                 </>
@@ -1028,6 +1039,14 @@ export default function App() {
               </div>
             </div>
           </aside>
+        </div>
+      )}
+
+      {appStatus && appStatus.maintenance && user && user.role !== 'owner' && (
+        <div className="wrap" style={{ paddingBottom: 0 }}>
+          <div className="warn amber nudge" role="status">
+            <div style={{ flex: 1 }}>{appStatus.maintenanceMessage || tr('maintenanceDefault')}</div>
+          </div>
         </div>
       )}
 

@@ -15,7 +15,7 @@ export const CORE = {
   en: {
     home: 'Home', create: 'Create', queue: 'Queue', calendar: 'Calendar', media: 'Media',
     aiStudio: 'AI Studio', bulk: 'Bulk', tools: 'Tools', connections: 'Connections',
-    settings: 'Settings', pricing: 'Pricing', contact: 'Contact', logout: 'Log out',
+    settings: 'Settings', pricing: 'Pricing', contact: 'Contact', logout: 'Log out', switchToAdmin: 'Switch to Admin',
     createPost: 'Create Post', workspace: 'Workspace', myWorkspace: 'My workspace',
     loading: 'Loading…', searchPlaceholder: 'Search posts & media…',
     scheduled: 'Scheduled', published: 'Published', failed: 'Failed', partial: 'Partial', drafts: 'Drafts',
@@ -29,7 +29,7 @@ export const CORE = {
   hi: {
     home: 'Home', create: 'Banayein', queue: 'Queue List', calendar: 'Calendar', media: 'Media',
     aiStudio: 'AI Studio', bulk: 'Bulk', tools: 'Tools', connections: 'Connections',
-    settings: 'Settings', pricing: 'Plans ke daam', contact: 'Contact', logout: 'Log out',
+    settings: 'Settings', pricing: 'Plans ke daam', contact: 'Contact', logout: 'Log out', switchToAdmin: 'Admin par switch karein',
     createPost: 'Post Banayein', workspace: 'Workspace', myWorkspace: 'Mera workspace',
     loading: 'Load ho raha hai…', searchPlaceholder: 'Posts aur media search karein…',
     scheduled: 'Tay posts', published: 'Publish hue', failed: 'Fail hue', partial: 'Aadhe publish', drafts: 'Drafts',

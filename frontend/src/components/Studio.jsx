@@ -2,6 +2,29 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, captionScore, countHashtags, fromLocalInputValue, nextBestTime, toLocalInputValue } from '../api.js'
 import { IconWarn, IconCheck, IconHeart, IconComment, IconSend, IconBookmark } from './icons.jsx'
 
+// Best-time chips (batch 6): the next occurrences of the widely-used
+// India Instagram slots (12:30 PM, 6:30 PM, 9:00 PM, local time).
+// The app stores NO per-post engagement (Instagram insights need Meta
+// App Review), so these are honestly labelled in the UI as a general
+// guide — never as the user's own audience data. Pure client-side:
+// no endpoint, no server load.
+const BEST_TIME_SLOTS = [[12, 30], [18, 30], [21, 0]]
+function bestTimeSlots(t) {
+  const now = Date.now()
+  const out = []
+  for (const [h, m] of BEST_TIME_SLOTS) {
+    const d = new Date()
+    d.setHours(h, m, 0, 0)
+    let today = true
+    if (d.getTime() <= now + 10 * 60000) { d.setDate(d.getDate() + 1); today = false }
+    out.push({
+      key: `${h}:${m}:${today ? 't' : 'tm'}`,
+      date: d,
+      label: `${today ? t('todayWord') : t('tomorrowWord')} ${d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`,
+    })
+  }
+  return out.sort((a, b) => a.date - b.date).slice(0, 3)
+}
 const PLATFORMS = ['Instagram', 'YouTube', 'Facebook', 'TikTok']
 const FORMATS = ['REELS', 'FEED', 'STORY']
 const YT_VISIBILITIES = ['public', 'unlisted', 'private']
@@ -698,6 +721,15 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
               </div>
               <label htmlFor="scheduleTime" style={{ marginTop: 14 }}>{t('scheduleTimeLabel')}</label>
               <input id="scheduleTime" type="datetime-local" value={form.scheduleTime && form.scheduleTime.length > 16 ? toLocalInputValue(form.scheduleTime) : form.scheduleTime} onChange={(e) => set({ scheduleTime: e.target.value })} />
+              <div style={{ marginTop: 10 }}>
+                <div className="small" style={{ fontWeight: 600 }}>{t('bestTimesTitle')}</div>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 6 }}>
+                  {bestTimeSlots(t).map((s) => (
+                    <button key={s.key} type="button" className="btn ghost small" onClick={() => set({ scheduleTime: toLocalInputValue(s.date) })}>{s.label}</button>
+                  ))}
+                </div>
+                <p className="muted small" style={{ marginTop: 6 }}>{t('bestTimesNote')}</p>
+              </div>
               {suggestion && (
                 <div className="warn blue">
                   <IconCheck size={17} />

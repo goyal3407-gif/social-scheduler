@@ -49,6 +49,7 @@ const JSON_FILES = {
   notifications: 'notifications.json', uploadSessions: 'upload-sessions.json',
   adminAudit: 'admin-audit.json',
   teamInvites: 'team-invites.json',
+  globalSettings: 'global-settings.json',
 };
 
 // ---------- Mongoose models ----------
@@ -245,6 +246,13 @@ const teamInviteSchema = new mongoose.Schema({
   createdAt: String, boundAt: String, removedAt: String,
 }, { strict: false });
 teamInviteSchema.index({ ownerId: 1, email: 1 });
+// Global app settings (batch 6): ONE doc (id 'global') holding the
+// owner console's safe global toggles — signup open/closed and the
+// maintenance switch + message. Defaults live in GLOBAL_SETTINGS_DEFAULTS
+// below; this doc only ever stores what the owner changed.
+const globalSettingsSchema = new mongoose.Schema({
+  id: { type: String, unique: true, index: true },
+}, { strict: false });
 
 const User = mongoose.models.SsUser || mongoose.model('SsUser', userSchema, 'users');
 const Session = mongoose.models.SsSession || mongoose.model('SsSession', sessionSchema, 'sessions');
@@ -265,6 +273,7 @@ const UploadSession = mongoose.models.SsUploadSession || mongoose.model('SsUploa
 const UploadChunk = mongoose.models.SsUploadChunk || mongoose.model('SsUploadChunk', uploadChunkSchema, 'uploadchunks');
 const AdminAudit = mongoose.models.SsAdminAudit || mongoose.model('SsAdminAudit', adminAuditSchema, 'adminaudits');
 const TeamInvite = mongoose.models.SsTeamInvite || mongoose.model('SsTeamInvite', teamInviteSchema, 'teaminvites');
+const GlobalSettings = mongoose.models.SsGlobalSettings || mongoose.model('SsGlobalSettings', globalSettingsSchema, 'globalsettings');
 
 // ---------- connect (cached promise + one retry, PureNest pattern) ----------
 let mongoReady = false;
@@ -1264,6 +1273,33 @@ async function listAdminAudit({ limit = 100 } = {}) {
     .slice(0, lim);
 }
 
+// ---------- global app settings (batch 6, owner console) ----------
+// One logical record (id 'global'): the safe global toggles the owner
+// console may flip — whether new signups are open, and maintenance
+// mode with its public message. Anything not stored falls back to
+// these defaults, so a fresh install behaves exactly as before.
+const GLOBAL_SETTINGS_DEFAULTS = { signupOpen: true, maintenance: false, maintenanceMessage: '' };
+async function getGlobalSettings() {
+  await ensureMongo();
+  if (isMongo()) {
+    const doc = await GlobalSettings.findOne({ id: 'global' }).lean();
+    const clean = doc ? stripAll([doc])[0] : null;
+    return { ...GLOBAL_SETTINGS_DEFAULTS, ...(clean || {}) };
+  }
+  const doc = jsonList('globalSettings').find((d) => d.id === 'global');
+  return { ...GLOBAL_SETTINGS_DEFAULTS, ...(doc || {}) };
+}
+async function saveGlobalSettings(patch) {
+  await ensureMongo();
+  const next = { ...(await getGlobalSettings()), ...patch, id: 'global', updatedAt: new Date().toISOString() };
+  if (isMongo()) {
+    await GlobalSettings.findOneAndUpdate({ id: 'global' }, { $set: next }, { upsert: true });
+    return next;
+  }
+  jsonUpsert('globalSettings', next, 'id');
+  return next;
+}
+
 // ---------- team invites (batch 3, agency foundation) ----------
 async function listTeamInvites(ownerId) {
   await ensureMongo();
@@ -1413,7 +1449,7 @@ const JSON_COLLECTION_NAMES = {
   youtube: 'youtube', drafts: 'drafts', bios: 'bios', instagram: 'instagram',
   importJobs: 'importjobs', notifications: 'notifications',
   uploadSessions: 'uploadsessions', adminAudit: 'adminaudits',
-  teamInvites: 'teaminvites',
+  teamInvites: 'teaminvites', globalSettings: 'globalsettings',
 };
 async function exportDatabase() {
   if (await ensureMongo()) {
@@ -1456,5 +1492,6 @@ module.exports = {
   saveNotification, listNotifications, countUnreadNotifications, markNotificationsRead,
   createUploadSession, getUploadSession, saveUploadChunk, getUploadChunks, deleteUploadSession, deleteExpiredUploadSessions,
   addAdminAudit, listAdminAudit,
+  getGlobalSettings, saveGlobalSettings,
   listTeamInvites, listTeamInvitesByEmail, listMemberships, saveTeamInvite, updateTeamInvite,
 };
