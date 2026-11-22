@@ -14,7 +14,7 @@
   "name": "social-scheduler-frontend",
   "private": true,
   "scripts": {
-    "build": "node gen-icons.mjs && node gen-tokens.mjs && vite build",
+    "build": "node gen-icons.mjs && node gen-fonts.mjs && node gen-tokens.mjs && vite build",
     "dev": "vite",
     "preview": "vite preview"
   },
