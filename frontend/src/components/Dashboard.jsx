@@ -180,7 +180,7 @@ export default function Dashboard({ posts, media, user, loading, error, onRetry,
           <div className="stats stats-3" style={{ marginTop: 12 }}>
             <div className="stat"><b>{publishedToday}</b><span>{t('publishedToday')}</span><small>{postedThisWeek} {t('thisWeekSuffix')}{streak > 0 ? ` · ${t('dayStreakSuffix').replace('{n}', streak)}` : ''}</small></div>
             <div className="stat"><b>{upcoming.length}</b><span>{t('scheduled')}</span><small>{next ? `${new Date(next.scheduleTime).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} · ${new Date(next.scheduleTime).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} · ${t('nextInLabel').replace('{label}', cd.label)}` : t('nothingScheduled')}</small></div>
-            <div className="stat"><b style={problemCount > 0 ? { color: 'var(--red)' } : undefined}>{problemCount}</b><span>{t('problems')}</span><small>{problemCount > 0 ? problemBits : t('allGood')}</small></div>
+            <div className="stat"><b style={problemCount > 0 ? { color: 'var(--red-text)' } : undefined}>{problemCount}</b><span>{t('problems')}</span><small>{problemCount > 0 ? problemBits : t('allGood')}</small></div>
           </div>
           <div className="conn-strip">
             <span className="conn-chip">

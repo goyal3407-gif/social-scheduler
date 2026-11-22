@@ -444,7 +444,7 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
               {drafts.map((d) => (
                 <span key={d.id} className="chip" style={{ marginRight: 6, marginBottom: 6 }}>
                   <button type="button" onClick={() => loadDraft(d)} style={{ border: 'none', background: 'transparent', fontWeight: 700, padding: 0, color: 'var(--ink)' }} title={d.caption || ''}>{d.name}</button>
-                  {onDeleteLibraryDraft && <button type="button" aria-label={t('deleteDraftAria').replace('{name}', d.name)} onClick={() => onDeleteLibraryDraft(d)} style={{ border: 'none', background: 'transparent', color: 'var(--red)', fontWeight: 700, padding: 0, marginLeft: 2 }}>✕</button>}
+                  {onDeleteLibraryDraft && <button type="button" aria-label={t('deleteDraftAria').replace('{name}', d.name)} onClick={() => onDeleteLibraryDraft(d)} style={{ border: 'none', background: 'transparent', color: 'var(--red-text)', fontWeight: 700, padding: 0, marginLeft: 2 }}>✕</button>}
                 </span>
               ))}
             </div>
@@ -537,7 +537,7 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
                     {templates.filter((tpl) => !isSeedTemplate(tpl)).map((tpl) => (
                       <span key={tpl.id} className="chip" style={{ marginRight: 6, marginBottom: 6 }}>
                         <button type="button" onClick={() => applyTemplate(tpl)} style={{ border: 'none', background: 'transparent', fontWeight: 700, padding: 0, color: 'var(--ink)' }} title={t('useSetTitle')}>{tpl.name}</button>
-                        {onDeleteTemplate && <button type="button" aria-label={t('deleteSetAria').replace('{name}', tpl.name)} onClick={() => onDeleteTemplate(tpl)} style={{ border: 'none', background: 'transparent', color: 'var(--red)', fontWeight: 700, padding: 0, marginLeft: 2 }}>✕</button>}
+                        {onDeleteTemplate && <button type="button" aria-label={t('deleteSetAria').replace('{name}', tpl.name)} onClick={() => onDeleteTemplate(tpl)} style={{ border: 'none', background: 'transparent', color: 'var(--red-text)', fontWeight: 700, padding: 0, marginLeft: 2 }}>✕</button>}
                       </span>
                     ))}
                   </div>
@@ -570,7 +570,7 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
               </div>
               <label htmlFor="hashtags">{t('hashtagsLabel')} <span className="muted">{t('hashtagsNote')}</span></label>
               <input id="hashtags" placeholder="#social #creator #reels" value={form.hashtags} onChange={(e) => set({ hashtags: e.target.value })} />
-              <p className="small mt" style={{ color: nTags > 30 ? 'var(--red)' : 'var(--muted)' }}>{t('hashtagsCount').replace('{n}', nTags)}{nTags > 30 ? ` ${t('hashtagsOver')}` : ''}</p>
+              <p className="small mt" style={{ color: nTags > 30 ? 'var(--red-text)' : 'var(--muted)' }}>{t('hashtagsCount').replace('{n}', nTags)}{nTags > 30 ? ` ${t('hashtagsOver')}` : ''}</p>
               {nTags > 30 && <div className="warn red"><IconWarn size={17} /><div><b>{t('hashtagLimitTitle')}</b> {t('hashtagLimitBody').replace('{n}', nTags)}</div></div>}
               <div className="mt">
                 <label>{t('hashtagBank')} <span className="muted">{t('hashtagBankNote')}</span></label>
@@ -581,8 +581,8 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
                     {hashtagGroups.map((g) => (
                       <span key={g.id} className="chip" style={{ marginRight: 6, marginBottom: 6 }}>
                         <button type="button" onClick={() => appendHashtagGroup(g)} style={{ border: 'none', background: 'transparent', fontWeight: 700, padding: 0, color: 'var(--ink)' }} title={g.tags}>{g.name} +</button>
-                        <button type="button" onClick={() => useGroupAsFirstComment(g)} style={{ border: 'none', background: 'transparent', fontWeight: 700, padding: 0, marginLeft: 4, color: 'var(--gold, #b98a1c)' }} title={t('firstCommentUse')}>{t('firstCommentMark')}</button>
-                        {onDeleteHashtagGroup && <button type="button" aria-label={t('deleteGroupAria').replace('{name}', g.name)} onClick={() => onDeleteHashtagGroup(g)} style={{ border: 'none', background: 'transparent', color: 'var(--red)', fontWeight: 700, padding: 0, marginLeft: 2 }}>✕</button>}
+                        <button type="button" onClick={() => useGroupAsFirstComment(g)} style={{ border: 'none', background: 'transparent', fontWeight: 700, padding: 0, marginLeft: 4, color: 'var(--gold-text)' }} title={t('firstCommentUse')}>{t('firstCommentMark')}</button>
+                        {onDeleteHashtagGroup && <button type="button" aria-label={t('deleteGroupAria').replace('{name}', g.name)} onClick={() => onDeleteHashtagGroup(g)} style={{ border: 'none', background: 'transparent', color: 'var(--red-text)', fontWeight: 700, padding: 0, marginLeft: 2 }}>✕</button>}
                       </span>
                     ))}
                   </div>
@@ -716,7 +716,7 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
                   <p className="muted small" style={{ marginTop: 8 }}>{t('ytOnlyNote')}</p>
                 )}
                 {!igTicked && !form.youtubeEnabled && (
-                  <p className="small" style={{ marginTop: 8, color: 'var(--red)' }}>{t('tickOnePlatform')}</p>
+                  <p className="small" style={{ marginTop: 8, color: 'var(--red-text)' }}>{t('tickOnePlatform')}</p>
                 )}
               </div>
               <label htmlFor="scheduleTime" style={{ marginTop: 14 }}>{t('scheduleTimeLabel')}</label>
@@ -762,7 +762,7 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
                   <div key={c.id} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginTop: 6 }}>
                     {c.ok ? <IconCheck size={17} /> : <IconWarn size={17} />}
                     <div>
-                      <span style={{ color: c.ok ? '#4caf7d' : 'var(--red)', fontWeight: 600 }}>{c.ok ? t('goodWord') : t('problemWord')}</span>{c.message}
+                      <span style={{ color: c.ok ? 'var(--green-text)' : 'var(--red-text)', fontWeight: 600 }}>{c.ok ? t('goodWord') : t('problemWord')}</span>{c.message}
                       {!c.ok && c.fix && (
                         <div className="muted small">{t('fixWord')}{c.fix}
                           {c.id === 'connection' && onNavigate ? <> <button type="button" className="btn ghost small" onClick={() => onNavigate('connections')}>{t('openConnections')}</button></> : null}
@@ -772,7 +772,7 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
                   </div>
                 ))}
                 {preflight && (
-                  <p className="small" style={{ marginTop: 8, fontWeight: 600, color: preflight.ok ? '#4caf7d' : 'var(--red)' }}>
+                  <p className="small" style={{ marginTop: 8, fontWeight: 600, color: preflight.ok ? 'var(--green-text)' : 'var(--red-text)' }}>
                     {preflight.ok ? t('preflightOk') : t('preflightBad')}
                   </p>
                 )}

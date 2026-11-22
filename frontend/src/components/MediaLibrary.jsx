@@ -198,7 +198,7 @@ function DeviceLibrary({ onUploaded, onUpload, tr }) {
               <div style={{ minWidth: 0 }}>
                 <b title={p.title}>{p.title}</b>
                 <span className="muted small">{p.scheduleTime ? t('devForTime').replace('{time}', new Date(p.scheduleTime).toLocaleString()) : t('devNoTime')} · {p.status === 'failed' ? t('devNotCreated') : t('devWaitingNetwork')}</span>
-                {p.note && <span className="small" style={{ display: 'block', color: p.status === 'failed' ? 'var(--red)' : 'var(--muted)' }}>{p.note}</span>}
+                {p.note && <span className="small" style={{ display: 'block', color: p.status === 'failed' ? 'var(--red-text)' : 'var(--muted)' }}>{p.note}</span>}
               </div>
               {p.status === 'failed' && <button type="button" className="btn ghost small" style={{ flex: 'none' }} onClick={() => dismiss(p)}>{t('dismiss')}</button>}
             </div>

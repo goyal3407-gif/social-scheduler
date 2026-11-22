@@ -1149,7 +1149,7 @@ export default function App() {
             <p className="muted mt">{confirmDelete.type === 'posts' ? tr('deletePostsBody') : confirmDelete.type === 'post' ? (confirmDelete.item.caption || tr('untitledPost')) : (confirmDelete.item.title || confirmDelete.item.url)} — {tr('deleteNoUndo')}</p>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 20 }}>
               <button type="button" className="btn ghost" autoFocus onClick={() => setConfirmDelete(null)}>{tr('cancel')}</button>
-              <button type="button" className="btn danger" onClick={doDelete}>{tr('delete')}</button>
+              <button type="button" className="btn danger-fill" onClick={doDelete}>{tr('delete')}</button>
             </div>
           </div>
         </div>

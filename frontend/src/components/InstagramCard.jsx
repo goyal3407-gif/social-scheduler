@@ -135,7 +135,7 @@ export default function InstagramCard({ settings, onInstagramChanged, tr }) {
                 ? <span className="badge brand">{t('defaultBadge')}</span>
                 : <button type="button" className="btn ghost small" onClick={() => makeDefault(a.igUserId)}>{t('setAsDefault')}</button>}
               {broken
-                ? <span className="small" style={{ color: 'var(--red)', fontWeight: 700 }}>{t('accountBrokenNote')}</span>
+                ? <span className="small" style={{ color: 'var(--red-text)', fontWeight: 700 }}>{t('accountBrokenNote')}</span>
                 : <span className="muted small">{a.health?.tokenNeverExpires ? t('neverExpires') : t('autoRenews')}</span>}
               {broken && <button type="button" className="btn primary small" disabled={connectBusy} onClick={startConnect}>{connectBusy ? t('openingShort') : t('reconnect')}</button>}
               <button type="button" className="btn danger small" disabled={disconnecting} onClick={() => disconnect(a.igUserId, a.username)} style={{ marginLeft: 'auto' }}>

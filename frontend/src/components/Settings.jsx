@@ -314,7 +314,7 @@ export default function Settings({ settings, dbStatus, onSave, saving, onInstagr
           </div>
           <p className="muted small mt">{t('exportNote')}</p>
           <hr style={{ border: 'none', borderTop: '1px solid var(--line)', margin: '18px 0' }} />
-          <h3 style={{ color: 'var(--red)' }}>{t('deleteAccountTitle')}</h3>
+          <h3 style={{ color: 'var(--red-text)' }}>{t('deleteAccountTitle')}</h3>
           <p className="muted small" style={{ marginTop: 6 }}>{t('deleteAccountBody')}</p>
           {!confirmDeleteAccount ? (
             <button type="button" className="btn danger mt" onClick={() => setConfirmDeleteAccount(true)}>{t('deleteMyAccount')}</button>

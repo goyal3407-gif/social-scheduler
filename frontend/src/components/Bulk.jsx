@@ -315,7 +315,7 @@ export default function Bulk({ onImport, posts, onUploadFile, igAccounts, defaul
               <tbody>
                 {rows.slice(0, 50).map((r, i) => (
                   <tr key={i} style={!r.mediaUrl ? { opacity: .55 } : undefined}>
-                    <td>{r.mediaUrl ? <a href={r.mediaUrl} target="_blank" rel="noreferrer">{r.mediaUrl.slice(0, 42)}</a> : <span style={{ color: 'var(--red)' }}>Missing media</span>}</td>
+                    <td>{r.mediaUrl ? <a href={r.mediaUrl} target="_blank" rel="noreferrer">{r.mediaUrl.slice(0, 42)}</a> : <span style={{ color: 'var(--red-text)' }}>Missing media</span>}</td>
                     <td>{r.caption || '—'}</td>
                     <td>{r.hashtags || '—'}</td>
                     <td>{r.cta || '—'}</td>
