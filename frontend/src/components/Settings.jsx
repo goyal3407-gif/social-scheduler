@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
 import { openExternalUrl } from '../openExternal.js'
 import { api } from '../api.js'
+import { StatusChip } from './shared.jsx'
 
 const TeamCard = lazy(() => import('./TeamCard.jsx'))
 
@@ -38,7 +39,7 @@ function BioCard({ tr }) {
   }
   const pageUrl = slug ? `${window.location.origin}/bio/${slug}` : ''
   return (
-    <section className="card" style={{ marginTop: 16 }}>
+    <section className="card settings-card-top">
       <h2>{t('bioTitle')}</h2>
       <p className="muted small" style={{ marginTop: 8 }}>{t('bioSub')}</p>
       <label htmlFor="bioSlug" style={{ marginTop: 12 }}>{t('bioPageName')}</label>
@@ -46,8 +47,8 @@ function BioCard({ tr }) {
         <span className="muted small">/bio/</span>
         <input id="bioSlug" placeholder="yourname" value={slug} onChange={(e) => setSlug(e.target.value)} style={{ flex: 1 }} />
       </div>
-      <label style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 12, cursor: 'pointer' }}>
-        <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} style={{ width: 18, height: 18 }} />
+      <label className="check-row">
+        <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
         <span><b>{t('bioPageOn')}</b> <span className="muted small">{t('bioOffNote')}</span></span>
       </label>
       <h3 style={{ marginTop: 16 }}>{t('bioYourLinks')}</h3>
@@ -89,7 +90,7 @@ function PreviewCard({ tr }) {
     finally { setBusy(false) }
   }
   return (
-    <section className="card" style={{ marginTop: 16 }}>
+    <section className="card settings-card-top">
       <h2>{t('previewTitle')}</h2>
       <p className="muted small" style={{ marginTop: 8 }}>{t('previewSub')}</p>
       {url ? (
@@ -119,7 +120,7 @@ function InviteCard({ tr }) {
     return () => { alive = false }
   }, [])
   return (
-    <section className="card" style={{ marginTop: 16 }}>
+    <section className="card settings-card-top">
       <h2>{t('inviteTitle')}</h2>
       <p className="muted small" style={{ marginTop: 8 }}>{t('inviteSub')}</p>
       {data ? (
@@ -214,7 +215,7 @@ export default function Settings({ settings, dbStatus, onSave, saving, onInstagr
       <h2 className="section-title">{t('settings')}</h2>
       <p className="section-sub">{t('settingsSub')}</p>
       {dbStatus && (dbStatus.db !== 'mongodb' || !dbStatus.sessionSecretFromEnv) && (
-        <div className="alert error" role="alert" style={{ marginBottom: 16 }}>
+        <div className="alert error" role="alert">
           <b>{t('serverAttention')}</b>{' '}
           {dbStatus.db !== 'mongodb'
             ? `${t('dbTempBody')} `
@@ -226,29 +227,21 @@ export default function Settings({ settings, dbStatus, onSave, saving, onInstagr
         </div>
       )}
       {dbStatus && dbStatus.db === 'mongodb' && dbStatus.sessionSecretFromEnv && (
-        <div className="alert success" role="status" style={{ marginBottom: 16 }}>
+        <div className="alert success" role="status">
           {t('dbOk')}
         </div>
       )}
-      <section className="card" style={{ marginBottom: 16 }}>
+      {/* Round 3 (B7): Settings grouped under visible headings —
+          Profile / Security / Preferences / Team. */}
+      <h3 className="settings-group-title">{t('profileTitle')}</h3>
+      <section className="card settings-card-gap">
         <h2>{t('accountTitle')}</h2>
-        <p className="muted small" style={{ marginTop: 8 }}>{t('signedInAs')} <b style={{ color: 'var(--ink)' }}>{user?.email || '—'}</b>{user?.name ? ` · ${user.name}` : ''}{user?.role ? ` · ${user.role}` : ''}</p>
-        <form onSubmit={changePassword}>
-          <h3 style={{ marginTop: 18 }}>{t('changePassword')}</h3>
-          <p className="muted small" style={{ marginTop: 6 }}>{t('changePwNote')}</p>
-          <label htmlFor="currentPw" style={{ marginTop: 12 }}>{t('currentPassword')}</label>
-          <input id="currentPw" type="password" autoComplete="current-password" value={currentPw} onChange={(e) => setCurrentPw(e.target.value)} />
-          <label htmlFor="newPw" style={{ marginTop: 12 }}>{t('newPassword')}</label>
-          <input id="newPw" type="password" autoComplete="new-password" placeholder={t('pwPh')} value={newPw} onChange={(e) => setNewPw(e.target.value)} />
-          {pwErr && <div className="alert error">{pwErr}</div>}
-          {pwMsg && <div className="alert success">{pwMsg}</div>}
-          <button type="submit" className="btn primary mt" disabled={pwBusy || !currentPw || newPw.length < 8}>{pwBusy ? t('changingWord') : t('changePassword')}</button>
-        </form>
+        <p className="muted small settings-note-top">{t('signedInAs')} <b style={{ color: 'var(--ink)' }}>{user?.email || '—'}</b>{user?.name ? ` · ${user.name}` : ''}{user?.role ? ` · ${user.role}` : ''}</p>
       </section>
 
-      <form className="card" onSubmit={submitHandle} style={{ marginBottom: 16 }}>
+      <form className="card settings-card-gap" onSubmit={submitHandle}>
             <h2>{t('igHandleTitle')}</h2>
-            <label htmlFor="igHandle" style={{ marginTop: 12 }}>{t('igHandleTitle')}</label>
+            <label htmlFor="igHandle" className="settings-field-gap">{t('igHandleTitle')}</label>
             <input id="igHandle" placeholder="@yourhandle" value={handle} onChange={(e) => setHandle(e.target.value)} />
             {err && <div className="alert error">{err}</div>}
             {msg && <div className="alert success">{msg}</div>}
@@ -257,41 +250,72 @@ export default function Settings({ settings, dbStatus, onSave, saving, onInstagr
 
           <div className="card">
             <h2>{t('connections')}</h2>
-            <p className="muted small" style={{ marginTop: 8 }}>
-              Instagram: <b style={{ color: 'var(--ink)' }}>{connected ? `${username ? t('statusConnectedAs').replace('{name}', username) : t('connected')}${igAccountCount > 1 ? ` ${t('accountsCountSuffix').replace('{n}', igAccountCount)}` : ''}` : t('notConnected')}</b>
-            </p>
-            <p className="muted small" style={{ marginTop: 8 }}>
+            <div className="settings-note-top">
+              <StatusChip platform="instagram" state={connected ? 'connected' : 'off'} label={connected ? `${username ? t('statusConnectedAs').replace('{name}', username) : t('connected')}${igAccountCount > 1 ? ` ${t('accountsCountSuffix').replace('{n}', igAccountCount)}` : ''}` : undefined} />
+            </div>
+            <p className="muted small settings-note-top">
               {t('settingsConnNote')}
             </p>
-            <div style={{ marginTop: 14 }}>
+            <div className="settings-inline-note">
               <button type="button" className="btn primary" onClick={() => { if (onNavigate) onNavigate('connections') }}>{t('manageConnections')}</button>
             </div>
           </div>
 
-          <div className="card" style={{ marginTop: 16 }}>
-            <h2>{t('preferencesTitle')}</h2>
-            <p className="muted small" style={{ marginTop: 8 }}>
+      <h3 className="settings-group-title">{t('securityTitle')}</h3>
+      <form className="card settings-card-gap" onSubmit={changePassword}>
+          <h2>{t('changePassword')}</h2>
+          <p className="muted small settings-note-6">{t('changePwNote')}</p>
+          <label htmlFor="currentPw" className="settings-field-gap">{t('currentPassword')}</label>
+          <input id="currentPw" type="password" autoComplete="current-password" value={currentPw} onChange={(e) => setCurrentPw(e.target.value)} />
+          <label htmlFor="newPw" className="settings-field-gap">{t('newPassword')}</label>
+          <input id="newPw" type="password" autoComplete="new-password" placeholder={t('pwPh')} value={newPw} onChange={(e) => setNewPw(e.target.value)} />
+          {pwErr && <div className="alert error">{pwErr}</div>}
+          {pwMsg && <div className="alert success">{pwMsg}</div>}
+          <button type="submit" className="btn primary mt" disabled={pwBusy || !currentPw || newPw.length < 8}>{pwBusy ? t('changingWord') : t('changePassword')}</button>
+      </form>
+
+        <section className="card">
+          <h2>{t('yourDataTitle')}</h2>
+          <div className="settings-actions-row">
+            <button type="button" className="btn ghost" disabled={exporting} onClick={exportData}>{exporting ? t('exportingWord') : t('downloadData')}</button>
+          </div>
+          <p className="muted small mt">{t('exportNote')}</p>
+          <hr className="settings-hr" />
+          <h3 className="settings-danger-title">{t('deleteAccountTitle')}</h3>
+          <p className="muted small settings-note-6">{t('deleteAccountBody')}</p>
+          {!confirmDeleteAccount ? (
+            <button type="button" className="btn danger mt" onClick={() => setConfirmDeleteAccount(true)}>{t('deleteMyAccount')}</button>
+          ) : (
+            <div className="settings-actions-row">
+              <button type="button" className="btn danger" disabled={deletingAccount} onClick={deleteAccount}>{deletingAccount ? t('deletingWord') : t('yesDeleteAll')}</button>
+              <button type="button" className="btn ghost" onClick={() => setConfirmDeleteAccount(false)}>{t('cancel')}</button>
+            </div>
+          )}
+        </section>
+
+      <h3 className="settings-group-title">{t('preferencesTitle')}</h3>
+          <div className="card">
+            <p className="muted small">
               {t('storageExplain')}
             </p>
-            <label style={{ display: 'flex', gap: 10, alignItems: 'flex-start', marginTop: 12, cursor: 'pointer' }}>
+            <label className="check-row check-row-start">
               <input type="checkbox" checked={settings?.keepServerCopyAfterPublish === true} disabled={saving}
-                onChange={async (e) => { setErr(''); setMsg(''); try { await onSave({ keepServerCopyAfterPublish: e.target.checked }); setMsg(t('storageSaved')) } catch (e2) { setErr(e2.message || t('settingsSaveFail')) } }}
-                style={{ width: 18, height: 18, marginTop: 2, flex: 'none' }} />
+                onChange={async (e) => { setErr(''); setMsg(''); try { await onSave({ keepServerCopyAfterPublish: e.target.checked }); setMsg(t('storageSaved')) } catch (e2) { setErr(e2.message || t('settingsSaveFail')) } }} />
               <span><b>{t('keepCopyTitle')}</b><br /><span className="muted small">{t('keepCopyNote')}</span></span>
             </label>
-            <h3 style={{ marginTop: 18 }}>{t('ytDefaultTitle')}</h3>
-            <p className="muted small" style={{ marginTop: 6 }}>{t('ytDefaultNote')}</p>
-            <select aria-label={t('ytDefaultTitle')} value={settings?.ytDefaultVisibility || 'public'} disabled={saving} style={{ marginTop: 10, maxWidth: 320 }}
+            <h3 className="settings-subhead">{t('ytDefaultTitle')}</h3>
+            <p className="muted small settings-note-6">{t('ytDefaultNote')}</p>
+            <select aria-label={t('ytDefaultTitle')} value={settings?.ytDefaultVisibility || 'public'} disabled={saving} className="settings-select"
               onChange={async (e) => { setErr(''); setMsg(''); try { await onSave({ ytDefaultVisibility: e.target.value }); setMsg(t('ytDefaultSaved')) } catch (e2) { setErr(e2.message || t('settingsSaveFail')) } }}>
               <option value="public">{t('ytVisPublic')}</option>
               <option value="unlisted">{t('ytVisUnlisted')}</option>
               <option value="private">{t('ytVisPrivate')}</option>
             </select>
-            <p className="muted small" style={{ marginTop: 6 }}>{t('ytApprovalShort')}</p>
-            <p className="muted small" style={{ marginTop: 12 }}>{t('notifHomeNote')}</p>
-            <h3 style={{ marginTop: 18 }}>{t('appLanguage')}</h3>
-            <p className="muted small" style={{ marginTop: 6 }}>{t('appLanguageNote')}</p>
-            <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+            <p className="muted small settings-note-6">{t('ytApprovalShort')}</p>
+            <p className="muted small settings-note-12">{t('notifHomeNote')}</p>
+            <h3 className="settings-subhead">{t('appLanguage')}</h3>
+            <p className="muted small settings-note-6">{t('appLanguageNote')}</p>
+            <div className="settings-lang-row">
               <button type="button" className={`btn small ${lang !== 'hi' ? 'primary' : 'ghost'}`} onClick={() => onLangChange && onLangChange('en')}>{t('englishWord')}</button>
               <button type="button" className={`btn small ${lang === 'hi' ? 'primary' : 'ghost'}`} onClick={() => onLangChange && onLangChange('hi')}>{t('hinglishWord')}</button>
             </div>
@@ -300,37 +324,22 @@ export default function Settings({ settings, dbStatus, onSave, saving, onInstagr
       <BioCard tr={t} />
       <PreviewCard tr={t} />
       <InviteCard tr={t} />
+      {/* Team group: TeamCard carries its own visible "Team"
+          heading and renders nothing at all on non-Ultra plans,
+          so no separate group title is printed here (it would
+          orphan for every non-Ultra user). */}
       <Suspense fallback={null}><TeamCard tr={tr} /></Suspense>
 
-      <section className="card" style={{ marginTop: 16 }}>
+      <section className="card settings-card-top">
         <h2>{t('supportTitle')}</h2>
-        <p className="muted small" style={{ marginTop: 8 }}>{t('supportSub')}</p>
-        <p style={{ marginTop: 10 }}><a href="/contact.html">{t('contactUs')}</a></p>
+        <p className="muted small settings-note-top">{t('supportSub')}</p>
+        <p className="settings-note-10"><a href="/contact.html">{t('contactUs')}</a></p>
       </section>
 
-        <section className="card" style={{ marginTop: 16 }}>
-          <h2>{t('yourDataTitle')}</h2>
-          <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
-            <button type="button" className="btn ghost" disabled={exporting} onClick={exportData}>{exporting ? t('exportingWord') : t('downloadData')}</button>
-          </div>
-          <p className="muted small mt">{t('exportNote')}</p>
-          <hr style={{ border: 'none', borderTop: '1px solid var(--line)', margin: '18px 0' }} />
-          <h3 style={{ color: 'var(--red-text)' }}>{t('deleteAccountTitle')}</h3>
-          <p className="muted small" style={{ marginTop: 6 }}>{t('deleteAccountBody')}</p>
-          {!confirmDeleteAccount ? (
-            <button type="button" className="btn danger mt" onClick={() => setConfirmDeleteAccount(true)}>{t('deleteMyAccount')}</button>
-          ) : (
-            <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
-              <button type="button" className="btn danger" disabled={deletingAccount} onClick={deleteAccount}>{deletingAccount ? t('deletingWord') : t('yesDeleteAll')}</button>
-              <button type="button" className="btn ghost" onClick={() => setConfirmDeleteAccount(false)}>{t('cancel')}</button>
-            </div>
-          )}
-        </section>
-
-        <section className="card" style={{ marginTop: 16 }}>
+        <section className="card settings-card-top">
           <h2>{t('aboutTitle')}</h2>
-          <p className="muted small" style={{ marginTop: 8 }}>{t('aboutBody')}</p>
-          <ul className="muted small" style={{ marginTop: 12, paddingLeft: 18, lineHeight: 1.9 }}>
+          <p className="muted small settings-note-top">{t('aboutBody')}</p>
+          <ul className="muted small settings-list">
             <li>{t('aboutFree')}</li>
             <li>{t('aboutYours')}</li>
             <li>{t('aboutApi')}</li>
@@ -339,8 +348,8 @@ export default function Settings({ settings, dbStatus, onSave, saving, onInstagr
           {/* Prompt-3: the full YouTube-visibility explanation lives
               here on the help surface — the composer keeps only the
               one short line (ytApprovalShort). */}
-          <h3 style={{ marginTop: 18 }}>{t('helpYtTitle')}</h3>
-          <p className="muted small" style={{ marginTop: 6 }}>{t('helpYtBody')}</p>
+          <h3 className="settings-subhead">{t('helpYtTitle')}</h3>
+          <p className="muted small settings-note-6">{t('helpYtBody')}</p>
         </section>
     </div>
   )

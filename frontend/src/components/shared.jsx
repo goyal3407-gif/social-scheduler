@@ -220,7 +220,7 @@ export function Empty({ title, body, action, icon }) {
   const ArtIcon = typeof icon === 'function' ? icon : null
   return (
     <div className="empty">
-      <div className="empty-art" aria-hidden="true"><span style={{ color: 'var(--gold-text)', display: 'grid', placeItems: 'center' }}>{ArtIcon ? <ArtIcon size={30} /> : icon || <IconQueue size={30} />}</span></div>
+      <div className="empty-art" aria-hidden="true"><span style={{ color: 'var(--brand-text)', display: 'grid', placeItems: 'center' }}>{ArtIcon ? <ArtIcon size={30} /> : icon || <IconQueue size={30} />}</span></div>
       <b>{title}</b>
       {body && <p style={{ maxWidth: 420, margin: '0 auto' }}>{body}</p>}
       {action && <div style={{ marginTop: 14 }}>{action}</div>}

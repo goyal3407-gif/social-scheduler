@@ -148,7 +148,7 @@ textarea{resize:vertical;min-height:90px}
 .post-meta span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .post-foot{display:flex;gap:6px;align-items:center;margin-top:7px}
 .post-menu-wrap{position:relative;flex:none}
-.post-menu-btn{min-width:38px;font-size:16px;line-height:1;padding-top:5px;padding-bottom:5px}
+.post-menu-btn{min-width:44px;font-size:16px;line-height:1;padding-top:5px;padding-bottom:5px}
 .post-menu{position:absolute;right:0;top:calc(100% + 6px);z-index:70;min-width:172px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-control);box-shadow:var(--shadow);padding:5px;display:flex;flex-direction:column}
 .post-menu button{display:block;width:100%;text-align:left;padding:11px 10px;border:none;background:transparent;border-radius:var(--r-control);font-size:14px;font-weight:600;color:var(--ink);cursor:pointer;font-family:inherit;min-height:44px}
 .post-menu button:hover,.post-menu button:focus-visible{background:var(--surface-2)}
@@ -826,3 +826,63 @@ a,[role="button"],input,select,textarea,label{touch-action:manipulation}
    above carries exactly that as its bottom padding. */
 .sticky-bar.studio-bar{flex-wrap:nowrap;padding:13px 14px;min-height:72px}
 .studio-bar-actions{display:flex;gap:8px;flex:none;margin-left:auto}
+
+/* Round 3 B7 — Connections + Pricing + Settings. Tokens only. */
+.conn-status-strip{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}
+.conn-card-gap{margin-bottom:16px}
+.badge-gold{background:var(--gold-bright);color:var(--ink)}
+.pricing-myplan{margin-bottom:14px}
+.plan-head-row{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.plan-sub-line{margin:6px 0 0}
+.plan-meters{display:flex;gap:16px;flex-wrap:wrap;margin-top:12px}
+.meter{min-width:150px;flex:1 1 150px}
+.meter-head{display:flex;justify-content:space-between;gap:8px}
+.meter-track{height:7px;background:var(--line);border-radius:var(--r-full);overflow:hidden;margin-top:4px}
+.meter-fill{height:100%;background:var(--gold-bright)}
+.plan-rec-note{margin:12px 0 0;padding:9px 12px;border-radius:var(--r-control);background:var(--surface-2);border:1px solid var(--brand)}
+.billing-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:18px 0 12px}
+.plan-card{display:flex;flex-direction:column;gap:8px}
+.plan-card-rec{outline:2px solid var(--brand);outline-offset:2px}
+.plan-badges{display:flex;gap:6px;flex-wrap:wrap;min-height:22px}
+.plan-name{margin:0;font-size:var(--type-h2)}
+.plan-price-line{margin:0}
+.plan-price-num{font-size:var(--type-h1)}
+.plan-features{margin:2px 0 0;padding-left:17px;line-height:1.75;flex:1}
+.plan-note{margin:0}
+.plan-cta{align-self:flex-start}
+.pricing-foot{margin-top:12px}
+.pricing-stats{margin-top:18px}
+.settings-group-title{font-size:var(--type-h2);margin:22px 0 10px}
+.settings-group-title:first-of-type{margin-top:6px}
+.settings-card-gap{margin-bottom:16px}
+.settings-card-top{margin-top:16px}
+.check-row{display:flex;gap:10px;align-items:center;margin-top:12px;cursor:pointer;min-height:44px}
+.check-row input{width:20px;height:20px;flex:none}
+.check-row-start{align-items:flex-start}
+.check-row-start input{margin-top:2px}
+.settings-lang-row{display:flex;gap:8px;margin-top:10px}
+.settings-actions-row{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap}
+.settings-note-top{margin-top:8px}
+.settings-note-6{margin-top:6px}
+.settings-note-10{margin-top:10px}
+.settings-note-12{margin-top:12px}
+.settings-subhead{margin-top:18px}
+.settings-select{margin-top:10px;max-width:320px}
+.settings-hr{border:none;border-top:1px solid var(--line);margin:18px 0}
+.settings-list{margin-top:12px;padding-left:18px;line-height:1.9}
+.settings-danger-title{color:var(--red-text)}
+/* Round 3 B7 — MediaLibrary leftovers. Tokens only. */
+.media-search-wrap{position:relative;flex:2;min-width:180px}
+.media-search-input{padding-left:36px}
+.media-search-icon{position:absolute;left:11px;top:11px;color:var(--muted)}
+.media-tags{display:flex;gap:4px;flex-wrap:wrap;margin-top:6px}
+.media-actions{display:flex;gap:6px;margin-top:9px;flex-wrap:wrap}
+.load-more-wrap{text-align:center;margin-top:18px}
+.dev-thumb{width:44px;height:58px;object-fit:cover;border-radius:var(--r-control);flex:none}
+.dev-thumb-ph{width:44px;height:58px;border-radius:var(--r-control);flex:none;background:var(--surface-2);display:flex;align-items:center;justify-content:center;color:var(--muted)}
+.dev-sched-panel{border:1px solid var(--line-2);border-radius:var(--r-control);padding:12px;margin:4px 0 10px;background:var(--surface-2)}
+.dev-btn-row{display:flex;gap:6px;flex:none;flex-wrap:wrap}
+.dev-flex-1{min-width:0;flex:1}
+.upload-progress-label{margin-bottom:4px}
+.settings-field-gap{margin-top:12px}
+.settings-inline-note{margin-top:14px}

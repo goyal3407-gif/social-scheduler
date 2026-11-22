@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { fmtDate, fromLocalInputValue } from '../api.js'
 import { Skeleton, Empty, ErrorBox, MediaVisual } from './shared.jsx'
-import { IconHeart, IconTrash, IconSearch, IconChevronRight } from './icons.jsx'
+import { IconHeart, IconTrash, IconSearch, IconChevronRight, IconMedia, IconPlay } from './icons.jsx'
 import { isNativeApp, importDeviceFile, listDeviceLibrary, readDeviceFile, deleteDeviceItem, loadPendingSchedules, removePendingSchedule } from '../localMedia.js'
 import { scheduleFromDevice } from '../autoBridge.js'
 
@@ -145,22 +145,22 @@ function DeviceLibrary({ onUploaded, onUpload, tr }) {
             <div key={item.id}>
               <div className="device-row">
                 {item.posterUrl
-                  ? <img loading="lazy" decoding="async" width="44" height="58" src={item.posterUrl} alt="" style={{ width: 44, height: 58, objectFit: 'cover', borderRadius: 8, flex: 'none' }} />
+                  ? <img loading="lazy" decoding="async" width="44" height="58" src={item.posterUrl} alt="" className="dev-thumb" />
                   : item.kind === 'image' && item.url
-                    ? <img loading="lazy" decoding="async" width="44" height="58" src={item.url} alt="" style={{ width: 44, height: 58, objectFit: 'cover', borderRadius: 8, flex: 'none' }} />
-                    : <div style={{ width: 44, height: 58, borderRadius: 8, flex: 'none', background: 'var(--surface-2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }} aria-hidden="true">{item.kind === 'image' ? '🖼' : '🎬'}</div>}
-                <div style={{ minWidth: 0, flex: 1 }}>
+                    ? <img loading="lazy" decoding="async" width="44" height="58" src={item.url} alt="" className="dev-thumb" />
+                    : <div className="dev-thumb-ph" aria-hidden="true">{item.kind === 'image' ? <IconMedia size={20} /> : <IconPlay size={20} />}</div>}
+                <div className="dev-flex-1">
                   <b title={item.title}>{item.title}</b>
                   <span className="muted small">{fmtSize(item.size)} · {item.kind}{item.width && item.height ? ` · ${item.width}×${item.height}` : ''} · {t('devOnPhone')}</span>
                 </div>
-                <div style={{ display: 'flex', gap: 6, flex: 'none', flexWrap: 'wrap' }}>
+                <div className="dev-btn-row">
                   <button type="button" className="btn primary small" disabled={busyId === item.id} onClick={() => { setSchedId(schedId === item.id ? '' : item.id); setErr(''); setMsg('') }}>{t('devSchedule')}</button>
                   <button type="button" className="btn ghost small" disabled={busyId === item.id} onClick={() => uploadCopy(item)}>{busyId === item.id ? t('devWorking') : t('devUploadCopy')}</button>
                   <button type="button" className="btn danger small" disabled={busyId === item.id} onClick={() => remove(item)}>{t('devRemove')}</button>
                 </div>
               </div>
               {schedId === item.id && (
-                <div style={{ border: '1px solid var(--line-2)', borderRadius: 10, padding: 12, margin: '4px 0 10px', background: 'var(--surface-2)' }}>
+                <div className="dev-sched-panel">
                   <label htmlFor={`devCap-${item.id}`}>{t('captionLabel')}</label>
                   <textarea id={`devCap-${item.id}`} rows={3} placeholder={t('captionPh')} value={caption} onChange={(e) => setCaption(e.target.value)} />
                   <label htmlFor={`devTags-${item.id}`} style={{ marginTop: 10 }}>{t('hashtagsLabel')} <span className="muted">{t('hashtagsNote')}</span></label>
@@ -308,9 +308,9 @@ export default function MediaLibrary({ media, loading, error, onRetry, onAddLink
           primary Upload button; the upload dropzone and the
           add-by-link form live below the grid. */}
       <div className="toolbar">
-        <div style={{ position: 'relative', flex: 2, minWidth: 180 }}>
-          <input type="search" placeholder={t('searchMediaPh')} value={q} onChange={(e) => setQ(e.target.value)} style={{ paddingLeft: 36 }} aria-label={t('searchMediaAria')} />
-          <span style={{ position: 'absolute', left: 11, top: 11, color: 'var(--muted)' }}><IconSearch size={16} /></span>
+        <div className="media-search-wrap">
+          <input type="search" placeholder={t('searchMediaPh')} value={q} onChange={(e) => setQ(e.target.value)} className="media-search-input" aria-label={t('searchMediaAria')} />
+          <span className="media-search-icon"><IconSearch size={16} /></span>
         </div>
         <select value={folder} onChange={(e) => setFolder(e.target.value)} aria-label={t('filterFolderAria')}>
           {folders.map((f) => <option key={f} value={f}>{f === 'all' ? t('allFolders') : f}</option>)}
@@ -333,8 +333,8 @@ export default function MediaLibrary({ media, loading, error, onRetry, onAddLink
                 <div className="mc-body">
                   <b title={m.title || m.url}>{m.title || t('untitledMedia')}</b>
                   <span className="muted small">{m.folder || t('unsortedWord')} · {fmtDate(m.createdAt)}{m.usedCount ? ` · ${t('usedTimes').replace('{n}', m.usedCount)}` : ''}{m.width && m.height ? ` · ${m.width}×${m.height}` : ''}</span>
-                  {(m.tags || []).length > 0 && <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 6 }}>{m.tags.map((tg) => <span key={tg} className="chip">{tg}</span>)}</div>}
-                  <div style={{ display: 'flex', gap: 6, marginTop: 9, flexWrap: 'wrap' }}>
+                  {(m.tags || []).length > 0 && <div className="media-tags">{m.tags.map((tg) => <span key={tg} className="chip">{tg}</span>)}</div>}
+                  <div className="media-actions">
                     {!m.serverCopyRemoved && <button type="button" className="btn primary small" onClick={() => onUse(m)}>{t('useInStudio')}</button>}
                     <button type="button" className="btn ghost small" aria-label={m.favorite ? t('favRemoveAria') : t('favAddAria')} onClick={() => onToggleFav(m)}><span className={m.favorite ? 'heart' : ''}><IconHeart size={15} filled={Boolean(m.favorite)} /></span></button>
                     <button type="button" className="btn danger small" aria-label={t('deleteMediaAria')} onClick={() => onDelete(m)}><IconTrash size={15} /></button>
@@ -344,7 +344,7 @@ export default function MediaLibrary({ media, loading, error, onRetry, onAddLink
             ))}
           </div>
           {filtered.length > visibleCount && (
-            <div style={{ textAlign: 'center', marginTop: 18 }}>
+            <div className="load-more-wrap">
               <button type="button" className="btn ghost" onClick={() => setVisibleCount((c) => c + PAGE_SIZE)}>{t('loadMore').replace('{n}', filtered.length - visibleCount)}</button>
             </div>
           )}
@@ -369,7 +369,7 @@ export default function MediaLibrary({ media, loading, error, onRetry, onAddLink
           </div>
           {progress && (
             <div className="mt">
-              <div className="small muted" style={{ marginBottom: 4 }}>{t('uploadingPct').replace('{name}', progress.name).replace('{pct}', Math.round(progress.frac * 100))}</div>
+              <div className="small muted upload-progress-label">{t('uploadingPct').replace('{name}', progress.name).replace('{pct}', Math.round(progress.frac * 100))}</div>
               <div className="pbar"><span style={{ width: `${Math.round(progress.frac * 100)}%` }} /></div>
             </div>
           )}

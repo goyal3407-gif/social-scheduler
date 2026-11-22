@@ -75,7 +75,7 @@ export default function Pricing({ tr }) {
   if (!data || !plan) {
     return failed ? (
       <div className="card">
-        <p className="muted" style={{ marginTop: 0 }}>{t('pricingLoadFailed')}</p>
+        <p className="muted">{t('pricingLoadFailed')}</p>
         <button type="button" className="btn ghost" onClick={load}>{t('retry')}</button>
       </div>
     ) : (
@@ -84,13 +84,13 @@ export default function Pricing({ tr }) {
   }
   const lim = plan.limits || {}
   const meter = (label, used, limit) => (
-    <div key={label} style={{ minWidth: 150, flex: '1 1 150px' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+    <div key={label} className="meter">
+      <div className="meter-head">
         <span className="muted small">{label}</span>
         <b className="small">{limit == null ? `${used} · ${t('unlimitedWord')}` : `${used} / ${limit}`}</b>
       </div>
-      <div style={{ height: 7, background: 'var(--line)', borderRadius: 99, overflow: 'hidden', marginTop: 4 }}>
-        <div style={{ height: '100%', width: limit == null ? '100%' : `${Math.min(100, limit ? Math.round((used / limit) * 100) : 0)}%`, background: '#e8c268' }} />
+      <div className="meter-track">
+        <div className="meter-fill" style={{ width: limit == null ? '100%' : `${Math.min(100, limit ? Math.round((used / limit) * 100) : 0)}%` }} />
       </div>
     </div>
   )
@@ -111,67 +111,73 @@ export default function Pricing({ tr }) {
       <h2 className="section-title">{t('pricing')}</h2>
       <p className="section-sub">{t('pricingSub')}</p>
 
-      <section className="card" aria-label={t('myPlan')} style={{ marginBottom: 14 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-          <h2 style={{ margin: 0 }}>{t('myPlan')} — {plan.planName}</h2>
-          {rec && rec.planId === plan.plan && <span className="badge" style={{ background: 'var(--brand-soft)', color: 'var(--brand-text)' }}>{t('bestForYou')}</span>}
+      <section className="card pricing-myplan" aria-label={t('myPlan')}>
+        <div className="plan-head-row">
+          <h2>{t('myPlan')} — {plan.planName}</h2>
+          {rec && rec.planId === plan.plan && <span className="badge brand">{t('bestForYou')}</span>}
         </div>
-        <p className="muted small" style={{ margin: '6px 0 0' }}>{PLAN_BLURBS[plan.plan] ? t(PLAN_BLURBS[plan.plan]) : ''}</p>
+        <p className="muted small plan-sub-line">{PLAN_BLURBS[plan.plan] ? t(PLAN_BLURBS[plan.plan]) : ''}</p>
         {plan.comp
-          ? <p className="small" style={{ margin: '6px 0 0' }}><b>{t('lifetime')}</b></p>
+          ? <p className="small plan-sub-line"><b>{t('lifetime')}</b></p>
           : plan.planExpiresAt
-            ? <p className="muted small" style={{ margin: '6px 0 0' }}>{t('activeUntil')} {new Date(plan.planExpiresAt).toLocaleDateString()}</p>
+            ? <p className="muted small plan-sub-line">{t('activeUntil')} {new Date(plan.planExpiresAt).toLocaleDateString()}</p>
             : null}
-        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginTop: 12 }}>
+        <div className="plan-meters">
           {meter(t('postsToday'), usage.postsToday || 0, lim.postsPerDay)}
           {meter(t('postsThisMonth'), usage.postsThisMonth || 0, lim.postsPerMonth)}
           {meter(t('accountsConnected'), usage.accountsConnected || 0, lim.accounts)}
           {data.ai && meter(t('aiCaptionsToday'), data.ai.usedToday || 0, data.ai.perDay)}
         </div>
         {rec && (
-          <p className="small" role="status" style={{ margin: '12px 0 0', padding: '9px 12px', borderRadius: 10, background: 'var(--surface-2)', border: '1px solid var(--brand)' }}>
+          <p className="small plan-rec-note" role="status">
             <b>{t('bestForYou')}:</b> {rec.msg}
           </p>
         )}
       </section>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', margin: '18px 0 12px' }} role="group" aria-label={t('billingPeriod')}>
+      <div className="billing-row" role="group" aria-label={t('billingPeriod')}>
         <button type="button" className={`btn small ${period === 'monthly' ? 'primary' : 'ghost'}`} onClick={() => setPeriod('monthly')}>{t('monthly')}</button>
         <button type="button" className={`btn small ${period === 'yearly' ? 'primary' : 'ghost'}`} onClick={() => setPeriod('yearly')}>{t('yearly')}</button>
-        {period === 'yearly' && <span className="badge" style={{ background: 'var(--gold-bright)', color: 'var(--ink)' }}>{t('twoMonthsFree')}</span>}
+        {period === 'yearly' && <span className="badge badge-gold">{t('twoMonthsFree')}</span>}
       </div>
 
       <div className="plan-grid">
         {pricing.options.map((o) => {
           const isCurrent = o.kind === 'current'
           const isRec = rec && rec.planId === o.plan && !isCurrent
+          // Round 3 (B7): single-winner hierarchy — the recommended
+          // plan is the ONLY card with a strong treatment (brand
+          // outline + brand badge; if it is also Max, its
+          // "Most popular" badge may stay gold). Every other
+          // "Most popular" showing is a quiet neutral badge with
+          // no gold border, so the two markers never shout at once.
+          const maxStrong = o.plan === 'max' && isRec
           return (
-            <section key={o.plan} className="card" aria-label={`${o.name} plan`}
-              style={{ display: 'flex', flexDirection: 'column', gap: 8, ...(o.plan === 'max' ? { border: '2px solid var(--gold, #e8c268)' } : {}), ...(isRec ? { outline: '2px solid var(--brand)', outlineOffset: 2 } : {}) }}>
-              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', minHeight: 22 }}>
-                {o.plan === 'max' && <span className="badge" style={{ background: 'var(--gold-bright)', color: 'var(--ink)' }}>{t('mostPopular')}</span>}
+            <section key={o.plan} className={`card plan-card${isRec ? ' plan-card-rec' : ''}`} aria-label={`${o.name} plan`}>
+              <div className="plan-badges">
+                {o.plan === 'max' && <span className={`badge${maxStrong ? ' badge-gold' : ' neutral'}`}>{t('mostPopular')}</span>}
                 {isCurrent && <span className="badge">{t('currentPlan')}</span>}
-                {isRec && <span className="badge" style={{ background: 'var(--brand-soft)', color: 'var(--brand-text)' }}>{t('bestForYou')}</span>}
+                {isRec && <span className="badge brand">{t('bestForYou')}</span>}
               </div>
-              <h3 style={{ margin: 0, fontSize: 19 }}>{o.name}</h3>
-              <p style={{ margin: 0 }}><b style={{ fontSize: 24 }}>{inr(o.priceInr * factor)}</b> <span className="muted small">{period === 'yearly' ? t('perYear') : t('perMonth')}</span></p>
-              <ul className="small" style={{ margin: '2px 0 0', paddingLeft: 17, lineHeight: 1.75, flex: 1 }}>
+              <h3 className="plan-name">{o.name}</h3>
+              <p className="plan-price-line"><b className="plan-price-num">{inr(o.priceInr * factor)}</b> <span className="muted small">{period === 'yearly' ? t('perYear') : t('perMonth')}</span></p>
+              <ul className="small plan-features">
                 {features(o).map((f) => <li key={f}>{f}</li>)}
               </ul>
               {o.kind === 'upgrade' && (period === 'yearly'
-                ? <p className="small" style={{ margin: 0 }}>{t('upgradeYearlyLine').replace('{name}', o.name).replace('{charge}', Number(o.chargeInr * factor).toLocaleString('en-IN'))}</p>
+                ? <p className="small plan-note">{t('upgradeYearlyLine').replace('{name}', o.name).replace('{charge}', Number(o.chargeInr * factor).toLocaleString('en-IN'))}</p>
                 : pricing.currentPriceInr > 0
-                  ? <p className="small" style={{ margin: 0 }}>{t('alreadyPaidLine').replace('{paid}', inr(pricing.currentPriceInr)).replace('{cur}', pricing.currentName).replaceAll('{name}', o.name).replace('{charge}', inr(o.chargeInr)).replace('{period}', periodWord)}</p>
-                  : <p className="small" style={{ margin: 0 }}>{t('startsFreshLine').replace('{name}', o.name).replace('{period}', periodWord)}</p>)}
-              {o.kind === 'downgrade' && <p className="small" style={{ margin: 0 }}>{t('downgradeLine').replace('{cur}', pricing.currentName).replace('{name}', o.name)}</p>}
-              {!isCurrent && <button type="button" className="btn ghost small" disabled title={t('paymentSoon')} style={{ alignSelf: 'flex-start' }}>{o.kind === 'upgrade' ? t('payComingSoon').replace('{amount}', inr(o.chargeInr * factor)) : t('comingSoon')}</button>}
+                  ? <p className="small plan-note">{t('alreadyPaidLine').replace('{paid}', inr(pricing.currentPriceInr)).replace('{cur}', pricing.currentName).replaceAll('{name}', o.name).replace('{charge}', inr(o.chargeInr)).replace('{period}', periodWord)}</p>
+                  : <p className="small plan-note">{t('startsFreshLine').replace('{name}', o.name).replace('{period}', periodWord)}</p>)}
+              {o.kind === 'downgrade' && <p className="small plan-note">{t('downgradeLine').replace('{cur}', pricing.currentName).replace('{name}', o.name)}</p>}
+              {!isCurrent && <button type="button" className="btn ghost small plan-cta" disabled title={t('paymentSoon')}>{o.kind === 'upgrade' ? t('payComingSoon').replace('{amount}', inr(o.chargeInr * factor)) : t('comingSoon')}</button>}
             </section>
           )
         })}
       </div>
-      <p className="muted small" style={{ marginTop: 12 }}>{t('paymentSoon')}. {t('pricingFootNote')}</p>
+      <p className="muted small pricing-foot">{t('paymentSoon')}. {t('pricingFootNote')}</p>
 
-      <div style={{ marginTop: 18 }}>
+      <div className="pricing-stats">
         <MyStats tr={t} />
       </div>
     </div>
