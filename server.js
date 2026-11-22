@@ -518,6 +518,10 @@ async function requireAuth(req, res, next) {
   req.userId = user.id;
   return next();
 }
+// Gmail-alias cleanup gate: the first /api request in a process runs
+// the guarded one-time cleanup (runGmailAliasCleanup) before any
+// route answers; every later request reuses the settled promise.
+app.use('/api', (req, res, next) => { ensureAliasCleanup().then(() => next(), () => next()); });
 // Every /api/* route except /api/health, /api/db-status and /api/auth/*
 // requires login.
 app.use('/api', apiRateLimit, (req, res, next) => { if (req.path.startsWith('/auth/')) return authRateLimit(req, res, next); return next(); });
@@ -615,6 +619,51 @@ app.use('/api', ah(async (req, res, next) => {
 
 function validEmail(email) { return typeof email === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()); }
 
+// ---------- canonical email identity (Gmail-alias normalization) ----------
+// Gmail and googlemail.com are the same service, and it ignores dots
+// in the local part and delivers +suffix aliases to the same inbox —
+// so one person can present ONE inbox as many different addresses
+// (the classic free-trial / multi-account abuse). Identity matching
+// therefore canonicalizes: lowercase + trim for every domain; for
+// gmail.com / googlemail.com ONLY, strip the local part's dots, drop
+// any +suffix, and map googlemail.com -> gmail.com. Every other
+// domain keeps its dots and suffixes (they are significant there).
+// This is used for identity matching and storage at signup — never
+// for the MAIL_FROM / sender configuration.
+const GMAIL_DOMAINS = new Set(['gmail.com', 'googlemail.com']);
+function canonicalEmail(raw) {
+  const e = String(raw || '').trim().toLowerCase();
+  const at = e.lastIndexOf('@');
+  if (at <= 0) return e;
+  let local = e.slice(0, at);
+  let domain = e.slice(at + 1);
+  if (GMAIL_DOMAINS.has(domain)) {
+    const plus = local.indexOf('+');
+    if (plus >= 0) local = local.slice(0, plus);
+    local = local.replace(/\./g, '');
+    domain = 'gmail.com';
+  }
+  return `${local}@${domain}`;
+}
+// Resolve the account an email address belongs to, in identity order:
+// (1) the canonical form (what new signups store), (2) the exact
+// typed form (pre-existing accounts stored before canonicalization),
+// (3) a legacy sweep — any stored address that canonicalizes to the
+// same identity. The fallbacks guarantee no pre-existing account is
+// ever locked out by the normalization.
+async function findUserForEmail(raw) {
+  const typed = String(raw || '').trim().toLowerCase();
+  const canon = canonicalEmail(typed);
+  let user = await db.getUserByEmail(canon);
+  if (user) return user;
+  if (typed !== canon) {
+    user = await db.getUserByEmail(typed);
+    if (user) return user;
+  }
+  const users = await db.listUsers();
+  return users.find((u) => canonicalEmail(u.email) === canon) || null;
+}
+
 // Simple login throttle: 10 failed attempts per email in 10 minutes, then
 // a plain 429. In-memory per container — best-effort on serverless.
 const loginAttempts = new Map();
@@ -631,12 +680,17 @@ function recordFailedLogin(email) {
 }
 
 app.post('/api/auth/signup', ah(async (req, res) => {
-  const email = String(req.body?.email || '').trim().toLowerCase();
+  const typedEmail = String(req.body?.email || '').trim().toLowerCase();
   const password = String(req.body?.password || '');
   // Optional display name from the sign-up form (used only for the
   // greeting). Plain text, length-capped; never required.
   const name = typeof req.body?.name === 'string' ? req.body.name.trim().slice(0, 80) : '';
-  if (email.length > 254) return res.status(400).json({ ok: false, error: 'That email address is too long — enter a valid email address.' });
+  if (typedEmail.length > 254) return res.status(400).json({ ok: false, error: 'That email address is too long — enter a valid email address.' });
+  if (!validEmail(typedEmail)) return res.status(400).json({ ok: false, error: 'Enter a valid email address, like you@example.com.' });
+  // The stored address is the CANONICAL identity (Gmail dots/+aliases
+  // collapse to the one inbox), so the same inbox can never register
+  // twice under different spellings.
+  const email = canonicalEmail(typedEmail);
   if (!validEmail(email)) return res.status(400).json({ ok: false, error: 'Enter a valid email address, like you@example.com.' });
   if (password.length < 8) return res.status(400).json({ ok: false, error: 'Password must be at least 8 characters long.' });
   if (password.length > 128) return res.status(400).json({ ok: false, error: 'Password must be at most 128 characters long.' });
@@ -651,7 +705,7 @@ app.post('/api/auth/signup', ah(async (req, res) => {
   }
   // Generic wording on purpose: the response must not confirm whether
   // this exact email is the one that is already registered.
-  if (users.some((u) => u.email === email)) return res.status(409).json({ ok: false, error: 'We could not create an account with those details. If you already have an account, log in instead.' });
+  if (users.some((u) => canonicalEmail(u.email) === email)) return res.status(409).json({ ok: false, error: 'We could not create an account with those details. If you already have an account, log in instead.' });
   const salt = crypto.randomBytes(16).toString('hex');
   // Referral (Phase D11): every account gets a short invite code; a
   // signup that arrives with ?ref=<code> records who invited them.
@@ -680,21 +734,24 @@ app.post('/api/auth/login', ah(async (req, res) => {
   const email = String(req.body?.email || '').trim().toLowerCase();
   const password = String(req.body?.password || '');
   if (!validEmail(email) || !password) return res.status(400).json({ ok: false, error: 'Enter your email and password.' });
-  if (loginBlocked(email)) return res.status(429).json({ ok: false, error: 'Too many wrong attempts — wait 10 minutes and try again.' });
-  const user = await db.getUserByEmail(email);
+  // The throttle is keyed by the canonical identity too, so respelling
+  // a Gmail address with dots/+aliases cannot dodge the attempt limit.
+  const throttleKey = canonicalEmail(email);
+  if (loginBlocked(throttleKey)) return res.status(429).json({ ok: false, error: 'Too many wrong attempts — wait 10 minutes and try again.' });
+  const user = await findUserForEmail(email);
   if (!user) {
     // No account for this email: still spend the same scrypt time a
     // real password check costs, so the response time does not reveal
     // that the account does not exist. The error body is identical.
     try { hashPassword(password, DUMMY_SALT); } catch { /* timing equalisation only */ }
-    recordFailedLogin(email);
+    recordFailedLogin(throttleKey);
     return res.status(401).json({ ok: false, error: 'Wrong email or password. Check both and try again — or sign up if you have no account yet.' });
   }
   if (!verifyPassword(password, user)) {
-    recordFailedLogin(email);
+    recordFailedLogin(throttleKey);
     return res.status(401).json({ ok: false, error: 'Wrong email or password. Check both and try again — or sign up if you have no account yet.' });
   }
-  loginAttempts.delete(email);
+  loginAttempts.delete(throttleKey);
   const granted = await applyOwnerComp(user);
   await bindTeamInvites(user).catch(() => null);
   await setSessionCookie(req, res, user.id);
@@ -978,7 +1035,7 @@ app.post('/api/auth/forgot', ah(async (req, res) => {
   const generic = { ok: true, message: 'If an account exists for that email, a password reset link is on its way.' };
   const email = String(req.body?.email || '').trim().toLowerCase();
   if (!validEmail(email) || email.length > 254) return res.json(generic);
-  const user = await db.getUserByEmail(email);
+  const user = await findUserForEmail(email);
   if (!user) {
     try { hashPassword('timing', DUMMY_SALT); } catch { /* timing equalisation only */ }
     return res.json(generic);
@@ -2998,8 +3055,9 @@ const PLAN_RANK = { free: 0, pro: 1, max: 2, ultra: 3 };
 // missing at first, so that login honestly showed Free (fix verified
 // by scripts/batch2-test.js owner-comp checks, 2026-11-21).
 const OWNER_COMP_EMAILS = ['astuugoyal@gmail.com', 'goyaldhiman00@gmail.com', 'goyalkumar3407@gmail.com'];
+const OWNER_COMP_CANONICAL = new Set(OWNER_COMP_EMAILS.map((e) => canonicalEmail(e)));
 function isOwnerCompEmail(user) {
-  return !!user && OWNER_COMP_EMAILS.includes(String(user.email || '').trim().toLowerCase());
+  return !!user && OWNER_COMP_CANONICAL.has(canonicalEmail(user.email));
 }
 // The effective plan for a user doc: the account OWNER is never plan-
 // limited (he operates the app; his stored plan field is untouched),
@@ -3048,6 +3106,84 @@ async function applyOwnerComp(user) {
   await writeAdminAudit({ id: 'system' }, 'comp-grant', user, 'Owner comp grant — standing instruction: permanent Ultra, no expiry');
   return { ...user, comp: true, planExpiresAt: '' };
 }
+// ---------- one-time Gmail-alias duplicate cleanup ----------
+// Owner-approved (22 Nov 2026): before canonicalization shipped, one
+// inbox could hold two accounts — the real one plus an empty +alias
+// spelling of it. This cleanup removes ONLY that exact shape, and
+// only when every guard holds for a colliding PAIR sharing one
+// canonical identity:
+//   keeper    — stored address IS the canonical form, and the
+//               account HAS content (posts, media or connections);
+//   duplicate — stored address is NOT the canonical form, the
+//               account is completely EMPTY (zero posts, zero media,
+//               zero connections), and it is not the owner account
+//               (neither role 'owner' nor the resolved owner id).
+// Any other shape — both empty, both with content, no canonical
+// keeper, an owner duplicate, 3+ accounts on one identity — is a
+// no-op with a log line. The deletion goes through the standard
+// deleteUserData cascade and is written to the admin audit log.
+// Idempotent by construction: once the empty duplicate is gone the
+// collision no longer exists, so every later run finds nothing.
+async function userContentCounts(userId) {
+  const [posts, media, ig, yt] = await Promise.all([
+    db.listPosts(userId, { all: true }).catch(() => []),
+    db.listMedia(userId, { all: true }).catch(() => []),
+    db.getInstagramAccounts(userId).catch(() => ({ accounts: [] })),
+    db.getYouTube(userId).catch(() => null),
+  ]);
+  return {
+    posts: Array.isArray(posts) ? posts.length : 0,
+    media: Array.isArray(media) ? media.length : 0,
+    connections: ((ig && ig.accounts) ? ig.accounts.length : 0) + (yt ? 1 : 0),
+  };
+}
+async function runGmailAliasCleanup() {
+  const users = await db.listUsers();
+  const groups = new Map();
+  for (const u of users) {
+    const c = canonicalEmail(u.email);
+    if (!groups.has(c)) groups.set(c, []);
+    groups.get(c).push(u);
+  }
+  const ownerId = await db.ownerId().catch(() => null);
+  for (const [canon, group] of groups) {
+    if (group.length < 2) continue;
+    if (group.length > 2) {
+      console.log(`[alias-cleanup] ${group.length} accounts share the canonical identity ${canon} — ambiguous, leaving all of them untouched.`);
+      continue;
+    }
+    const [a, b] = group;
+    const tryPair = async (keeper, dup) => {
+      if (String(keeper.email || '') !== canon) return false;
+      if (String(dup.email || '') === canon) return false;
+      if (dup.role === 'owner' || (ownerId && dup.id === ownerId)) return false;
+      const kc = await userContentCounts(keeper.id);
+      if (kc.posts + kc.media + kc.connections <= 0) return false;
+      const dc = await userContentCounts(dup.id);
+      if (dc.posts + dc.media + dc.connections > 0) return false;
+      await db.deleteUserData(dup.id);
+      console.log(`[alias-cleanup] Removed empty Gmail-alias duplicate ${dup.email} — canonical identity ${canon} belongs to ${keeper.email} (${kc.posts} posts, ${kc.media} media, ${kc.connections} connections kept).`);
+      await writeAdminAudit({ id: 'system' }, 'gmail-alias-cleanup', dup, `Removed empty Gmail-alias duplicate account ${dup.email}; canonical identity ${canon} kept on ${keeper.email}.`);
+      return true;
+    };
+    const done = (await tryPair(a, b)) || (await tryPair(b, a));
+    if (!done) console.log(`[alias-cleanup] Canonical collision at ${canon} does not match the guarded empty-duplicate shape — leaving both accounts untouched.`);
+  }
+}
+// Runs at most once per process (the first /api request awaits it);
+// on failure the promise resets so a later request can retry — a
+// successful run is one-time in effect because the guarded shape no
+// longer exists afterwards.
+let aliasCleanupPromise = null;
+function ensureAliasCleanup() {
+  if (!aliasCleanupPromise) {
+    aliasCleanupPromise = runGmailAliasCleanup().catch((e) => {
+      console.error('[alias-cleanup] check failed:', String((e && e.message) || e).slice(0, 200));
+      aliasCleanupPromise = null;
+    });
+  }
+  return aliasCleanupPromise;
+}
 // ---------- team / agency foundation (batch 3, Ultra) ----------
 // An Ultra workspace owner invites people by email with a limited
 // role. An invite binds to the account with that email (at invite
@@ -3063,10 +3199,16 @@ const TEAM_ROLES = ['scheduler', 'viewer'];
 const TEAM_MEMBER_CAP = 25;
 async function bindTeamInvites(user) {
   if (!user || !user.email) return;
-  const invites = await db.listTeamInvitesByEmail(user.email);
-  for (const inv of invites) {
-    if (inv.status === 'invited' && !inv.memberUserId) {
-      await db.updateTeamInvite(inv.id, { memberUserId: user.id, status: 'active', boundAt: new Date().toISOString() });
+  // Match the invite by the account's stored address AND by its
+  // canonical identity, so an invite written to any Gmail spelling of
+  // the inbox binds to the one account that inbox owns.
+  const emails = new Set([String(user.email || '').trim().toLowerCase(), canonicalEmail(user.email)]);
+  for (const em of emails) {
+    const invites = await db.listTeamInvitesByEmail(em);
+    for (const inv of invites) {
+      if (inv.status === 'invited' && !inv.memberUserId) {
+        await db.updateTeamInvite(inv.id, { memberUserId: user.id, status: 'active', boundAt: new Date().toISOString() });
+      }
     }
   }
 }
@@ -4852,18 +4994,22 @@ app.post('/api/team/invite', ah(async (req, res) => {
   const user = await requireUltraOwner(req, res);
   if (!user) return;
   const b = req.body || {};
-  const email = String(b.email || '').trim().toLowerCase();
+  const typedEmail = String(b.email || '').trim().toLowerCase();
   const role = TEAM_ROLES.includes(b.role) ? b.role : '';
-  if (!validEmail(email)) return res.status(400).json({ ok: false, error: 'Enter a valid email address for your team member.' });
+  if (!validEmail(typedEmail)) return res.status(400).json({ ok: false, error: 'Enter a valid email address for your team member.' });
   if (!role) return res.status(400).json({ ok: false, error: 'Pick a role: Scheduler (can create and schedule posts) or Viewer (can only look).' });
-  if (email === String(user.email || '').toLowerCase()) return res.status(400).json({ ok: false, error: 'That is your own email — you already own this workspace.' });
+  // Invites are stored under the canonical identity, so any Gmail
+  // spelling of the member's inbox resolves to the same invite.
+  const email = canonicalEmail(typedEmail);
+  if (!validEmail(email)) return res.status(400).json({ ok: false, error: 'Enter a valid email address for your team member.' });
+  if (email === canonicalEmail(user.email)) return res.status(400).json({ ok: false, error: 'That is your own email — you already own this workspace.' });
   const invites = await db.listTeamInvites(req.userId);
   const existing = invites.find((i) => i.email === email && i.status !== 'removed');
   const liveCount = invites.filter((i) => i.status === 'invited' || i.status === 'active').length;
   if (!existing && liveCount >= TEAM_MEMBER_CAP) return res.status(400).json({ ok: false, error: `Your team can have at most ${TEAM_MEMBER_CAP} members — remove someone first.` });
   // If the invited email already has an account, the invite binds
   // right away; otherwise it binds at that account's next login.
-  const account = await db.getUserByEmail(email).catch(() => null);
+  const account = await findUserForEmail(email).catch(() => null);
   if (existing) {
     const patch = { role };
     if (account && !existing.memberUserId) { patch.memberUserId = account.id; patch.status = 'active'; patch.boundAt = new Date().toISOString(); }
