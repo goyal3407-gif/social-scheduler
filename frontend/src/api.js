@@ -151,6 +151,7 @@ export const api = {
   // Auth (session cookie is httpOnly; the frontend never sees a token)
   signup: (email, password, name, ref) => req('/api/auth/signup', { method: 'POST', body: JSON.stringify({ email, password, ...(name ? { name } : {}), ...(ref ? { ref } : {}) }) }),
   login: (email, password) => req('/api/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
+  googleLogin: (idToken, ref) => req('/api/auth/google', { method: 'POST', body: JSON.stringify({ idToken, ...(ref ? { ref } : {}) }) }),
   me: () => req('/api/auth/me'),
   logout: () => req('/api/auth/logout', { method: 'POST', body: JSON.stringify({}) }),
   changePassword: (currentPassword, newPassword) => req('/api/auth/change-password', { method: 'POST', body: JSON.stringify({ currentPassword, newPassword }) }),

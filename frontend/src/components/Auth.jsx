@@ -1,5 +1,8 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api.js'
+import { trFor } from '../i18n.js'
+import { isNativeShell } from '../openExternal.js'
+import GoogleButton from './GoogleButton.jsx'
 
 // Login / sign-up screen. Shown on its own — no app content, no queue,
 // no stats — until the server confirms a session.
@@ -16,7 +19,17 @@ export default function Auth({ onAuth, bare = false }) {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const [gError, setGError] = useState('')
   const [busy, setBusy] = useState(false)
+  // The two NEW strings on this screen (the divider + the Google
+  // failure line) go through the dictionary like everywhere else —
+  // EN/Hinglish parity lives in i18n.js CORE. The persisted choice
+  // is read the same way the app shell reads it.
+  const [lang] = useState(() => { try { return localStorage.getItem('ss-lang') || 'en' } catch { return 'en' } })
+  const tr = trFor(lang, null)
+  // Google sign-in is hidden inside the native app (Google blocks
+  // its flow in embedded WebViews) — email + password remains there.
+  const showGoogle = (() => { try { return !isNativeShell() } catch { return true } })()
   const [showPw, setShowPw] = useState(false)
   // Public app status (batch 6): signups paused / maintenance mode,
   // set by the owner in the console. Fails silent — if the status
@@ -48,6 +61,21 @@ export default function Auth({ onAuth, bare = false }) {
       onAuth(res.user)
     } catch (err) {
       setError(err.message || 'Could not sign in.')
+    } finally { setBusy(false) }
+  }
+
+  // Sign in with Google: the GIS button hands back a signed ID
+  // token; the server verifies it and answers with the same session
+  // a password login gets, so success lands exactly the same way.
+  const onGoogleCredential = async (idToken) => {
+    setError(''); setGError('')
+    setBusy(true)
+    try {
+      const refCode = (() => { try { return new URLSearchParams(window.location.search).get('ref') || undefined } catch { return undefined } })()
+      const res = await api.googleLogin(idToken, refCode)
+      onAuth(res.user)
+    } catch (err) {
+      setGError(err.message || tr('googleSignInFailed'))
     } finally { setBusy(false) }
   }
 
@@ -132,11 +160,18 @@ export default function Auth({ onAuth, bare = false }) {
         )}
         <p className="muted small" style={{ marginTop: 16, textAlign: 'center' }}>
           {mode === 'signup' ? 'Already have an account? ' : 'No account yet? '}
-          <button type="button" className="auth-switch" onClick={() => { setMode(mode === 'signup' ? 'login' : 'signup'); setError('') }}>
+          <button type="button" className="auth-switch" onClick={() => { setMode(mode === 'signup' ? 'login' : 'signup'); setError(''); setGError('') }}>
             {mode === 'signup' ? 'Log in' : 'Sign up'}
           </button>
         </p>
       </form>
+      {showGoogle && !signupsPaused && (
+        <>
+          <div className="auth-divider" aria-hidden="true"><span>{tr('authOrDivider')}</span></div>
+          {gError && <div className="alert error" style={{ marginBottom: 12 }}>{gError}</div>}
+          <GoogleButton mode={mode} onCredential={onGoogleCredential} onFailure={() => setGError(tr('googleSignInFailed'))} />
+        </>
+      )}
       {!bare && (
         <p className="muted small" style={{ marginTop: 28, textAlign: 'center' }}>
           Schedule Reels, Feed posts &amp; Stories for Instagram, YouTube, Facebook and TikTok. Free forever.

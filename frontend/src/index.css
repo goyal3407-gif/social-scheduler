@@ -355,6 +355,9 @@ button,.tab{touch-action:manipulation}
 .auth-wrap label{margin-top:0}
 .auth-switch{border:none;background:transparent;color:var(--gold-text);font-weight:700;padding:0;font-size:12.5px;cursor:pointer;min-height:44px;min-width:44px}
 .auth-switch:hover{text-decoration:underline}
+.auth-divider{display:flex;align-items:center;gap:12px;margin:20px 0 14px;color:var(--muted);font-size:12.5px}
+.auth-divider::before,.auth-divider::after{content:'';flex:1;height:1px;background:var(--line)}
+.auth-google{display:flex;justify-content:center;min-height:44px}
 
 /* --- Public landing (logged-out root page, Phase F): the same plain
    off-white, narrow-column language as Auth, widened a little for the

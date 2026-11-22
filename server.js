@@ -51,7 +51,10 @@ app.use((req, res, next) => {
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'no-referrer');
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
-  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; media-src 'self' https: data: blob:; font-src 'self'; connect-src 'self' https://graph.facebook.com; frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self'");
+  // accounts.google.com appears in script/frame/connect ONLY for the
+  // Google Identity Services sign-in button on the login screen —
+  // no other external host is allowed to script or frame this app.
+  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' https://accounts.google.com; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; media-src 'self' https: data: blob:; font-src 'self'; connect-src 'self' https://graph.facebook.com https://accounts.google.com; frame-src https://accounts.google.com; frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self'");
   if (isSecureRequest(req)) res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
   if (req.path.startsWith('/api')) res.setHeader('Cache-Control', 'no-store');
   next();
@@ -752,6 +755,85 @@ app.post('/api/auth/login', ah(async (req, res) => {
     return res.status(401).json({ ok: false, error: 'Wrong email or password. Check both and try again — or sign up if you have no account yet.' });
   }
   loginAttempts.delete(throttleKey);
+  const granted = await applyOwnerComp(user);
+  await bindTeamInvites(user).catch(() => null);
+  await setSessionCookie(req, res, user.id);
+  res.json({ ok: true, user: publicUser(granted || user) });
+}));
+// ---------- Sign in with Google (ID-token flow — NO client secret) ----------
+// The client ID is a PUBLIC identifier (it ships in the login page).
+// The browser hands us Google's signed ID token; the server verifies
+// it against Google's tokeninfo endpoint on EVERY call and requires
+// the audience (this app), the issuer (Google), a future expiry and
+// a VERIFIED email before any session is issued. The env overrides
+// exist so the test suite can point verification at a local stub.
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '628297569656-dc5stqkpmdogk64e396paagapciai7vj.apps.googleusercontent.com';
+const GOOGLE_TOKENINFO_URL = process.env.GOOGLE_TOKENINFO_URL || 'https://oauth2.googleapis.com/tokeninfo';
+async function fetchGoogleClaims(idToken) {
+  const r = await fetch(`${GOOGLE_TOKENINFO_URL}?id_token=${encodeURIComponent(idToken)}`, { signal: AbortSignal.timeout(10000) });
+  if (!r.ok) return null;
+  return r.json().catch(() => null);
+}
+app.post('/api/auth/google', ah(async (req, res) => {
+  const GOOGLE_FAIL = 'Google sign-in could not be verified — try again, or use your email and password.';
+  const idToken = typeof req.body?.idToken === 'string' ? req.body.idToken : '';
+  if (!idToken || idToken.length > 4096) return res.status(401).json({ ok: false, error: GOOGLE_FAIL });
+  let claims = null;
+  try { claims = await fetchGoogleClaims(idToken); } catch { claims = null; }
+  const claimEmail = claims && typeof claims.email === 'string' ? claims.email : '';
+  if (!claims || !validEmail(claimEmail)) return res.status(401).json({ ok: false, error: GOOGLE_FAIL });
+  // The same per-email throttle as password login, keyed by the
+  // canonical identity, so a locked-out address cannot be retried
+  // through Google under a different Gmail spelling.
+  const throttleKey = canonicalEmail(claimEmail);
+  if (loginBlocked(throttleKey)) return res.status(429).json({ ok: false, error: 'Too many wrong attempts — wait 10 minutes and try again.' });
+  const issOk = claims.iss === 'accounts.google.com' || claims.iss === 'https://accounts.google.com';
+  const expOk = Number.isFinite(Number(claims.exp)) && Number(claims.exp) * 1000 > Date.now();
+  const verifiedOk = claims.email_verified === true || claims.email_verified === 'true';
+  if (claims.aud !== GOOGLE_CLIENT_ID || !issOk || !expOk || !verifiedOk) {
+    recordFailedLogin(throttleKey);
+    return res.status(401).json({ ok: false, error: GOOGLE_FAIL });
+  }
+  loginAttempts.delete(throttleKey);
+  // An existing account (any spelling of the one inbox) gets the same
+  // session a password login issues. This stays available while
+  // signups are paused or maintenance is on — exactly like password
+  // login, which the maintenance gate also exempts.
+  const existing = await findUserForEmail(claimEmail);
+  if (existing) {
+    const granted = await applyOwnerComp(existing);
+    await bindTeamInvites(existing).catch(() => null);
+    await setSessionCookie(req, res, existing.id);
+    return res.json({ ok: true, user: publicUser(granted || existing) });
+  }
+  // A NEW account faces the same creation gates as password signup:
+  // signups paused or maintenance mode refuse CREATION only. The very
+  // first account (owner bootstrap) is never blocked.
+  const users = await db.listUsers();
+  if (users.length > 0) {
+    const gs = await globalSettings();
+    if (gs.signupOpen === false) return res.status(403).json({ ok: false, error: 'Signups are paused right now — please try again later.' });
+    if (gs.maintenance) return res.status(503).json({ ok: false, maintenance: true, error: String(gs.maintenanceMessage || '').trim() || MAINTENANCE_FALLBACK_MSG });
+  }
+  const email = canonicalEmail(claimEmail);
+  const name = typeof claims.name === 'string' ? claims.name.trim().slice(0, 80) : '';
+  let referralCode = '';
+  do { referralCode = 'K' + crypto.randomBytes(4).toString('hex').toUpperCase().slice(0, 6); }
+  while (users.some((u) => u.referralCode === referralCode));
+  const ref = typeof req.body?.ref === 'string' ? req.body.ref.trim().toUpperCase().slice(0, 16) : '';
+  const referredBy = ref && users.some((u) => u.referralCode === ref) ? ref : '';
+  // Passwordless account: no salt / passwordHash are stored, so
+  // password login answers the standard wrong-password error (never a
+  // crash), and the user can set a password later via forgot-password.
+  const user = {
+    id: uid('user'), email,
+    role: users.length === 0 ? 'owner' : 'member',
+    createdAt: new Date().toISOString(),
+    referralCode,
+    ...(referredBy ? { referredBy } : {}),
+    ...(name ? { name } : {}),
+  };
+  await db.saveUser(user);
   const granted = await applyOwnerComp(user);
   await bindTeamInvites(user).catch(() => null);
   await setSessionCookie(req, res, user.id);
