@@ -466,6 +466,29 @@ export default function App() {
     return () => window.removeEventListener('online', onOn)
   }, [authBlocked, checkAuth])
 
+  // --- Native splash (H-07) [device-unverified]: the Android shell
+  // holds its splash (launchAutoHide=false) until the app says it is
+  // ready. Hide it once the auth state settles — the first real paint
+  // — and keep a hard 4 s backstop timer so the splash can never hang.
+  // Complete no-op on the web: the isNativeShell() guard runs first
+  // and the whole path is try/caught, exactly like the back handler.
+  const splashHiddenRef = useRef(false)
+  const hideSplash = useCallback(() => {
+    if (splashHiddenRef.current) return
+    try {
+      if (!isNativeShell()) return
+      splashHiddenRef.current = true
+      import('@capacitor/splash-screen')
+        .then(({ SplashScreen }) => { if (SplashScreen && SplashScreen.hide) SplashScreen.hide().catch(() => { /* already hidden */ }) })
+        .catch(() => { /* plugin not bundled in this context */ })
+    } catch { /* not running in a native shell */ }
+  }, [])
+  useEffect(() => { if (authChecked) hideSplash() }, [authChecked, hideSplash])
+  useEffect(() => {
+    const t = setTimeout(hideSplash, 4000)
+    return () => clearTimeout(t)
+  }, [hideSplash])
+
   const loadAll = useCallback(async () => {
     setLoading(true); setError(null)
     try {
