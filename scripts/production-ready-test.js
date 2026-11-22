@@ -90,10 +90,18 @@ function client() {
     const css = fs.readFileSync(path.join(__dirname, '..', 'frontend/src/index.css'), 'utf8');
     check('PR-3 landing carries no embedded Auth form (split)', !landing.includes('<Auth') && !landing.includes('components/Auth'));
     check('PR-3 landing opens the form via its CTA buttons', landing.includes('landing-cta') && landing.includes("onShowAuth('login')") && landing.includes("onShowAuth('signup')"));
+    // B4: the landing copy moved into i18n-dict.js (land* keys) —
+    // the check now verifies Landing consumes the keys AND the
+    // dictionary still carries the exact copy (nothing deleted).
+    const dictSrc = fs.readFileSync(path.join(__dirname, '..', 'frontend/src/i18n-dict.js'), 'utf8');
     check('PR-3 hero copy preserved on the landing (nothing deleted)',
-      landing.includes('An Instagram scheduler for Reels, Posts and Stories') &&
-      landing.includes('Plan your posts once, and KiluaAI publishes them for you'));
-    check('PR-3 footer links preserved', landing.includes('Privacy Policy') && landing.includes('Terms of Service') && landing.includes('Contact'));
+      landing.includes("tr('landHeroLine')") && landing.includes("tr('landWhatSub')") &&
+      dictSrc.includes('An Instagram scheduler for Reels, Posts and Stories') &&
+      dictSrc.includes('Plan your posts once, and KiluaAI publishes them for you'));
+    check('PR-3 footer links preserved',
+      landing.includes("tr('landPrivacy')") && landing.includes("tr('landTerms')") && landing.includes("tr('landContact')") &&
+      landing.includes('/privacy.html') && landing.includes('/terms.html') && landing.includes('/contact.html') &&
+      dictSrc.includes('Privacy Policy') && dictSrc.includes('Terms of Service'));
     check('PR-3 Auth screen carries the OAuth trust line + back route',
       auth.includes("tr('authTrustLine')") && auth.includes('onBack') && auth.includes("tr('authBackHome')"));
     check('PR-3 css: compact hero (no 7vh hero padding) + below-block styles',

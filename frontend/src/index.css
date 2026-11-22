@@ -84,7 +84,6 @@ textarea{resize:vertical;min-height:90px}
 /* Round 3 (B3): the plan pill may hide only below 360px — the
    drawer's plan row carries the plan there. */
 @media(max-width:360px){.top-actions .plan-pill{display:none}}
-.logo-mark{width:40px;height:40px;border-radius:var(--r-control);background:linear-gradient(135deg,var(--brand),var(--brand-2));display:grid;place-items:center;color:var(--on-brand);flex:none;box-shadow:var(--shadow-sm)}
 .logo b{font-family:var(--font-head);font-size:16px;display:block;line-height:1.15;white-space:nowrap}
 .logo span{font-size:12px;color:var(--muted);white-space:nowrap}
 .top-actions{margin-left:auto;display:flex;align-items:center;gap:8px}
@@ -202,8 +201,9 @@ textarea{resize:vertical;min-height:90px}
    width. Renamed in B2 to .stepper/
    .stepper-step/.stepper-n so the rules apply ONLY to the Studio
    composer: SetupWizard keeps the generic .steps/.step/.step-num
-   rules above, and the Landing page's own .steps/.step-n list
-   (further down) keeps its wrapped layout, untouched. */
+   rules above, and the Landing page's own how-it-works list
+   (further down, renamed .how-steps/.how-step-n in B4) keeps its
+   wrapped layout, untouched. */
 .stepper{display:flex;gap:8px;margin:16px 0;flex-wrap:nowrap}
 .stepper-step{flex:1;min-width:0;border:1px solid var(--line);border-radius:var(--r-control);padding:9px 8px;background:var(--surface-2);font-size:14px;display:flex;align-items:center;justify-content:center;text-align:center;font-family:inherit;cursor:pointer;color:var(--ink)}
 .stepper-step b{display:block;font-family:var(--font-head);font-size:14px}
@@ -306,7 +306,6 @@ td{max-width:220px;overflow:hidden;text-overflow:ellipsis}
 @media(max-width:520px){
   .topbar-in{padding:10px 12px;gap:8px}
   .logo{ gap:8px }
-  .logo-mark{width:34px;height:34px}
   .logo b{font-size:14px}
   .icon-btn{width:38px;height:38px}
 }
@@ -379,8 +378,6 @@ button,.tab{touch-action:manipulation}
    Escape, or its close button. The page behind never scrolls
    while it is open; the drawer list itself scrolls.
    ============================================================ */
-.logo-mark{overflow:hidden;background:var(--deep)}
-.logo-mark img{width:100%;height:100%;object-fit:cover;display:block}
 .burger-btn{display:none}
 @media(max-width:900px){.burger-btn{display:grid}}
 .topbar{padding-top:env(safe-area-inset-top, 0px)}
@@ -422,21 +419,29 @@ button,.tab{touch-action:manipulation}
 /* --- Auth (login / sign-up): narrow column, no card --- */
 .auth-wrap{max-width:400px;margin:0 auto;padding:5vh 18px 40px}
 .auth-head{text-align:center;margin-bottom:26px}
-.auth-logo{width:52px;height:52px;border-radius:var(--r-card);margin:0 auto 14px}
 .auth-head p{margin-top:6px;font-size:14px}
 /* Round 2 (R2-L11): the standalone auth screens use the Landing
-   page's compact brand row — 34px logo + name on one line. */
+   page's compact brand row — 34px logo + name on one line.
+   Round 3 (B4): the mark is the shared <Logo/> component; the old
+   .logo-mark / .auth-logo tile rules are gone. */
 .auth-brand-row{display:flex;align-items:center;justify-content:center;gap:10px}
-.auth-brand-row .auth-logo{width:34px;height:34px;border-radius:var(--r-control);margin:0}
 .auth-name{font-size:22px;font-weight:700;letter-spacing:-.02em}
+/* Round 3 (B4): named classes replacing Auth's old inline styles. */
+.auth-banner{margin-bottom:14px}
+.auth-note{margin-top:16px;text-align:center}
+.auth-note-lg{margin-top:28px;text-align:center}
+.auth-alert-top{margin-top:16px}
+.auth-gerror{margin-bottom:12px}
+.auth-label-gap{margin-top:14px}
+.auth-forgot-row{text-align:right;margin-top:6px}
 /* Password visibility: the eye toggle sits INSIDE the field
    (Prompt-3) — the input reserves room for it on the right. */
 .pw-field{position:relative}
 .pw-field input{padding-right:48px}
-.pw-eye{position:absolute;right:4px;top:50%;transform:translateY(-50%);width:40px;height:40px;display:flex;align-items:center;justify-content:center;border:none;background:transparent;color:var(--muted);border-radius:var(--r-control);cursor:pointer}
+.pw-eye{position:absolute;right:4px;top:50%;transform:translateY(-50%);width:44px;height:44px;display:flex;align-items:center;justify-content:center;border:none;background:transparent;color:var(--muted);border-radius:var(--r-control);cursor:pointer}
 .pw-eye:hover{color:var(--ink);background:var(--surface-2)}
 .auth-wrap label{margin-top:0}
-.auth-switch{border:none;background:transparent;color:var(--brand-text);font-weight:700;padding:0;font-size:12px;cursor:pointer;min-height:44px;min-width:44px}
+.auth-switch{border:none;background:transparent;color:var(--brand-text);font-weight:700;padding:0 4px;font-size:14px;cursor:pointer;min-height:44px;min-width:44px;display:inline-flex;align-items:center;justify-content:center}
 .auth-switch:hover{text-decoration:underline}
 .auth-divider{display:flex;align-items:center;gap:12px;margin:20px 0 14px;color:var(--muted);font-size:12px}
 .auth-divider::before,.auth-divider::after{content:'';flex:1;height:1px;background:var(--line)}
@@ -460,8 +465,11 @@ button,.tab{touch-action:manipulation}
 /* Compact brand row (owner request, 22 Nov 2026): small logo + name
    on one line, then the form — no hero block above the fold. */
 .landing-hero{display:flex;align-items:center;justify-content:center;gap:10px;padding:20px 0 0}
-.landing-hero .auth-logo{width:34px;height:34px;border-radius:var(--r-control);margin:0}
 .landing-name{font-size:22px;letter-spacing:-.02em;margin:0}
+/* Round 3 (B4): the one-line value prop sits in the hero, above
+   the fold, under the brand row. */
+.landing-hero-line{margin:14px auto 0;text-align:center}
+.landing-pricing-note{margin-top:10px}
 /* Login split (Prompt-4): the landing carries the marketing; its
    two buttons open the form on its own screen. */
 .landing-cta{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:20px}
@@ -480,11 +488,14 @@ button,.tab{touch-action:manipulation}
 .feat-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-control);padding:14px 16px}
 .feat-card b{display:block;font-size:14px;margin-bottom:4px}
 .feat-card span{font-size:14px;color:var(--ink-2);line-height:1.5}
-.steps{margin:6px 0 0;padding:0;list-style:none}
-.steps li{display:flex;gap:12px;padding:11px 0;border-top:1px solid var(--line-2);font-size:14px;color:var(--ink-2)}
-.steps li:first-child{border-top:none}
-.steps b{color:var(--ink)}
-.step-n{flex:none;width:26px;height:26px;border-radius:50%;background:var(--brand-soft);color:var(--brand-text);font-weight:700;font-size:14px;display:grid;place-items:center;margin-top:1px}
+/* Round 3 (B4): Landing's how-it-works list renamed from
+   .steps/.step-n to .how-steps/.how-step-n so it can never collide
+   with SetupWizard's generic .steps/.step/.step-num rules above. */
+.how-steps{margin:6px 0 0;padding:0;list-style:none}
+.how-steps li{display:flex;gap:12px;padding:11px 0;border-top:1px solid var(--line-2);font-size:14px;color:var(--ink-2)}
+.how-steps li:first-child{border-top:none}
+.how-steps b{color:var(--ink)}
+.how-step-n{flex:none;width:26px;height:26px;border-radius:50%;background:var(--brand-soft);color:var(--brand-text);font-weight:700;font-size:14px;display:grid;place-items:center;margin-top:1px}
 .landing-foot{max-width:720px;margin:50px auto 0;padding-top:18px;border-top:1px solid var(--line);text-align:center}
 .landing-foot nav{display:flex;gap:20px;justify-content:center;flex-wrap:wrap;margin-bottom:10px}
 .landing-foot nav a{font-size:14px;font-weight:600}

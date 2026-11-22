@@ -2,15 +2,18 @@ import { useEffect, useState } from 'react'
 import { api } from '../api.js'
 import { trFor, dictSync, loadDict } from '../i18n.js'
 import GoogleButton from './GoogleButton.jsx'
+import { Logo } from './shared.jsx'
 import { IconEye, IconEyeOff } from './icons.jsx'
 
 // The compact brand row (34px logo + name, subtitle under it) —
 // shared by the Auth screens and the reset screen (R2-L11).
+// Round 3 (B4): the mark is B3's shared <Logo/> (theme-swapped
+// transparent artwork), not the old /icon-192.png tile.
 function BrandHead({ subtitle }) {
   return (
     <div className="auth-head">
       <div className="auth-brand-row">
-        <div className="logo-mark auth-logo" aria-hidden="true"><img src="/icon-192.png" alt="" width="34" height="34" /></div>
+        <Logo size={34} />
         <span className="auth-name">KiluaAI</span>
       </div>
       <p className="muted">{subtitle}</p>
@@ -30,11 +33,18 @@ function BackLink({ tr, onBack }) {
 function AuthBootLoad({ lang }) {
   return (
     <div className="boot-load" role="status">
-      <span className="logo-mark offline-logo" aria-hidden="true"><img src="/icon-192.png" alt="" width="52" height="52" /></span>
+      <Logo size={52} />
       <span className="boot-spinner" aria-hidden="true" />
       <span className="muted small">{trFor(lang, null)('loading')}</span>
     </div>
   )
+}
+
+// Round 3 (B4): on a client-side validation failure, focus moves to
+// the first invalid field (presentation behaviour only — the
+// validation rules themselves are unchanged).
+function focusField(id) {
+  try { const el = document.getElementById(id); if (el) el.focus() } catch { /* no DOM */ }
 }
 
 // Login / sign-up screen. Shown on its own — no app content, no queue,
@@ -85,14 +95,14 @@ export default function Auth({ onAuth, bare = false, initialMode = 'login', onBa
   }, [])
   const signupsPaused = mode === 'signup' && !!appStatus && appStatus.signupOpen === false
   const maintBanner = appStatus && appStatus.maintenance ? (
-    <div className="alert error" role="status" style={{ marginBottom: 14 }}>{appStatus.maintenanceMessage || tr('authMaintDefault')}</div>
+    <div className="alert error auth-banner" role="status">{appStatus.maintenanceMessage || tr('authMaintDefault')}</div>
   ) : null
 
   const submit = async (e) => {
     e.preventDefault()
     setError('')
-    if (!email.trim() || !password) { setError(tr('authErrEmailPw')); return }
-    if (mode === 'signup' && password.length < 8) { setError(tr('authErrPwShort')); return }
+    if (!email.trim() || !password) { setError(tr('authErrEmailPw')); focusField(!email.trim() ? 'authEmail' : 'authPassword'); return }
+    if (mode === 'signup' && password.length < 8) { setError(tr('authErrPwShort')); focusField('authPassword'); return }
     setBusy(true)
     try {
       // D11: a ?ref=CODE in the signup URL is passed through so the
@@ -128,7 +138,7 @@ export default function Auth({ onAuth, bare = false, initialMode = 'login', onBa
   const submitForgot = async (e) => {
     e.preventDefault()
     setError(''); setNotice('')
-    if (!email.trim()) { setError(tr('authErrEmailFirst')); return }
+    if (!email.trim()) { setError(tr('authErrEmailFirst')); focusField('forgotEmail'); return }
     setBusy(true)
     try {
       await api.forgotPassword(email.trim())
@@ -155,10 +165,10 @@ export default function Auth({ onAuth, bare = false, initialMode = 'login', onBa
         <form onSubmit={submitForgot}>
           <label htmlFor="forgotEmail">{tr('authEmailLabel')}</label>
           <input id="forgotEmail" type="email" autoComplete="email" placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} />
-          {error && <div className="alert error">{error}</div>}
+          {error && <div className="alert error" role="alert">{error}</div>}
           {notice && <div className="alert success">{notice}</div>}
-          <button type="submit" className="btn block mt2" disabled={busy}>{busy ? tr('authPleaseWait') : tr('authSendResetBtn')}</button>
-          <p className="muted small" style={{ marginTop: 16, textAlign: 'center' }}>
+          <button type="submit" className="btn primary block mt2" disabled={busy}>{busy ? tr('authPleaseWait') : tr('authSendResetBtn')}</button>
+          <p className="muted small auth-note">
             {tr('authRemembered')}{' '}
             <button type="button" className="auth-switch" onClick={() => { setMode('login'); setError(''); setNotice('') }}>{tr('authBackToLogin')}</button>
           </p>
@@ -179,43 +189,44 @@ export default function Auth({ onAuth, bare = false, initialMode = 'login', onBa
             <input id="authName" type="text" autoComplete="name" placeholder={tr('authNamePlaceholder')} value={name} onChange={(e) => setName(e.target.value)} />
           </>
         )}
-        <label htmlFor="authEmail" style={mode === 'signup' ? { marginTop: 14 } : undefined}>{tr('authEmailLabel')}</label>
+        <label htmlFor="authEmail" className={mode === 'signup' ? 'auth-label-gap' : undefined}>{tr('authEmailLabel')}</label>
         <input id="authEmail" type="email" autoComplete="email" placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} />
-        <label htmlFor="authPassword" style={{ marginTop: 14 }}>{tr('authPasswordLabel')}</label>
+        <label htmlFor="authPassword" className="auth-label-gap">{tr('authPasswordLabel')}</label>
         <div className="pw-field">
           <input id="authPassword" type={showPw ? 'text' : 'password'} autoComplete={mode === 'signup' ? 'new-password' : 'current-password'} placeholder={mode === 'signup' ? tr('authPwPlaceholderNew') : tr('authPwPlaceholder')} value={password} onChange={(e) => setPassword(e.target.value)} />
           <button type="button" className="pw-eye" onClick={() => setShowPw(!showPw)} aria-label={showPw ? tr('ariaHidePassword') : tr('ariaShowPassword')}>{showPw ? <IconEyeOff size={19} /> : <IconEye size={19} />}</button>
         </div>
-        {error && <div className="alert error">{error}</div>}
-        {signupsPaused ? (
-          <div className="alert error" style={{ marginTop: 16 }}>{tr('authSignupsPaused')}</div>
-        ) : (
-          <button type="submit" className="btn block mt2" disabled={busy}>
-            {busy ? tr('authPleaseWait') : mode === 'signup' ? tr('authSignupBtn') : tr('authLoginBtn')}
-          </button>
-        )}
+        {mode === 'signup' && <p className="field-helper">{tr('authPwHint')}</p>}
         {mode === 'login' && (
-          <p className="muted small" style={{ marginTop: 12, textAlign: 'center' }}>
+          <p className="auth-forgot-row">
             <button type="button" className="auth-switch" onClick={() => { setMode('forgot'); setError('') }}>{tr('authForgotLink')}</button>
           </p>
         )}
-        <p className="muted small" style={{ marginTop: 16, textAlign: 'center' }}>
-          {mode === 'signup' ? tr('authHaveAccount') : tr('authNoAccount')}
-          <button type="button" className="auth-switch" onClick={() => { setMode(mode === 'signup' ? 'login' : 'signup'); setError(''); setGError('') }}>
-            {mode === 'signup' ? tr('authLoginBtn') : tr('authSignupSwitch')}
+        {error && <div className="alert error" role="alert">{error}</div>}
+        {signupsPaused ? (
+          <div className="alert error auth-alert-top">{tr('authSignupsPaused')}</div>
+        ) : (
+          <button type="submit" className="btn primary block mt2" disabled={busy}>
+            {busy ? tr('authPleaseWait') : mode === 'signup' ? tr('authSignupBtn') : tr('authLoginBtn')}
           </button>
-        </p>
+        )}
       </form>
       {!signupsPaused && (
         <>
           <div className="auth-divider" aria-hidden="true"><span>{tr('authOrDivider')}</span></div>
-          {gError && <div className="alert error" style={{ marginBottom: 12 }}>{gError}</div>}
+          {gError && <div className="alert error auth-gerror" role="alert">{gError}</div>}
           <GoogleButton mode={mode} onCredential={onGoogleCredential} onFailure={() => setGError(tr('googleSignInFailed'))} appLabel={tr('googleContinueApp')} appHint={tr('googleAppHint')} loadFailedText={tr('googleLoadFailed')} />
         </>
       )}
-      <p className="muted small" style={{ marginTop: 16, textAlign: 'center' }}>{tr('authTrustLine')}</p>
+      <p className="muted small auth-note">
+        {mode === 'signup' ? tr('authHaveAccount') : tr('authNoAccount')}
+        <button type="button" className="auth-switch" onClick={() => { setMode(mode === 'signup' ? 'login' : 'signup'); setError(''); setGError('') }}>
+          {mode === 'signup' ? tr('authLoginBtn') : tr('authSignupSwitch')}
+        </button>
+      </p>
+      <p className="muted small auth-note">{tr('authTrustLine')}</p>
       {!bare && (
-        <p className="muted small" style={{ marginTop: 28, textAlign: 'center' }}>
+        <p className="muted small auth-note-lg">
           {tr('authTagline')}
         </p>
       )}
@@ -251,8 +262,8 @@ export function ResetPassword() {
     e.preventDefault()
     setError('')
     if (!token) { setError(tr('resetErrInvalidLink')); return }
-    if (password.length < 8) { setError(tr('resetErrShort')); return }
-    if (password !== confirm) { setError(tr('resetErrMismatch')); return }
+    if (password.length < 8) { setError(tr('resetErrShort')); focusField('resetPassword'); return }
+    if (password !== confirm) { setError(tr('resetErrMismatch')); focusField('resetConfirm'); return }
     setBusy(true)
     try {
       await api.resetPassword(token, password)
@@ -270,7 +281,7 @@ export function ResetPassword() {
       {done ? (
         <div>
           <div className="alert success">{tr('resetDoneMsg')}</div>
-          <button type="button" className="btn block mt2" onClick={() => { window.location.href = '/' }}>{tr('resetGoLogin')}</button>
+          <button type="button" className="btn primary block mt2" onClick={() => { window.location.href = '/' }}>{tr('resetGoLogin')}</button>
         </div>
       ) : (
         <form onSubmit={submit}>
@@ -279,11 +290,11 @@ export function ResetPassword() {
             <input id="resetPassword" type={showPw ? 'text' : 'password'} autoComplete="new-password" placeholder={tr('authPwPlaceholderNew')} value={password} onChange={(e) => setPassword(e.target.value)} />
             <button type="button" className="pw-eye" onClick={() => setShowPw(!showPw)} aria-label={showPw ? tr('ariaHidePassword') : tr('ariaShowPassword')}>{showPw ? <IconEyeOff size={19} /> : <IconEye size={19} />}</button>
           </div>
-          <label htmlFor="resetConfirm" style={{ marginTop: 14 }}>{tr('resetConfirmLabel')}</label>
+          <label htmlFor="resetConfirm" className="auth-label-gap">{tr('resetConfirmLabel')}</label>
           <input id="resetConfirm" type={showPw ? 'text' : 'password'} autoComplete="new-password" placeholder={tr('resetConfirmPlaceholder')} value={confirm} onChange={(e) => setConfirm(e.target.value)} />
-          {error && <div className="alert error">{error}</div>}
-          <button type="submit" className="btn block mt2" disabled={busy}>{busy ? tr('authPleaseWait') : tr('resetSetBtn')}</button>
-          <p className="muted small" style={{ marginTop: 16, textAlign: 'center' }}>
+          {error && <div className="alert error" role="alert">{error}</div>}
+          <button type="submit" className="btn primary block mt2" disabled={busy}>{busy ? tr('authPleaseWait') : tr('resetSetBtn')}</button>
+          <p className="muted small auth-note">
             {tr('resetLinkBroken')}{' '}
             <button type="button" className="auth-switch" onClick={() => { window.location.href = '/' }}>{tr('authBackToLogin')}</button>
             {' '}{tr('resetLinkHelpTail')}
