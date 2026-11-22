@@ -100,7 +100,12 @@ async function waitUp(port) {
 
     const statusRes = await fetch(`http://127.0.0.1:${PORT}/api/db-status`);
     const statusBody = await statusRes.json().catch(() => ({}));
-    check('GET /api/db-status -> ok:true', statusRes.status === 200 && statusBody.ok === true, `status ${statusRes.status}`);
+    // Audit fix V-01 (22 Nov 2026): db-status used to answer ok:true to
+    // ANY anonymous caller while leaking deployment detail and running
+    // token-renewal work. It is owner-session-only now — everyone else
+    // gets the plain 404. (Owner 200 + member 404 are covered by
+    // scripts/auditfix-test.js.)
+    check('GET /api/db-status anonymous -> plain 404 (audit V-01)', statusRes.status === 404 && statusBody.error === 'That API route does not exist.', `status ${statusRes.status}`);
   } finally {
     try { server.kill('SIGTERM'); } catch { /* dead */ }
   }

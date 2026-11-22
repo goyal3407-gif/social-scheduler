@@ -1128,7 +1128,7 @@ export default function App() {
         <footer className="footer">
           <b>KiluaAI</b> — {tr('footerTag')}<br />
           {tr('footerLine')}<br />
-          <span className="muted small">v1.1.0{dbStatus?.db ? ` · storage: ${dbStatus.db}` : ''} · <a href="/contact.html">{tr('contact')}</a></span>
+          <span className="muted small">{MY_BUILD_ID ? (MY_BUILD_ID.startsWith('local-') ? 'local build' : `build ${MY_BUILD_ID.slice(0, 7)}`) : ''}{dbStatus?.db ? ` · storage: ${dbStatus.db}` : ''} · <a href="/contact.html">{tr('contact')}</a></span>
         </footer>
       </main>
 

@@ -128,7 +128,7 @@ async function main() {
   try {
     check('server boots', await waitUp(base), getLog().slice(-400));
     const A = makeClient(base);
-    let r = await A.call('POST', '/api/auth/signup', { email: 'a@reused.test', password: 'password123' });
+    let r = await A.call('POST', '/api/auth/signup', { email: 'a@reused.test', password: 'Kilua-Test-9871' });
     check('signup A', r.status === 200 && !!r.data.user?.id, JSON.stringify(r.data));
     const userA = r.data.user.id;
     seedInstagram(dataDir, userA);

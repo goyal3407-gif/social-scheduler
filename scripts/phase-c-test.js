@@ -134,8 +134,8 @@ async function main() {
 
   const A = makeClient(BASE);
   const B = makeClient(BASE);
-  await A.call('POST', '/api/auth/signup', { email: 'a@example.com', password: 'password123' });
-  await B.call('POST', '/api/auth/signup', { email: 'b@example.com', password: 'password123' });
+  await A.call('POST', '/api/auth/signup', { email: 'a@example.com', password: 'Kilua-Test-9871' });
+  await B.call('POST', '/api/auth/signup', { email: 'b@example.com', password: 'Kilua-Test-9871' });
   const igText = await connectInstagram(A);
   check('instagram connected', /Instagram connected/.test(igText), igText.slice(0, 120));
 

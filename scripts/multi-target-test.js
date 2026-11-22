@@ -209,7 +209,7 @@ async function main() {
 
   // ---- user + two Instagram accounts + YouTube ----
   const A = makeClient(BASE);
-  let r = await A.call('POST', '/api/auth/signup', { email: 'a@example.com', password: 'password123' });
+  let r = await A.call('POST', '/api/auth/signup', { email: 'a@example.com', password: 'Kilua-Test-9871' });
   check('signup A (owner)', r.status === 200 && !!r.data.user?.id, JSON.stringify(r.data));
   const userAId = r.data.user.id;
   await connectViaOAuth(A, 'code-alice');

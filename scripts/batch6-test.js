@@ -217,7 +217,7 @@ async function main() {
     const O = makeClient(base);   // owner
     const M1 = makeClient(base);  // member with IG + posts
     const M2 = makeClient(base);  // member with a broken IG connection
-    const signup = async (client, email) => client.call('POST', '/api/auth/signup', { email, password: 'password123', name: email.split('@')[0] });
+    const signup = async (client, email) => client.call('POST', '/api/auth/signup', { email, password: 'Kilua-Test-9871', name: email.split('@')[0] });
 
     // ---- 404 doctrine: anonymous on every console route ----
     const plain404 = (r) => r.status === 404 && r.data && r.data.error === 'That API route does not exist.';
@@ -253,7 +253,7 @@ async function main() {
     const adminTok = r.data.adminToken;
     const AH = { headers: { 'x-admin-token': adminTok } };
     const O2 = makeClient(base);
-    await O2.call('POST', '/api/auth/login', { email: 'owner@b6.test', password: 'password123' });
+    await O2.call('POST', '/api/auth/login', { email: 'owner@b6.test', password: 'Kilua-Test-9871' });
     check('unlock with wrong PIN -> 404', plain404(await O2.call('POST', `${ADMIN}/unlock`, { pin: '9999' })));
     r = await O2.call('POST', `${ADMIN}/unlock`, { pin: '2468' });
     check('unlock with the right PIN -> token', r.status === 200 && !!r.data.adminToken);

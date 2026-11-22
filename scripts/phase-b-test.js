@@ -177,7 +177,7 @@ async function main() {
     check('B1: server boots (unconfigured)', up);
     if (!up) { console.log(getLog()); process.exit(1); }
     const A = makeClient(base);
-    await A.call('POST', '/api/auth/signup', { email: 'a@example.com', password: 'password123' });
+    await A.call('POST', '/api/auth/signup', { email: 'a@example.com', password: 'Kilua-Test-9871' });
     let r = await A.call('GET', '/api/youtube/status');
     check('B1: status reports configured:false + connected:false', r.data.configured === false && r.data.connected === false, JSON.stringify(r.data));
     r = await A.call('POST', '/api/youtube/connect-link', {});
@@ -198,8 +198,8 @@ async function main() {
     const stub = () => (fs.existsSync(stubLog) ? fs.readFileSync(stubLog, 'utf8') : '');
     const A = makeClient(base);
     const B = makeClient(base);
-    await A.call('POST', '/api/auth/signup', { email: 'a@example.com', password: 'password123' });
-    await B.call('POST', '/api/auth/signup', { email: 'b@example.com', password: 'password123' });
+    await A.call('POST', '/api/auth/signup', { email: 'a@example.com', password: 'Kilua-Test-9871' });
+    await B.call('POST', '/api/auth/signup', { email: 'b@example.com', password: 'Kilua-Test-9871' });
 
     let r = await A.call('GET', '/api/youtube/status');
     check('B2: status reports configured:true before connect', r.data.configured === true && r.data.connected === false, JSON.stringify(r.data));
@@ -305,7 +305,7 @@ async function main() {
 
     // a user with NO Instagram at all can still publish YouTube-only
     const C = makeClient(base);
-    await C.call('POST', '/api/auth/signup', { email: 'c@example.com', password: 'password123' });
+    await C.call('POST', '/api/auth/signup', { email: 'c@example.com', password: 'Kilua-Test-9871' });
     const cc = await connectYouTube(C, base, 'yt-code-good');
     check('B2: user C connects YouTube (no Instagram)', /YouTube connected/.test(cc.text), cc.text.slice(0, 120));
     r = await C.call('POST', '/api/posts', { mediaUrl: 'https://example.com/conly.mp4', mediaType: 'video', caption: 'C yt only', format: 'REELS', scheduleTime: past(), igEnabled: false, youtube: { enabled: true, title: '' } });

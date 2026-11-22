@@ -175,8 +175,8 @@ async function main() {
 
   const A = makeClient(base);
   const B = makeClient(base);
-  await A.call('POST', '/api/auth/signup', { email: 'a@example.com', password: 'password123' });
-  await B.call('POST', '/api/auth/signup', { email: 'b@example.com', password: 'password123' });
+  await A.call('POST', '/api/auth/signup', { email: 'a@example.com', password: 'Kilua-Test-9871' });
+  await B.call('POST', '/api/auth/signup', { email: 'b@example.com', password: 'Kilua-Test-9871' });
   const cc = await connectYouTube(A, base, 'yt-code-good');
   check('E: user A connects YouTube', /YouTube connected/.test(cc.text), cc.text.slice(0, 120));
   const igText = await connectInstagram(A, base);

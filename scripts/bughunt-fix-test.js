@@ -107,13 +107,13 @@ async function main() {
   const publishCount = () => (fs.existsSync(STUB_LOG) ? fs.readFileSync(STUB_LOG, 'utf8').split('\n').filter((l) => l.includes('media_publish')).length : 0);
 
   const A = makeClient();
-  let r = await A.call('POST', '/api/auth/signup', { email: 'a@fix.test', password: 'password123' });
+  let r = await A.call('POST', '/api/auth/signup', { email: 'a@fix.test', password: 'Kilua-Test-9871' });
   check('signup A', r.status === 200 && !!r.data.user?.id, JSON.stringify(r.data));
   const userA = r.data.user.id;
 
   // L4: over-length email -> 400
   const longEmail = `${'a'.repeat(280)}@example.com`;
-  r = await A.call('POST', '/api/auth/signup', { email: longEmail, password: 'password123' });
+  r = await A.call('POST', '/api/auth/signup', { email: longEmail, password: 'Kilua-Test-9871' });
   check('L4: 292-char email -> 400', r.status === 400, `got ${r.status}`);
 
   // L5: duplicate signup -> 409 with a generic message; no second account
@@ -219,18 +219,18 @@ async function main() {
   check('L10: media numeric size -> 200 and stored as number', r.status === 200 && r.data.media?.size === 12345, `got ${r.status} ${JSON.stringify(r.data).slice(0, 150)}`);
 
   // L11: unparseable Origin on a state-changing request -> 403
-  r = await E.call('POST', '/api/auth/login', { email: 'a@fix.test', password: 'password123' }, { origin: 'null' });
+  r = await E.call('POST', '/api/auth/login', { email: 'a@fix.test', password: 'Kilua-Test-9871' }, { origin: 'null' });
   check('L11: Origin "null" -> 403', r.status === 403, `got ${r.status}`);
-  r = await E.call('POST', '/api/auth/login', { email: 'a@fix.test', password: 'password123' }, { origin: 'https://evil.example.com' });
+  r = await E.call('POST', '/api/auth/login', { email: 'a@fix.test', password: 'Kilua-Test-9871' }, { origin: 'https://evil.example.com' });
   check('L11: foreign Origin -> 403 (unchanged)', r.status === 403, `got ${r.status}`);
-  r = await E.call('POST', '/api/auth/login', { email: 'a@fix.test', password: 'password123' });
+  r = await E.call('POST', '/api/auth/login', { email: 'a@fix.test', password: 'Kilua-Test-9871' });
   check('L11: no Origin -> normal login works', r.status === 200, `got ${r.status}`);
 
   // L8: db-status user count is fresh on the very next call
   r = await A.call('GET', '/api/db-status');
   const count1 = r.data.instagramDiag?.usersScanned;
   const C = makeClient();
-  r = await C.call('POST', '/api/auth/signup', { email: 'c@fix.test', password: 'password123' });
+  r = await C.call('POST', '/api/auth/signup', { email: 'c@fix.test', password: 'Kilua-Test-9871' });
   check('L8: second user signup ok', r.status === 200, `got ${r.status}`);
   r = await A.call('GET', '/api/db-status');
   const count2 = r.data.instagramDiag?.usersScanned;

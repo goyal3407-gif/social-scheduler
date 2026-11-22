@@ -137,7 +137,7 @@ async function main() {
     const G = makeClient(base);
     const H = makeClient(base);
     const signup = async (client, email) => {
-      const r = await client.call('POST', '/api/auth/signup', { email, password: 'password123', name: email.split('@')[0] });
+      const r = await client.call('POST', '/api/auth/signup', { email, password: 'Kilua-Test-9871', name: email.split('@')[0] });
       return r;
     };
     // NOTE: ids come from the signup responses — /api/auth/* is rate

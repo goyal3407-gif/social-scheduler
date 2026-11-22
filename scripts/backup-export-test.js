@@ -85,7 +85,7 @@ async function main() {
     // Seed real data: one user (signup writes users + sessions docs).
     const su = await fetch(`${base1}/api/auth/signup`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: 'backup-owner@example.com', password: 'password123' }),
+      body: JSON.stringify({ email: 'backup-owner@example.com', password: 'Kilua-Test-9871' }),
     });
     check('seed signup succeeds', su.status >= 200 && su.status < 300, `got ${su.status}`);
 

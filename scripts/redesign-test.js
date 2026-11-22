@@ -71,11 +71,11 @@ async function main() {
   // --- auth: name on signup ---
   let r = await anon('GET', '/api/hashtag-groups');
   check('hashtag-groups unauthenticated -> 401', r.status === 401, `got ${r.status}`);
-  r = await a('POST', '/api/auth/signup', { email: 'a@example.com', password: 'password123', name: 'Asha Verma' });
+  r = await a('POST', '/api/auth/signup', { email: 'a@example.com', password: 'Kilua-Test-9871', name: 'Asha Verma' });
   check('signup A with name ok', r.status === 200 && r.data.user?.name === 'Asha Verma', JSON.stringify(r.data));
   r = await a('GET', '/api/auth/me');
   check('/me returns the name', r.data.user?.name === 'Asha Verma', JSON.stringify(r.data));
-  r = await b('POST', '/api/auth/signup', { email: 'b@example.com', password: 'password123' });
+  r = await b('POST', '/api/auth/signup', { email: 'b@example.com', password: 'Kilua-Test-9871' });
   check('signup B without name ok (name absent)', r.status === 200 && !('name' in (r.data.user || {})), JSON.stringify(r.data));
 
   // --- hashtag groups ---

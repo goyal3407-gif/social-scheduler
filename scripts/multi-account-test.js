@@ -155,12 +155,12 @@ async function main() {
   const A = makeClient(BASE);
   const B = makeClient(BASE);
   const C = makeClient(BASE);
-  let r = await A.call('POST', '/api/auth/signup', { email: 'a@example.com', password: 'password123' });
+  let r = await A.call('POST', '/api/auth/signup', { email: 'a@example.com', password: 'Kilua-Test-9871' });
   check('signup A (owner)', r.status === 200 && r.data.user?.role === 'owner', JSON.stringify(r.data));
   const userAId = r.data.user.id;
-  r = await B.call('POST', '/api/auth/signup', { email: 'b@example.com', password: 'password123' });
+  r = await B.call('POST', '/api/auth/signup', { email: 'b@example.com', password: 'Kilua-Test-9871' });
   check('signup B', r.status === 200, JSON.stringify(r.data));
-  r = await C.call('POST', '/api/auth/signup', { email: 'c@example.com', password: 'password123' });
+  r = await C.call('POST', '/api/auth/signup', { email: 'c@example.com', password: 'Kilua-Test-9871' });
   check('signup C', r.status === 200, JSON.stringify(r.data));
   const userCId = r.data.user.id;
 

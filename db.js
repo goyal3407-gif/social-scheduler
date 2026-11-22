@@ -408,7 +408,16 @@ let ownerCache = { id: null, at: 0 };
 async function ownerId() {
   if (ownerCache.id && Date.now() - ownerCache.at < 60000) return ownerCache.id;
   const users = await listUsers();
-  const id = users.length ? users[0].id : null;
+  // Audit fix (2026-11-22): resolve the owner DETERMINISTICALLY as the
+  // earliest-registered account. listUsers() is an unsorted find({}) and
+  // MongoDB natural order is not a guaranteed ordering, so users[0] could
+  // silently become the wrong account after deletions or restores — and
+  // every privileged gate follows this id (admin console, maintenance
+  // bypass, legacy-doc ownership). Array.prototype.sort is stable, so
+  // accounts created in the same millisecond keep their list order and
+  // today's resolution is unchanged.
+  const sorted = [...users].sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
+  const id = sorted.length ? sorted[0].id : null;
   if (id) ownerCache = { id, at: Date.now() };
   return id;
 }

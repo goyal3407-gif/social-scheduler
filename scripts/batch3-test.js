@@ -148,7 +148,7 @@ async function main() {
     const A2 = makeClient(base); // AI cap user (Free)
     const S = makeClient(base); // fresh stats user (Free)
     const CAP = makeClient(base); // owner-comp Ultra (team cap test)
-    const signup = async (client, email) => client.call('POST', '/api/auth/signup', { email, password: 'password123', name: email.split('@')[0] });
+    const signup = async (client, email) => client.call('POST', '/api/auth/signup', { email, password: 'Kilua-Test-9871', name: email.split('@')[0] });
 
     let r = await signup(O, 'owner@example.com');
     check('owner signup', r.status === 200 && r.data.user.role === 'owner', JSON.stringify(r.data).slice(0, 160));
@@ -274,7 +274,7 @@ async function main() {
     check('ai: scheduling is NOT blocked when the AI cap is hit', r.status === 200 && !!r.data.post, `got ${r.status}`);
     // No-key instance: AI_OFF, scheduling untouched.
     const N = makeClient(base2);
-    const nId = (await N.call('POST', '/api/auth/signup', { email: 'nokey@example.com', password: 'password123' })).data.user.id;
+    const nId = (await N.call('POST', '/api/auth/signup', { email: 'nokey@example.com', password: 'Kilua-Test-9871' })).data.user.id;
     r = await N.call('POST', '/api/ai/caption', { topic: 'a perfectly good topic' });
     check('ai: no key -> 503 AI_OFF with plain message', r.status === 503 && r.data.code === 'AI_OFF' && /not switched on/.test(r.data.error || ''), `got ${r.status} ${JSON.stringify(r.data).slice(0, 160)}`);
     seedInstagram(dataDir2, nId, [igAcct('ig-n', 'nokeyuser')]);

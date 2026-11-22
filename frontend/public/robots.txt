@@ -1,3 +1,5 @@
 User-agent: *
 Disallow: /api/
 Allow: /
+
+Sitemap: https://social-scheduler-one-sandy.vercel.app/sitemap.xml

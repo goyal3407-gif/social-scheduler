@@ -68,18 +68,18 @@ async function main() {
   check('api Cache-Control no-store', (r.headers.get('cache-control') || '').includes('no-store'));
 
   // 2. Same-origin check: cross-origin POST is rejected; localhost dev origin is allowed.
-  r = await call('POST', '/api/auth/signup', { email: 'evil@example.com', password: 'password123' }, { origin: 'https://evil.example.com' });
+  r = await call('POST', '/api/auth/signup', { email: 'evil@example.com', password: 'Kilua-Test-9871' }, { origin: 'https://evil.example.com' });
   check('cross-origin signup -> 403', r.status === 403, `got ${r.status}`);
   r = await call('POST', '/api/auth/login', { email: 'nobody@example.com', password: 'wrong' }, { origin: 'http://localhost:5173' });
   check('localhost dev-origin request allowed (401, not 403)', r.status === 401, `got ${r.status}`);
 
   // 3. Signup + login (user A = owner).
-  r = await call('POST', '/api/auth/signup', { email: 'a@example.com', password: 'password123' });
+  r = await call('POST', '/api/auth/signup', { email: 'a@example.com', password: 'Kilua-Test-9871' });
   check('signup A ok', r.status === 200 && r.data.user?.role === 'owner', JSON.stringify(r.data));
   const userA = r.data.user;
   r = await call('POST', '/api/auth/login', { email: 'a@example.com', password: 'wrong-password' });
   check('wrong password -> 401', r.status === 401);
-  r = await call('POST', '/api/auth/signup', { email: 'a@example.com', password: 'password123' });
+  r = await call('POST', '/api/auth/signup', { email: 'a@example.com', password: 'Kilua-Test-9871' });
   check('duplicate signup -> 409', r.status === 409);
   r = await call('POST', '/api/auth/signup', { email: 'short@example.com', password: 'short' });
   check('short password -> 400', r.status === 400);
@@ -164,9 +164,9 @@ async function main() {
   check('next-best-time suggests a slot', r.status === 200 && !!r.data.suggestedTime);
 
   // 11. Change password: wrong current -> 401; right -> ok; old pw stops working.
-  r = await call('POST', '/api/auth/change-password', { currentPassword: 'nope', newPassword: 'newpassword123' });
+  r = await call('POST', '/api/auth/change-password', { currentPassword: 'nope', newPassword: 'Kilua-New-9872' });
   check('change pw wrong current -> 401', r.status === 401);
-  r = await call('POST', '/api/auth/change-password', { currentPassword: 'password123', newPassword: 'newpassword123' });
+  r = await call('POST', '/api/auth/change-password', { currentPassword: 'Kilua-Test-9871', newPassword: 'Kilua-New-9872' });
   check('change password ok', r.status === 200 && r.data.ok === true, JSON.stringify(r.data));
   // New jar: old password must fail, new must work.
   const jar2 = {};
@@ -180,13 +180,13 @@ async function main() {
     let data = null; try { data = await res.json(); } catch { /* ignore */ }
     return { status: res.status, data };
   }
-  r = await callFresh('POST', '/api/auth/login', { email: 'a@example.com', password: 'password123' });
+  r = await callFresh('POST', '/api/auth/login', { email: 'a@example.com', password: 'Kilua-Test-9871' });
   check('old password rejected after change', r.status === 401);
-  r = await callFresh('POST', '/api/auth/login', { email: 'a@example.com', password: 'newpassword123' });
+  r = await callFresh('POST', '/api/auth/login', { email: 'a@example.com', password: 'Kilua-New-9872' });
   check('new password works', r.status === 200, JSON.stringify(r.data));
 
   // 12. Second user sees only their own data (isolation).
-  r = await callFresh('POST', '/api/auth/signup', { email: 'b@example.com', password: 'password123' });
+  r = await callFresh('POST', '/api/auth/signup', { email: 'b@example.com', password: 'Kilua-Test-9871' });
   check('signup B ok (member)', r.status === 200 && r.data.user?.role === 'member', JSON.stringify(r.data));
   const userB = r.data.user;
   r = await callFresh('GET', '/api/posts?limit=500');
@@ -201,7 +201,7 @@ async function main() {
   check('delete account B ok', r.status === 200 && r.data.ok === true, JSON.stringify(r.data));
   const jar3 = {};
   const loginB = await (async () => {
-    const res = await fetch(`${BASE}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'b@example.com', password: 'password123' }) });
+    const res = await fetch(`${BASE}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'b@example.com', password: 'Kilua-Test-9871' }) });
     return res.status;
   })();
   check('deleted user cannot log in', loginB === 401, `got ${loginB}`);

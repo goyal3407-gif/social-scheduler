@@ -19,6 +19,7 @@ const path = require('path');
 const crypto = require('crypto');
 const net = require('net');
 const tls = require('tls');
+const dnsPromises = require('node:dns').promises;
 const db = require('./db');
 
 const app = express();
@@ -184,8 +185,33 @@ const SAFE_MEDIA_TYPES = new Set([
   'image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/avif',
   'video/mp4', 'video/quicktime', 'video/webm',
 ]);
+// Magic-byte verification (audit L-02, 2026-11-22): the declared MIME
+// type used to be trusted on its own — a text file declared as
+// image/jpeg was stored as an "image". The bytes must now carry the
+// signature of the type they claim to be. Signatures are the stable
+// file-format magics: JPEG SOI, PNG IHDR preamble, GIF header, RIFF
+// container with a WEBP form type, an ISO-BMFF ftyp box for MP4 /
+// QuickTime / AVIF (AVIF additionally requires an avif-family brand),
+// and the EBML header for WebM.
+function mediaSignatureOk(contentType, buffer) {
+  if (!buffer || buffer.length < 4) return false;
+  const b = buffer;
+  const ascii = (from, to) => b.toString('latin1', from, to);
+  switch (contentType) {
+    case 'image/jpeg': return b[0] === 0xFF && b[1] === 0xD8 && b[2] === 0xFF;
+    case 'image/png': return b.length >= 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4E && b[3] === 0x47 && b[4] === 0x0D && b[5] === 0x0A && b[6] === 0x1A && b[7] === 0x0A;
+    case 'image/gif': return ascii(0, 4) === 'GIF8';
+    case 'image/webp': return b.length >= 12 && ascii(0, 4) === 'RIFF' && ascii(8, 12) === 'WEBP';
+    case 'image/avif': return b.length >= 12 && ascii(4, 8) === 'ftyp' && /^(avif|avis|mif1|mif2|msf1)/.test(ascii(8, 12));
+    case 'video/mp4':
+    case 'video/quicktime': return b.length >= 8 && ascii(4, 8) === 'ftyp';
+    case 'video/webm': return b[0] === 0x1A && b[1] === 0x45 && b[2] === 0xDF && b[3] === 0xA3;
+    default: return false;
+  }
+}
 // Parse a data: URL into { contentType, buffer }, or null when it is not
-// a decodable image/video data URL of an allowed type.
+// a decodable image/video data URL of an allowed type whose bytes match
+// that type's signature (audit L-02).
 function parseDataUrl(s) {
   if (typeof s !== 'string') return null;
   const m = /^data:([^;,]+)?(;base64)?,([\s\S]*)$/i.exec(s);
@@ -194,7 +220,8 @@ function parseDataUrl(s) {
   if (!SAFE_MEDIA_TYPES.has(contentType)) return null;
   try {
     const buffer = m[2] ? Buffer.from(m[3], 'base64') : Buffer.from(decodeURIComponent(m[3]), 'utf8');
-    return buffer.length ? { contentType, buffer } : null;
+    if (!buffer.length || !mediaSignatureOk(contentType, buffer)) return null;
+    return { contentType, buffer };
   } catch { return null; }
 }
 
@@ -385,6 +412,31 @@ function verifyPassword(password, user) {
   if (expected.length !== actual.length) return false;
   return crypto.timingSafeEqual(expected, actual);
 }
+// Common-password blocklist (audit L-01, 2026-11-22): the length-only
+// policy (8–128) let through the exact passwords credential-stuffing
+// lists try first. This is a focused exact-match list (compared
+// lower-cased) of the most-guessed values, rejected at EVERY
+// password-setting site — signup, change-password and reset — via
+// isCommonPassword(). It is deliberately not a dictionary: length,
+// the per-email login throttle and the per-IP auth limit carry the
+// rest of the defence.
+const COMMON_PASSWORDS = new Set([
+  'password', 'password1', 'password123', 'password1234', 'passw0rd', 'p@ssw0rd', 'p@ssword',
+  '123456', '1234567', '12345678', '123456789', '1234567890', '123456789a', '12345', '1234', '123123', '111111', '000000',
+  'abc123', 'abcd1234', 'qwerty', 'qwerty123', 'qwertyuiop', 'qwerty1', '1q2w3e4r', '1q2w3e', '1qaz2wsx', 'qazwsx', 'zxcvbnm',
+  'letmein', 'iloveyou', 'admin', 'admin123', 'administrator', 'welcome', 'welcome123', 'login', 'user1234',
+  'monkey', 'dragon', 'football', 'baseball', 'basketball', 'soccer', 'hockey', 'tennis123', 'cricket',
+  'sunshine', 'master', 'shadow', 'ashley', 'michael', 'superman', 'batman', 'spiderman', 'starwars',
+  'ninja', 'mustang', 'princess', 'charlie', 'thomas', 'jordan', 'hunter', 'hunter2', 'ranger', 'buster',
+  'killer', 'george', 'trustno1', 'computer', 'internet', 'samsung', 'pokemon', 'naruto', 'lol12345',
+  'secret', 'secret123', 'happy123', 'summer123', 'winter123', 'orange123', 'banana123', 'flower123',
+  'india123', 'indian123', 'mumbai123', 'delhi123', 'google123', 'facebook1', 'instagram1', 'youtube123',
+  'newpassword', 'newpassword123', 'changeme', 'changeme123', 'default1', 'testing123', 'testtest', 'abcd12345',
+]);
+function isCommonPassword(password) {
+  return COMMON_PASSWORDS.has(String(password || '').toLowerCase());
+}
+const COMMON_PASSWORD_ERROR = 'That password is one of the most commonly guessed — choose a less obvious one.';
 function publicUser(u) {
   if (!u) return null;
   const out = { id: u.id, email: u.email, role: u.role || 'member', createdAt: u.createdAt };
@@ -588,6 +640,7 @@ app.post('/api/auth/signup', ah(async (req, res) => {
   if (!validEmail(email)) return res.status(400).json({ ok: false, error: 'Enter a valid email address, like you@example.com.' });
   if (password.length < 8) return res.status(400).json({ ok: false, error: 'Password must be at least 8 characters long.' });
   if (password.length > 128) return res.status(400).json({ ok: false, error: 'Password must be at most 128 characters long.' });
+  if (isCommonPassword(password)) return res.status(400).json({ ok: false, error: COMMON_PASSWORD_ERROR });
   const users = await db.listUsers();
   // Owner console toggle (batch 6): signups can be paused globally.
   // The very first account (the owner bootstrap) is never blocked —
@@ -680,6 +733,7 @@ app.post('/api/auth/change-password', ah(async (req, res) => {
   if (!verifyPassword(current, user)) return res.status(401).json({ ok: false, error: 'Your current password is not right — check it and try again.' });
   if (next.length < 8) return res.status(400).json({ ok: false, error: 'The new password must be at least 8 characters long.' });
   if (next.length > 128) return res.status(400).json({ ok: false, error: 'The new password must be at most 128 characters long.' });
+  if (isCommonPassword(next)) return res.status(400).json({ ok: false, error: COMMON_PASSWORD_ERROR });
   if (next === current) return res.status(400).json({ ok: false, error: 'The new password is the same as the old one — pick a different one.' });
   const salt = crypto.randomBytes(16).toString('hex');
   await db.updateUser(user.id, { salt, passwordHash: hashPassword(next, salt) });
@@ -955,6 +1009,7 @@ app.post('/api/auth/reset', ah(async (req, res) => {
   if (!token || token.length > 200) return invalid();
   if (next.length < 8) return res.status(400).json({ ok: false, error: 'The new password must be at least 8 characters long.' });
   if (next.length > 128) return res.status(400).json({ ok: false, error: 'The new password must be at most 128 characters long.' });
+  if (isCommonPassword(next)) return res.status(400).json({ ok: false, error: COMMON_PASSWORD_ERROR });
   const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
   const rec = await db.getPasswordResetByHash(tokenHash);
   if (!rec || !rec.expiresAt || new Date(rec.expiresAt).getTime() < Date.now()) return invalid();
@@ -1523,6 +1578,18 @@ async function instagramScan(force = false) {
   return scan;
 }
 app.get('/api/db-status', ah(async (req, res) => {
+  // Audit fix V-01 (2026-11-22): this page returns deployment-health
+  // detail AND runs the Instagram token keeper on every call — it is
+  // the OWNER's diagnostics page, not a public probe. Owner session
+  // only (the same identity the admin console trusts); everyone else
+  // gets the console's plain 404, so the page's existence is not
+  // admitted and no unauthenticated caller can trigger the keeper.
+  // Public liveness lives at /api/health. The frontend already
+  // tolerates a failed db-status call (Settings simply renders
+  // without the storage warning), and the keeper still runs on cron
+  // and on the owner's own authenticated activity.
+  const me = await adminOwner(req);
+  if (!me) return adminApi404(res);
   // Connect eagerly first: without this, a cold container reports "json"
   // until some other data request happens, and the UI shows a false warning.
   await db.ensureMongo();
@@ -1872,12 +1939,16 @@ async function findInstagramAccountViaPages(token) {
 }
 // Session-authenticated (the /api middleware ran requireAuth): mints
 // the one-time connect link the app opens in the system browser.
-app.post('/api/instagram/connect-link', (req, res) => {
+app.post('/api/instagram/connect-link', ah(async (req, res) => {
+  // Audit hardening L-06: this handler mints a signed token from
+  // req.userId — refuse explicitly when the auth middleware did not
+  // populate it, instead of trusting the exemption list alone.
+  if (!req.userId) return res.status(401).json({ ok: false, error: 'Please log in first — your session has expired or you are not logged in.' });
   const proto = isSecureRequest(req) ? 'https' : 'http';
   const host = req.get('host') || 'social-scheduler-one-sandy.vercel.app';
   const url = `${proto}://${host}/api/instagram/connect?t=${encodeURIComponent(signConnectToken(req.userId))}`;
   res.json({ ok: true, url });
-});
+}));
 app.get('/api/instagram/connect', ah(async (req, res) => {
   // Self-authenticating (see the /api middleware note): the session
   // cookie (normal browser use) OR a valid one-time connect link.
@@ -2023,12 +2094,15 @@ const IG_LOGIN_REASONS = {
 };
 // Session-authenticated: mints the one-time link the app opens in the
 // system browser (same pattern as /api/instagram/connect-link).
-app.post('/api/instagram/ig-connect-link', (req, res) => {
+app.post('/api/instagram/ig-connect-link', ah(async (req, res) => {
+  // Audit hardening L-06: explicit in-handler auth check (see
+  // /api/instagram/connect-link).
+  if (!req.userId) return res.status(401).json({ ok: false, error: 'Please log in first — your session has expired or you are not logged in.' });
   const proto = isSecureRequest(req) ? 'https' : 'http';
   const host = req.get('host') || 'social-scheduler-one-sandy.vercel.app';
   const url = `${proto}://${host}/api/instagram/ig-connect?t=${encodeURIComponent(signConnectToken(req.userId))}`;
   res.json({ ok: true, url });
-});
+}));
 app.get('/api/instagram/ig-connect', ah(async (req, res) => {
   // Self-authenticating (see the /api middleware note): the session
   // cookie (normal browser use) OR a valid one-time connect link.
@@ -2209,13 +2283,16 @@ app.get('/api/youtube/status', ah(async (req, res) => {
     connectedAt: (conn && conn.connectedAt) || '',
   });
 }));
-app.post('/api/youtube/connect-link', (req, res) => {
+app.post('/api/youtube/connect-link', ah(async (req, res) => {
+  // Audit hardening L-06: explicit in-handler auth check (see
+  // /api/instagram/connect-link).
+  if (!req.userId) return res.status(401).json({ ok: false, error: 'Please log in first — your session has expired or you are not logged in.' });
   if (!youtubeConfigured()) return res.status(503).json({ ok: false, error: 'YouTube is not configured on the server yet — the app owner needs to finish the Google setup.' });
   const proto = isSecureRequest(req) ? 'https' : 'http';
   const host = req.get('host') || 'social-scheduler-one-sandy.vercel.app';
   const url = `${proto}://${host}/api/youtube/connect?t=${encodeURIComponent(signYouTubeConnectToken(req.userId))}`;
   res.json({ ok: true, url });
-});
+}));
 app.get('/api/youtube/connect', ah(async (req, res) => {
   // Self-authenticating like the Instagram connect: session cookie OR
   // a valid one-time connect link.
@@ -2317,9 +2394,114 @@ async function youtubeAccessToken(userId) {
   ytAccessCache.set(userId, { token: j.access_token, exp: Date.now() + (Number(j.expires_in) || 3600) * 1000 });
   return j.access_token;
 }
+// ---------- SSRF guard for user-supplied media URLs (audit V-02) ----------
+// At publish time the server fetches a post's mediaUrl, which the post's
+// owner supplied — without checks that is a server-side request forgery
+// surface (internal services, metadata-adjacent addresses). The guarded
+// fetch below enforces: https only; the host must resolve ONLY to public
+// addresses (private / loopback / link-local / reserved ranges rejected,
+// IP literals checked directly); every redirect hop is re-validated the
+// same way; a 15 s ceiling on the whole transfer; and a streamed size
+// cap matching the app's largest media limit (UPLOAD_MAX_BYTES, 200 MB).
+// Known residual: DNS is re-resolved by fetch itself, so a sub-second
+// DNS-rebinding race remains in theory — accepted for this threat model
+// (authenticated users only, GET only, body goes to the user's own
+// YouTube upload, and the deployment has no credential metadata
+// endpoint). Deliberate scoping: 198.18.0.0/15 (benchmarking) is NOT
+// blocked — it hosts no internal services on the deployment target,
+// while fake-IP DNS resolvers (corporate proxies, privacy DNS) map
+// ordinary public hosts into it, so blocking it would break legitimate
+// public media fetches behind such resolvers.
+function ipIsPrivateOrReserved(ip) {
+  if (net.isIPv4(ip)) {
+    const [a, b] = ip.split('.').map(Number);
+    if (a === 0 || a === 10 || a === 127) return true; // "this network", private, loopback
+    if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT shared address space
+    if (a === 169 && b === 254) return true; // link-local (incl. cloud metadata)
+    if (a === 172 && b >= 16 && b <= 31) return true; // private
+    if (a === 192 && b === 0) return true; // 192.0.0.0/24 IETF special (incl. NAT64 well-known)
+    if (a === 192 && b === 168) return true; // private
+    if (ip.startsWith('192.0.2.')) return true; // TEST-NET-1 documentation
+    if (ip.startsWith('198.51.100.')) return true; // TEST-NET-2 documentation
+    if (ip.startsWith('203.0.113.')) return true; // TEST-NET-3 documentation
+    if (a >= 224) return true; // multicast + reserved (240/4) + broadcast
+    return false;
+  }
+  if (net.isIPv6(ip)) {
+    const v = ip.toLowerCase();
+    if (v === '::' || v === '::1') return true; // unspecified + loopback
+    const mapped = v.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+    if (mapped) return ipIsPrivateOrReserved(mapped[1]); // IPv4-mapped
+    const nat64 = v.match(/^64:ff9b::(\d+\.\d+\.\d+\.\d+)$/);
+    if (nat64) return ipIsPrivateOrReserved(nat64[1]); // NAT64 well-known prefix embeds IPv4
+    if (/^f[cd]/.test(v)) return true; // fc00::/7 unique local
+    if (/^fe[89ab]/.test(v)) return true; // fe80::/10 link-local
+    if (v.startsWith('ff')) return true; // multicast
+    if (v.startsWith('2001:db8:')) return true; // documentation
+    if (v.startsWith('100:')) return true; // 100::/64 discard-only
+    return false;
+  }
+  return true; // not a parseable IP — fail closed
+}
+async function assertPublicHttpsUrl(raw) {
+  let u;
+  try { u = new URL(raw); } catch { return null; }
+  if (u.protocol !== 'https:') return null;
+  const host = u.hostname.replace(/^\[|\]$/g, '');
+  if (!host) return null;
+  if (net.isIP(host)) return ipIsPrivateOrReserved(host) ? null : u;
+  let addrs;
+  try { addrs = await dnsPromises.lookup(host, { all: true, verbatim: true }); } catch { return null; }
+  if (!addrs || !addrs.length) return null;
+  for (const a of addrs) if (ipIsPrivateOrReserved(a.address)) return null;
+  return u;
+}
+const REMOTE_MEDIA_TIMEOUT_MS = 15 * 1000;
+const REMOTE_MEDIA_MAX_BYTES = 200 * 1024 * 1024; // == UPLOAD_MAX_BYTES (chunked-upload ceiling)
+async function fetchPublicMediaBytes(rawUrl) {
+  let current = rawUrl;
+  for (let hop = 0; hop <= 4; hop++) {
+    const u = await assertPublicHttpsUrl(current);
+    if (!u) return null;
+    let r;
+    try {
+      r = await fetch(u, { redirect: 'manual', signal: AbortSignal.timeout(REMOTE_MEDIA_TIMEOUT_MS) });
+    } catch { return null; }
+    if (r.status >= 300 && r.status < 400) {
+      const loc = r.headers.get('location');
+      if (!loc || hop === 4) return null;
+      try { current = new URL(loc, u).toString(); } catch { return null; }
+      continue; // the next loop iteration re-validates the new hop
+    }
+    if (!r.ok) return null;
+    const declared = Number(r.headers.get('content-length') || 0);
+    if (Number.isFinite(declared) && declared > REMOTE_MEDIA_MAX_BYTES) return null;
+    try {
+      if (r.body && typeof r.body.getReader === 'function') {
+        const reader = r.body.getReader();
+        const chunks = [];
+        let total = 0;
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          total += value.length;
+          if (total > REMOTE_MEDIA_MAX_BYTES) { try { await reader.cancel(); } catch { /* already gone */ } return null; }
+          chunks.push(Buffer.from(value));
+        }
+        const buffer = Buffer.concat(chunks, total);
+        return buffer.length ? { buffer, contentType: r.headers.get('content-type') || 'video/mp4' } : null;
+      }
+      const buffer = Buffer.from(await r.arrayBuffer());
+      if (!buffer.length || buffer.length > REMOTE_MEDIA_MAX_BYTES) return null;
+      return { buffer, contentType: r.headers.get('content-type') || 'video/mp4' };
+    } catch { return null; }
+  }
+  return null;
+}
 // Read the bytes of a post's media for the YouTube upload: app-stored
 // files via /media/<id>, inline data: URLs, or any public https URL
-// (OCI bridge copies and link media included).
+// (OCI bridge copies and link media included). Remote URLs go through
+// the SSRF-guarded fetch above (audit V-02).
 async function fetchPostMediaBytes(post) {
   const url = String((post && post.mediaUrl) || '');
   const m = url.match(/\/media\/([A-Za-z0-9_-]{6,})/);
@@ -2336,11 +2518,11 @@ async function fetchPostMediaBytes(post) {
     return null;
   }
   if (/^https?:\/\//i.test(url)) {
-    const r = await fetch(url);
-    if (r.ok) {
-      const buffer = Buffer.from(await r.arrayBuffer());
-      if (buffer.length) return { buffer, contentType: r.headers.get('content-type') || 'video/mp4' };
-    }
+    // SSRF-guarded fetch (audit V-02): https only, public addresses
+    // only, redirects re-validated, 15 s ceiling, 200 MB streamed cap.
+    // Anything else (including plain http) reads as "media not readable"
+    // to the publish paths, exactly like a failed fetch did before.
+    return fetchPublicMediaBytes(url);
   }
   return null;
 }
@@ -4442,6 +4624,13 @@ app.post('/api/media/upload/complete', ah(async (req, res) => {
   if (buffer.length !== session.size) {
     await db.deleteUploadSession(session.id).catch(() => {});
     return res.status(400).json({ ok: false, error: 'That upload arrived incomplete — try uploading the file again.' });
+  }
+  // Magic-byte verification (audit L-02): the assembled bytes must
+  // match the session's declared type — the declared MIME alone is
+  // not trusted, exactly as in the direct-upload parser.
+  if (!mediaSignatureOk(session.contentType, buffer)) {
+    await db.deleteUploadSession(session.id).catch(() => {});
+    return res.status(400).json({ ok: false, error: 'That file\u2019s contents do not match its type — upload the real image or video file.' });
   }
   const fileId = newMediaFileId();
   const useOci = ociEnabled();

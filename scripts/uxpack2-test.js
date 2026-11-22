@@ -73,7 +73,7 @@ async function main() {
   if (!up) { console.log(serverLog); process.exit(1); }
 
   const a = makeClient();
-  let r = await a('POST', '/api/auth/signup', { email: 'a@example.com', password: 'password123', name: 'Asha Verma' });
+  let r = await a('POST', '/api/auth/signup', { email: 'a@example.com', password: 'Kilua-Test-9871', name: 'Asha Verma' });
   check('signup ok', r.status === 200, JSON.stringify(r.data));
 
   // --- delete contract (the Undo toast flush calls exactly this) ---

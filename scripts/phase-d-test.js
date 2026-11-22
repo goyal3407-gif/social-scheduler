@@ -79,7 +79,7 @@ function startServer({ port, dataDir, stubLog }) {
 
 async function waitUp(base) {
   for (let i = 0; i < 60; i++) {
-    try { const r = await fetch(`${base}/api/db-status`); if (r.ok) return; } catch {}
+    try { const r = await fetch(`${base}/api/health`); if (r.ok) return; } catch {}
     await sleep(250);
   }
   throw new Error('server did not come up');
@@ -126,20 +126,20 @@ async function main() {
 
     // ---------- D11 referrals ----------
     const A = makeClient(BASE);
-    let r = await A.call('POST', '/api/auth/signup', { email: 'a@example.com', password: 'password123', name: 'Alice A' });
+    let r = await A.call('POST', '/api/auth/signup', { email: 'a@example.com', password: 'Kilua-Test-9871', name: 'Alice A' });
     check('D: inviter signup succeeds', r.status === 200, JSON.stringify(r.data).slice(0, 120));
     r = await A.call('GET', '/api/referral');
     check('D11: referral returns a code + link + zero count', r.data.ok && /^K[0-9A-F]{6}$/.test(r.data.code || '') && (r.data.link || '').includes(`?ref=${r.data.code}`) && r.data.count === 0, JSON.stringify(r.data).slice(0, 200));
     const codeA = r.data.code;
 
     const B = makeClient(BASE);
-    r = await B.call('POST', '/api/auth/signup', { email: 'b@example.com', password: 'password123', ref: codeA });
+    r = await B.call('POST', '/api/auth/signup', { email: 'b@example.com', password: 'Kilua-Test-9871', ref: codeA });
     check('D11: signup with a valid ref succeeds', r.status === 200);
     r = await A.call('GET', '/api/referral');
     check('D11: inviter count is 1 after the referred signup', r.data.count === 1, `count=${r.data.count}`);
 
     const Cx = makeClient(BASE);
-    r = await Cx.call('POST', '/api/auth/signup', { email: 'c@example.com', password: 'password123', ref: 'ZZZZZZ' });
+    r = await Cx.call('POST', '/api/auth/signup', { email: 'c@example.com', password: 'Kilua-Test-9871', ref: 'ZZZZZZ' });
     check('D11: signup with an unknown ref still succeeds (ignored)', r.status === 200);
     r = await A.call('GET', '/api/referral');
     check('D11: unknown ref does not change the count', r.data.count === 1, `count=${r.data.count}`);

@@ -127,10 +127,10 @@ async function phaseA() {
     check('A: server boots', await waitUp(base), getLog().slice(-400));
     const A = makeClient(base);
     const B = makeClient(base);
-    let r = await A.call('POST', '/api/auth/signup', { email: 'a@v13.test', password: 'password123' });
+    let r = await A.call('POST', '/api/auth/signup', { email: 'a@v13.test', password: 'Kilua-Test-9871' });
     check('A: signup A', r.status === 200 && !!r.data.user?.id, JSON.stringify(r.data));
     const userA = r.data.user.id;
-    r = await B.call('POST', '/api/auth/signup', { email: 'b@v13.test', password: 'password123' });
+    r = await B.call('POST', '/api/auth/signup', { email: 'b@v13.test', password: 'Kilua-Test-9871' });
     check('A: signup B', r.status === 200 && !!r.data.user?.id);
     seedInstagram(dataDir, userA);
 
@@ -256,6 +256,12 @@ async function phaseA() {
     // --- chunked upload happy path (small file, byte-identical) ---
     const payload = Buffer.alloc(100 * 1024, 0);
     for (let i = 0; i < payload.length; i++) payload[i] = i % 251;
+    // Fixture update (audit L-02): chunked completion now verifies the
+    // assembled bytes against the declared type's magic bytes, so the
+    // payload starts with a real MP4 ftyp box; the remaining pattern
+    // bytes are unchanged and the byte-identical check below still
+    // compares against this exact buffer.
+    payload.writeUInt32BE(24, 0); payload.write('ftyp', 4, 'latin1'); payload.write('isom', 8, 'latin1'); payload.writeUInt32BE(0x200, 12); payload.write('isomiso2', 16, 'latin1');
     r = await A.call('POST', '/api/media/upload/init', { name: 'chunked.mp4', size: payload.length, contentType: 'video/mp4' });
     const up2 = r.data.uploadId;
     r = await A.call('POST', '/api/media/upload/chunk', { uploadId: up2, index: 0, dataUrl: `data:video/mp4;base64,${payload.toString('base64')}` });
@@ -308,7 +314,7 @@ async function phaseB() {
   try {
     check('B: server boots', await waitUp(base), getLog().slice(-400));
     const C = makeClient(base);
-    let r = await C.call('POST', '/api/auth/signup', { email: 'c@v13.test', password: 'password123' });
+    let r = await C.call('POST', '/api/auth/signup', { email: 'c@v13.test', password: 'Kilua-Test-9871' });
     check('B: signup C', r.status === 200 && !!r.data.user?.id, JSON.stringify(r.data).slice(0, 200));
     seedInstagram(dataDir, r.data.user.id);
 
@@ -413,7 +419,7 @@ async function phaseC() {
     try {
       const up = await waitUp(base);
       const C = makeClient(base);
-      let r = await C.call('POST', '/api/auth/signup', { email: `c${port}@v13.test`, password: 'password123' });
+      let r = await C.call('POST', '/api/auth/signup', { email: `c${port}@v13.test`, password: 'Kilua-Test-9871' });
       r = await C.call('POST', '/api/media/upload', { name: 'variant.png', dataUrl: PNG_DATA_URL });
       const item = r.data.media;
       check(`C: upload ok (${name})`, up && r.status === 200 && item?.storage === 'oci', JSON.stringify(r.data).slice(0, 150));
@@ -441,7 +447,7 @@ async function phaseC() {
   try {
     await waitUp(base);
     const C = makeClient(base);
-    await C.call('POST', '/api/auth/signup', { email: `c${port}@v13.test`, password: 'password123' });
+    await C.call('POST', '/api/auth/signup', { email: `c${port}@v13.test`, password: 'Kilua-Test-9871' });
     let r = await C.call('POST', '/api/media/upload', { name: 'orphan.png', dataUrl: PNG_DATA_URL });
     const item = r.data.media;
     check('C: upload ok (garbage PEM control)', r.status === 200 && item?.storage === 'oci');
