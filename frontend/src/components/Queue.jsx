@@ -8,6 +8,7 @@ const STATUSES = ['scheduled', 'draft', 'published', 'partial', 'failed']
 export default function Queue({ posts, loading, onEdit, onDelete, onPublish, publishingId, onCreate, onDuplicate, onPostAgain, onReschedule, onRescheduleNextBest, overdue, onPublishDue, onDeleteMany, onReconnect, tr, searchSeed, searchNonce, onRetry, retryingId }) {
   const t = tr || ((k) => k)
   const LABELS = { scheduled: t('scheduled'), draft: t('drafts'), published: t('published'), partial: t('partial'), failed: t('failed') }
+  const [swipeHintSeen, setSwipeHintSeen] = useState(() => { try { return localStorage.getItem('ss-swipe-hint') === '1' } catch { return true } })
   const [view, setView] = useState('list')
   const [filter, setFilter] = useState('all')
   const [platform, setPlatform] = useState('all')
@@ -82,6 +83,13 @@ export default function Queue({ posts, loading, onEdit, onDelete, onPublish, pub
           <div style={{ flex: 1 }}><b>{t('queueOverdueTitle').replace('{n}', overdue.length)}</b> — {t('queueOverdueBody')}</div>
           <button type="button" className="btn primary small" disabled={publishingId === 'due'} onClick={onPublishDue}>{publishingId === 'due' ? t('publishingWord') : t('publishDue')}</button>
         </div>
+      )}
+
+      {!swipeHintSeen && !loading && filtered.length > 0 && (
+        <p className="swipe-hint">
+          <span>{t('swipeHint')}</span>
+          <button type="button" className="update-close" aria-label={t('dismiss')} onClick={() => { setSwipeHintSeen(true); try { localStorage.setItem('ss-swipe-hint', '1') } catch { /* private mode */ } }}>✕</button>
+        </p>
       )}
 
       <div className="toolbar">

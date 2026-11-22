@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '../api.js'
 import MyStats from './MyStats.jsx'
+import { Skeleton } from './shared.jsx'
 
 const PLAN_BLURBS = { free: 'blurbFree', pro: 'blurbPro', max: 'blurbMax', ultra: 'blurbUltra' }
 
@@ -27,10 +28,15 @@ const PLAN_EXTRAS = {
 export default function Pricing({ tr }) {
   const t = tr || ((k) => k)
   const [data, setData] = useState(null)
+  const [failed, setFailed] = useState(false)
   const [period, setPeriod] = useState('monthly')
+  const load = () => {
+    setFailed(false)
+    api.getPlanUsage().then((d) => setData(d)).catch(() => setFailed(true))
+  }
   useEffect(() => {
     let live = true
-    api.getPlanUsage().then((d) => { if (live) setData(d) }).catch(() => {})
+    api.getPlanUsage().then((d) => { if (live) setData(d) }).catch(() => { if (live) setFailed(true) })
     return () => { live = false }
   }, [])
 
@@ -64,7 +70,18 @@ export default function Pricing({ tr }) {
     return { planId: plan.plan, msg: t('recFits') }
   }, [plan, pricing, usage, t])
 
-  if (!data || !plan) return null
+  // Phase 3 (Batch D, M-04): never a blank tab — skeleton while the
+  // plan loads, an honest message + Retry if it failed.
+  if (!data || !plan) {
+    return failed ? (
+      <div className="card">
+        <p className="muted" style={{ marginTop: 0 }}>{t('pricingLoadFailed')}</p>
+        <button type="button" className="btn ghost" onClick={load}>{t('retry')}</button>
+      </div>
+    ) : (
+      <div aria-busy="true"><Skeleton rows={3} /><Skeleton rows={4} /></div>
+    )
+  }
   const lim = plan.limits || {}
   const meter = (label, used, limit) => (
     <div key={label} style={{ minWidth: 150, flex: '1 1 150px' }}>
@@ -97,7 +114,7 @@ export default function Pricing({ tr }) {
       <section className="card" aria-label={t('myPlan')} style={{ marginBottom: 14 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <h2 style={{ margin: 0 }}>{t('myPlan')} — {plan.planName}</h2>
-          {rec && rec.planId === plan.plan && <span className="badge" style={{ background: 'var(--gold)', color: '#191204' }}>{t('bestForYou')}</span>}
+          {rec && rec.planId === plan.plan && <span className="badge" style={{ background: 'var(--gold-bright)', color: 'var(--ink)' }}>{t('bestForYou')}</span>}
         </div>
         <p className="muted small" style={{ margin: '6px 0 0' }}>{PLAN_BLURBS[plan.plan] ? t(PLAN_BLURBS[plan.plan]) : ''}</p>
         {plan.comp
@@ -121,7 +138,7 @@ export default function Pricing({ tr }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', margin: '18px 0 12px' }} role="group" aria-label={t('billingPeriod')}>
         <button type="button" className={`btn small ${period === 'monthly' ? 'primary' : 'ghost'}`} onClick={() => setPeriod('monthly')}>{t('monthly')}</button>
         <button type="button" className={`btn small ${period === 'yearly' ? 'primary' : 'ghost'}`} onClick={() => setPeriod('yearly')}>{t('yearly')}</button>
-        {period === 'yearly' && <span className="badge" style={{ background: 'var(--gold)', color: '#191204' }}>{t('twoMonthsFree')}</span>}
+        {period === 'yearly' && <span className="badge" style={{ background: 'var(--gold-bright)', color: 'var(--ink)' }}>{t('twoMonthsFree')}</span>}
       </div>
 
       <div className="plan-grid">
@@ -132,9 +149,9 @@ export default function Pricing({ tr }) {
             <section key={o.plan} className="card" aria-label={`${o.name} plan`}
               style={{ display: 'flex', flexDirection: 'column', gap: 8, ...(o.plan === 'max' ? { border: '2px solid var(--gold, #e8c268)' } : {}), ...(isRec ? { outline: '2px solid var(--gold, #e8c268)', outlineOffset: 2 } : {}) }}>
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', minHeight: 22 }}>
-                {o.plan === 'max' && <span className="badge" style={{ background: 'var(--gold)', color: '#191204' }}>{t('mostPopular')}</span>}
+                {o.plan === 'max' && <span className="badge" style={{ background: 'var(--gold-bright)', color: 'var(--ink)' }}>{t('mostPopular')}</span>}
                 {isCurrent && <span className="badge">{t('currentPlan')}</span>}
-                {isRec && <span className="badge" style={{ background: 'var(--gold)', color: '#191204' }}>{t('bestForYou')}</span>}
+                {isRec && <span className="badge" style={{ background: 'var(--gold-bright)', color: 'var(--ink)' }}>{t('bestForYou')}</span>}
               </div>
               <h3 style={{ margin: 0, fontSize: 19 }}>{o.name}</h3>
               <p style={{ margin: 0 }}><b style={{ fontSize: 24 }}>{inr(o.priceInr * factor)}</b> <span className="muted small">{period === 'yearly' ? t('perYear') : t('perMonth')}</span></p>

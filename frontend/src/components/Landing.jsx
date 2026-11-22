@@ -1,4 +1,6 @@
+import { useEffect, useState } from 'react'
 import Auth from './Auth.jsx'
+import { api } from '../api.js'
 import { openExternalUrl } from '../openExternal.js'
 
 // Static pages (privacy/terms/contact): inside the app they open in
@@ -38,6 +40,15 @@ const STEPS = [
 ]
 
 export default function Landing({ onAuth }) {
+  // Pricing strip (Phase 3 Batch D, L-02): plan names + prices come
+  // from the server's single PLANS config via the public app-status
+  // endpoint — the strip simply does not render if that fetch fails.
+  const [plans, setPlans] = useState([])
+  useEffect(() => {
+    let live = true
+    api.getAppStatus().then((d) => { if (live && Array.isArray(d.plans)) setPlans(d.plans) }).catch(() => {})
+    return () => { live = false }
+  }, [])
   return (
     <div className="landing">
       <header className="landing-hero">
@@ -82,6 +93,21 @@ export default function Landing({ onAuth }) {
         <h2>YouTube, too</h2>
         <p>KiluaAI uses YouTube API Services to upload videos to your own YouTube channel. Tick YouTube next to Instagram in the composer, set the title, the visibility (Public, Unlisted or Private) and whether the video is made for kids, and the same video is published to both platforms at the scheduled time. Until Google approves the app, YouTube keeps new uploads Private — the visibility you chose applies automatically once that approval passes.</p>
       </section>
+
+      {plans.length > 0 && (
+        <section className="landing-sec">
+          <h2>Simple pricing</h2>
+          <div className="feat-grid">
+            {plans.map((p) => (
+              <div className="feat-card" key={p.id}>
+                <b>{p.name}</b>
+                <span>{p.priceInr === 0 ? 'Free forever — 2 accounts, 30 posts a month.' : `₹${Number(p.priceInr).toLocaleString('en-IN')} / month, GST included.`}</span>
+              </div>
+            ))}
+          </div>
+          <p className="muted small" style={{ marginTop: 10 }}>Yearly plans get 2 months free. Upgrades are paid by UPI inside the app — you only ever pay the difference.</p>
+        </section>
+      )}
 
       <footer className="landing-foot">
         <nav>

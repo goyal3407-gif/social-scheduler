@@ -145,9 +145,9 @@ function DeviceLibrary({ onUploaded, onUpload, tr }) {
             <div key={item.id}>
               <div className="device-row">
                 {item.posterUrl
-                  ? <img src={item.posterUrl} alt="" style={{ width: 44, height: 58, objectFit: 'cover', borderRadius: 8, flex: 'none' }} />
+                  ? <img loading="lazy" decoding="async" width="44" height="58" src={item.posterUrl} alt="" style={{ width: 44, height: 58, objectFit: 'cover', borderRadius: 8, flex: 'none' }} />
                   : item.kind === 'image' && item.url
-                    ? <img src={item.url} alt="" style={{ width: 44, height: 58, objectFit: 'cover', borderRadius: 8, flex: 'none' }} />
+                    ? <img loading="lazy" decoding="async" width="44" height="58" src={item.url} alt="" style={{ width: 44, height: 58, objectFit: 'cover', borderRadius: 8, flex: 'none' }} />
                     : <div style={{ width: 44, height: 58, borderRadius: 8, flex: 'none', background: 'var(--surface-2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }} aria-hidden="true">{item.kind === 'image' ? '🖼' : '🎬'}</div>}
                 <div style={{ minWidth: 0, flex: 1 }}>
                   <b title={item.title}>{item.title}</b>

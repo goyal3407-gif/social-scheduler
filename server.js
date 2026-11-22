@@ -1544,6 +1544,10 @@ app.get('/api/app-status', ah(async (req, res) => {
     signupOpen: gs.signupOpen !== false,
     maintenance: !!gs.maintenance,
     maintenanceMessage: gs.maintenance ? String(gs.maintenanceMessage || '') : '',
+    // Public plan display data for the landing pricing strip (Phase 3
+    // Batch D, L-02) — read from the single PLANS config so the
+    // marketing page can never drift from the enforced prices.
+    plans: Object.values(PLANS).map((p) => ({ id: p.id, name: p.name, priceInr: p.priceInr })),
   });
 }));
 app.get('/api/health', ah(async (req, res) => {
@@ -5181,7 +5185,7 @@ app.get('/preview/:token', ah(async (req, res) => {
     const thumb = p.posterUrl || (p.mediaType === 'image' ? p.mediaUrl : '');
     const img = thumb && /^(https?:\/\/|\/)/i.test(thumb) ? `<img src="${escHtml(thumb)}" alt="" style="width:64px;height:80px;object-fit:cover;border-radius:8px;flex:none">` : '<span style="width:64px;height:80px;background:#1a2140;border-radius:8px;flex:none"></span>';
     const when = new Date(p.scheduleTime).toLocaleString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
-    return `<div style="display:flex;gap:12px;align-items:flex-start;background:#141b36;border:1px solid #2b3560;border-radius:12px;padding:12px;margin:10px 0">${img}<div><div style="font-weight:700;color:#e8c268;font-size:13px">${escHtml(when)} · ${escHtml(p.format || 'REELS')}</div><p style="margin:6px 0 0;font-size:14px;line-height:1.45">${escHtml(p.caption || '(no caption)')}</p>${p.hashtags ? `<p style="margin:4px 0 0;font-size:13px;opacity:.7">${escHtml(p.hashtags)}</p>` : ''}</div></div>`;
+    return `<div style="display:flex;gap:12px;align-items:flex-start;background:#1a2140;border:1px solid #2b3560;border-radius:12px;padding:12px;margin:10px 0">${img}<div><div style="font-weight:700;color:#e8c268;font-size:13px">${escHtml(when)} · ${escHtml(p.format || 'REELS')}</div><p style="margin:6px 0 0;font-size:14px;line-height:1.45">${escHtml(p.caption || '(no caption)')}</p>${p.hashtags ? `<p style="margin:4px 0 0;font-size:13px;opacity:.7">${escHtml(p.hashtags)}</p>` : ''}</div></div>`;
   }).join('') : '<p style="text-align:center;opacity:.75">Nothing is scheduled right now.</p>';
   return res.type('html').send(publicPageShell('Upcoming posts — preview', `
 <h1 style="font-size:22px;margin:8px 0 4px">Upcoming posts</h1>
@@ -5685,45 +5689,45 @@ const ADMIN_PAGE_HTML = `<!doctype html>
 <meta name="robots" content="noindex">
 <title>Owner Console — KiluaAI</title>
 <style>
-body{margin:0;background:#0b1026;color:#e8ebf8;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
-header{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid #2b3560;background:#101736;position:sticky;top:0;z-index:5}
+body{margin:0;background:#0e1325;color:#f5f1e6;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+header{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid #2b3560;background:#1a2140;position:sticky;top:0;z-index:5}
 header b{color:#e8c268}
 main{max-width:1180px;margin:0 auto;padding:16px}
-.card{background:#141b36;border:1px solid #2b3560;border-radius:14px;padding:16px;margin:0 0 14px}
+.card{background:#1a2140;border:1px solid #2b3560;border-radius:16px;padding:16px;margin:0 0 14px}
 h2{margin:0 0 10px;font-size:17px}
 .muted{opacity:.72;font-size:13px}
 .err{color:#ff9a9a;font-size:14px;min-height:18px}
 .okmsg{color:#8fe3b0;font-size:14px;min-height:18px}
 label{display:block;font-size:13px;opacity:.8;margin:10px 0 4px}
-input,select,textarea{background:#0d1330;border:1px solid #2b3560;border-radius:9px;color:#e8ebf8;padding:9px 11px;font-size:14px;width:100%;box-sizing:border-box;font-family:inherit}
+input,select,textarea{background:#0e1325;border:1px solid #2b3560;border-radius:12px;color:#f5f1e6;padding:9px 11px;font-size:14px;width:100%;box-sizing:border-box;font-family:inherit}
 input[type=date]{width:auto}
 input[type=checkbox]{width:auto}
-.btn{background:#1c2650;border:1px solid #3a478a;color:#e8ebf8;border-radius:9px;padding:8px 14px;font-size:14px;cursor:pointer}
+.btn{background:#1a2140;border:1px solid #2b3560;color:#f5f1e6;border-radius:12px;padding:8px 14px;font-size:14px;cursor:pointer}
 .btn.primary{background:#e8c268;border-color:#e8c268;color:#191204;font-weight:700}
 .btn.small{padding:5px 10px;font-size:13px}
 .btn.active{background:#e8c268;border-color:#e8c268;color:#191204;font-weight:700}
 .btn:disabled{opacity:.45;cursor:default}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(128px,1fr));gap:10px}
-.stat{background:#0d1330;border:1px solid #2b3560;border-radius:11px;padding:11px}
+.stat{background:#0e1325;border:1px solid #2b3560;border-radius:12px;padding:11px}
 .stat b{display:block;font-size:21px;color:#e8c268}
 .stat span{font-size:12px;opacity:.75}
 .chips{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
-.chip{border:1px solid #3a478a;border-radius:999px;padding:5px 12px;font-size:13px}
-.row{border-top:1px solid #232c55;padding:11px 0}
+.chip{border:1px solid #2b3560;border-radius:999px;padding:5px 12px;font-size:13px}
+.row{border-top:1px solid #2b3560;padding:11px 0}
 .row:first-of-type{border-top:none}
-.bar{height:8px;background:#232c55;border-radius:99px;overflow:hidden;margin-top:5px}
+.bar{height:8px;background:#2b3560;border-radius:99px;overflow:hidden;margin-top:5px}
 .bar i{display:block;height:100%;background:#e8c268}
 .uhead{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:baseline}
 .uemail{font-weight:700}
-.badge{font-size:12px;border:1px solid #3a478a;border-radius:999px;padding:2px 9px}
+.badge{font-size:12px;border:1px solid #2b3560;border-radius:999px;padding:2px 9px}
 .badge.bad{border-color:#a03d3d;color:#ff9a9a}
 .controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px}
 .controls input{width:auto}
 .klabel{font-size:12px;opacity:.7;width:100%}
 .layout{display:flex;gap:14px;align-items:flex-start}
-nav.side{flex:0 0 178px;background:#141b36;border:1px solid #2b3560;border-radius:14px;padding:10px;position:sticky;top:74px}
-nav.side button{display:block;width:100%;text-align:left;background:transparent;border:1px solid transparent;color:#e8ebf8;border-radius:9px;padding:9px 11px;font-size:14px;cursor:pointer;margin:2px 0}
-nav.side button:hover{border-color:#3a478a}
+nav.side{flex:0 0 178px;background:#1a2140;border:1px solid #2b3560;border-radius:16px;padding:10px;position:sticky;top:74px}
+nav.side button{display:block;width:100%;text-align:left;background:transparent;border:1px solid transparent;color:#f5f1e6;border-radius:12px;padding:9px 11px;font-size:14px;cursor:pointer;margin:2px 0}
+nav.side button:hover{border-color:#2b3560}
 nav.side button.active{background:#e8c268;color:#191204;font-weight:700}
 .views{flex:1;min-width:0}
 .view{display:none}
@@ -5734,11 +5738,13 @@ nav.side button.active{background:#e8c268;color:#191204;font-weight:700}
 .filters label{margin-top:0}
 .toggle{display:flex;gap:9px;align-items:center;cursor:pointer;margin:12px 0}
 .toggle input{width:18px;height:18px}
-.banner{border:1px solid #a03d3d;background:#2a1420;border-radius:11px;padding:11px 13px;margin:0 0 12px;font-size:14px}
-.banner.info{border-color:#3a478a;background:#101736}
+.banner{border:1px solid #a03d3d;background:#2a1420;border-radius:12px;padding:11px 13px;margin:0 0 12px;font-size:14px}
+.banner.info{border-color:#2b3560;background:#1a2140}
 table{width:100%;border-collapse:collapse;font-size:14px}
-td,th{padding:7px 8px;border-top:1px solid #232c55;text-align:left;vertical-align:top}
+td,th{padding:7px 8px;border-top:1px solid #2b3560;text-align:left;vertical-align:top}
 tr:first-child td,tr:first-child th{border-top:none}
+input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid #e8c268;outline-offset:1px}
+.btn:focus-visible,nav.side button:focus-visible{outline:2px solid #e8c268;outline-offset:2px}
 @media (max-width:760px){.layout{flex-direction:column}nav.side{flex:none;width:100%;position:static;display:flex;flex-wrap:wrap;gap:4px}nav.side button{width:auto}}
 </style></head>
 <body>
