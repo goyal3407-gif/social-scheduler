@@ -67,8 +67,23 @@ textarea{resize:vertical;min-height:90px}
 @media(max-width:820px){.preview-card{position:static}}
 .wrap{max-width:1120px;margin:0 auto;padding:0 18px}
 .topbar{position:sticky;top:0;z-index:40;background:var(--bg);border-bottom:1px solid var(--line-2)}
-.topbar-in{max-width:1200px;margin:0 auto;padding:14px 18px;display:flex;align-items:center;gap:14px}
+.topbar-in{max-width:1120px;margin:0 auto;padding:14px 18px;display:flex;align-items:center;gap:14px}
 .logo{display:flex;align-items:center;gap:11px;flex:none}
+/* Round 3 (B3): the Logo component swaps its transparent mark by
+   theme — colour mark on light grounds, white mono mark on dark. */
+.logo-wrap{display:inline-flex;flex:none;line-height:0}
+.logo-img-light,.logo-img-dark{width:auto;display:block}
+.logo-img-dark{display:none}
+[data-theme="dark"] .logo-img-light{display:none}
+[data-theme="dark"] .logo-img-dark{display:block}
+/* Round 3 (B3): header connection chip — icon + text at every
+   width; under ~520px the short form ("2/2") rides with the icons. */
+.conn-icons{display:inline-flex;align-items:center;gap:4px;flex:none}
+.conn-short{display:none}
+@media(max-width:520px){.conn-full{display:none}.conn-short{display:inline}}
+/* Round 3 (B3): the plan pill may hide only below 360px — the
+   drawer's plan row carries the plan there. */
+@media(max-width:360px){.top-actions .plan-pill{display:none}}
 .logo-mark{width:40px;height:40px;border-radius:var(--r-control);background:linear-gradient(135deg,var(--brand),var(--brand-2));display:grid;place-items:center;color:var(--on-brand);flex:none;box-shadow:var(--shadow-sm)}
 .logo b{font-family:var(--font-head);font-size:16px;display:block;line-height:1.15;white-space:nowrap}
 .logo span{font-size:12px;color:var(--muted);white-space:nowrap}
@@ -293,8 +308,6 @@ td{max-width:220px;overflow:hidden;text-overflow:ellipsis}
   .logo{ gap:8px }
   .logo-mark{width:34px;height:34px}
   .logo b{font-size:14px}
-  .top-actions .pill{font-size:0;gap:0;padding:6px}
-  .top-actions .pill .dot{margin:0}
   .icon-btn{width:38px;height:38px}
 }
 
@@ -389,6 +402,14 @@ button,.tab{touch-action:manipulation}
 .drawer-create{color:var(--brand-text)}
 .drawer-create svg{color:var(--brand-text)}
 .drawer-foot{border-top:1px solid var(--line-2);padding-top:12px}
+/* Round 3 (B3): More drawer — plan row on top, grouped destinations. */
+.drawer-plan-row{display:flex;align-items:center;gap:10px;width:100%;min-height:52px;padding:12px;border:1px solid var(--line);background:var(--surface-2);color:var(--ink);font-size:16px;font-weight:600;border-radius:var(--r-control);text-align:left;font-family:inherit;cursor:pointer}
+.drawer-plan-row svg{flex:none;color:var(--gold-text)}
+.drawer-plan-name{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.drawer-plan-chevron{display:inline-flex;flex:none;color:var(--muted)}
+.drawer-plan-chevron svg{color:var(--muted)}
+.drawer-group-label{font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;padding:14px 12px 4px}
+.drawer-nav a.drawer-item{text-decoration:none}
 
 /* ============================================================
    REDESIGN — minimal "Muse-style" shell (2026-11-18):
@@ -487,12 +508,8 @@ button,.tab{touch-action:manipulation}
 @media(max-width:900px){
   .topnav{display:none}
 }
-/* Mid-width desktops: the Instagram status pill collapses to its dot
-   so the nav keeps the room (its full text stays in the drawer). */
-@media(max-width:1280px){
-  .top-actions .ig-pill{font-size:0;gap:0;padding:6px}
-  .top-actions .ig-pill .dot{margin:0}
-}
+/* Round 3 (B3): pills keep icon + text at every width — the old
+   mid-width dot-only collapse of the header status pill is gone. */
 
 /* --- Header search: icon button + expandable row (all widths) --- */
 /* The always-visible pill truncated its placeholder and overlapped
@@ -500,7 +517,7 @@ button,.tab{touch-action:manipulation}
    family as the bell) at every width, and search expands in a slim
    full-width row directly under the header bar. */
 .search-toggle-btn{display:grid}
-.mobile-search-row{display:flex;align-items:center;gap:8px;max-width:1200px;margin:0 auto;padding:0 18px 12px}
+.mobile-search-row{display:flex;align-items:center;gap:8px;max-width:1120px;margin:0 auto;padding:0 18px 12px}
 .mobile-search-row input{flex:1;min-width:0;padding:12px}
 .mobile-search-close{flex:none}
 @media(max-width:900px){.mobile-search-row{padding:0 14px 10px}}

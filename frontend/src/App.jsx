@@ -4,8 +4,8 @@ import { trFor, loadDict, dictSync } from './i18n.js'
 import { closeTopOverlay } from './overlayRegistry.js'
 import { isNativeShell, openExternalUrl } from './openExternal.js'
 
-import { IconHome, IconCal, IconQueue, IconPlus, IconMedia, IconBulk, IconTools, IconSpark, IconSettings, IconSun, IconMoon, IconMenu, IconX, IconBell, IconLink, IconSearch, IconTag } from './components/icons.jsx'
-import { Skeleton, isOwnMediaUrl } from './components/shared.jsx'
+import { IconHome, IconCal, IconQueue, IconPlus, IconMedia, IconBulk, IconTools, IconSpark, IconSettings, IconSun, IconMoon, IconMenu, IconX, IconBell, IconLink, IconSearch, IconTag, IconInstagram, IconYouTube, IconCrown, IconChevronRight, IconComment } from './components/icons.jsx'
+import { Skeleton, isOwnMediaUrl, Logo } from './components/shared.jsx'
 // The build id baked in at build time (vite define). The update guard
 // below compares it with the id the server/static file reports for
 // the CURRENT deployment.
@@ -71,7 +71,7 @@ function TabFallback() {
 function BootLoad({ label }) {
   return (
     <div className="boot-load" role="status">
-      <span className="logo-mark offline-logo" aria-hidden="true"><img src="/icon-192.png" alt="" width="52" height="52" /></span>
+      <Logo size={52} />
       <span className="boot-spinner" aria-hidden="true" />
       <span className="muted small">{label}</span>
     </div>
@@ -80,33 +80,48 @@ function BootLoad({ label }) {
 
 const scrollTop = () => { try { window.scrollTo({ top: 0 }) } catch { /* no window */ } }
 
-// The plan pill's inner content (dot + plan name) — shared by the
-// top-bar button and the two drawer variants.
+// The plan pill's inner content (crown icon + plan name) for the
+// top-bar button (Round 3 B3: pills keep icon + text at every width).
 function PlanPillInner({ user, tr }) {
   return (
     <>
-      <span className="dot" />
+      <IconCrown size={14} />
       {tr('planBadge').replace('{name}', user.planName || 'Free')}
     </>
   )
 }
 
-// The Instagram connection pill (top bar + drawer share it, so the
-// two copies can never drift). In the top bar it is the header's ONE
-// labelled connection-status chip (Prompt-4): a button that opens
-// Connections. In the drawer it stays a plain labelled pill.
-function IgStatusPill({ settings, igBroken, tr, className = 'pill', onOpen }) {
-  const label = !settings ? tr('igChecking') : igBroken ? tr('igBrokenShort') : settings.instagramConnected ? `IG ${settings.instagramHandle || tr('igConnectedWord')}` : tr('igNotConnected')
-  const inner = (
-    <>
-      <span className={`dot ${!settings ? 'amber' : igBroken ? 'off' : settings.instagramConnected ? '' : 'off'}`} />
-      {label}
-    </>
-  )
-  return onOpen ? (
-    <button type="button" className={className} title={label} onClick={onOpen}>{inner}</button>
-  ) : (
-    <span className={className} title={label}>{inner}</span>
+// The header connection chip (Round 3 B3): ONE labelled chip for
+// BOTH platforms — icon(s) + text at every width, never colour-only
+// or icon-only. Under ~520px CSS swaps the full label for the short
+// form ("2/2" / "IG" / "YT" / "0/2") beside the same icons. Tapping
+// it opens Connections. YouTube state comes from the same status
+// endpoint Dashboard/Connections use (settings carries Instagram).
+function ConnectionChip({ settings, ytStatus, igBroken, tr, onOpen }) {
+  const ig = Boolean(settings && settings.instagramConnected)
+  const yt = Boolean(ytStatus && ytStatus.connected)
+  let label
+  let short
+  let icons
+  if (!settings || ytStatus === null) {
+    label = tr('checkingWord'); short = '…'; icons = <IconLink size={14} />
+  } else if (igBroken) {
+    label = tr('igBrokenShort'); short = 'IG'; icons = <IconInstagram size={14} />
+  } else if (ig && yt) {
+    label = tr('connBoth'); short = '2/2'; icons = <><IconInstagram size={14} /><IconYouTube size={14} /></>
+  } else if (ig) {
+    label = tr('connIgOnly'); short = 'IG'; icons = <IconInstagram size={14} />
+  } else if (yt) {
+    label = tr('connYtOnly'); short = 'YT'; icons = <IconYouTube size={14} />
+  } else {
+    label = tr('connNone'); short = '0/2'; icons = <IconLink size={14} />
+  }
+  return (
+    <button type="button" className="pill conn-chip-btn" title={label} aria-label={label} onClick={onOpen}>
+      <span className="conn-icons">{icons}</span>
+      <span className="conn-full">{label}</span>
+      <span className="conn-short" aria-hidden="true">{short}</span>
+    </button>
   )
 }
 
@@ -124,6 +139,17 @@ const NAV = [
   { id: 'pricing', Icon: IconTag },
   { id: 'settings', Icon: IconSettings }
 ]
+
+// Round 3 (B3): the More drawer carries ONLY the overflow
+// destinations, grouped — Home/Queue/Media/Create live in the
+// bottom nav / topnav, and account actions live in the avatar menu.
+// Icons resolve through NAV above so the two can never drift.
+const DRAWER_GROUPS = [
+  { headingKey: 'drawerGroupPlan', ids: ['calendar', 'bulk', 'ai', 'tools'] },
+  { headingKey: 'drawerGroupAccount', ids: ['connections', 'pricing', 'settings'] }
+]
+// Owner-only destinations that make no sense inside a team workspace.
+const WS_DRAWER_HIDDEN = ['tools', 'connections', 'pricing', 'settings']
 
 // Phase 3 (Batch B): tabs are URL-backed. The tab lives in the hash
 // (#/queue, #/studio, …) so refresh, share, deep-links and the
@@ -187,6 +213,10 @@ export default function App() {
   const [templates, setTemplates] = useState([])
   const [drafts, setDrafts] = useState([])
   const [settings, setSettings] = useState(null)
+  // YouTube half of the header connection chip (B3): settings carries
+  // Instagram only, so the chip's YT state comes from the same status
+  // endpoint Dashboard and Connections already use. null = checking.
+  const [ytStatus, setYtStatus] = useState(null)
   const [dbStatus, setDbStatus] = useState(null)
   const [stats, setStats] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -613,6 +643,15 @@ export default function App() {
 
   useEffect(() => { if (user) loadAll() }, [user, loadAll])
 
+  // Header chip (B3): fetch the YouTube connection state once per
+  // signed-in session (refreshSettings re-fetches after changes).
+  useEffect(() => {
+    if (!user) { setYtStatus(null); return undefined }
+    let live = true
+    api.youtubeStatus().then((d) => { if (live) setYtStatus(d) }).catch(() => { if (live) setYtStatus({ connected: false }) })
+    return () => { live = false }
+  }, [user])
+
   // Team workspaces (batch 3): load the workspaces this user belongs
   // to; a saved workspace that is no longer offered (removed by its
   // owner) falls back to the user's own workspace.
@@ -714,6 +753,8 @@ export default function App() {
     // loadAll(), which flashed skeletons across the whole app after every
     // settings save.
     try { setSettings(await api.getSettings()) } catch { /* keep last settings */ }
+    // The header chip's YouTube half refreshes alongside (B3).
+    api.youtubeStatus().then((d) => setYtStatus(d)).catch(() => { /* keep last YT state */ })
     refreshStats()
   }, [refreshStats])
   refreshSettingsRef.current = refreshSettings
@@ -1194,7 +1235,7 @@ export default function App() {
     return (
       <div className="app">
         <div className="offline-screen">
-          <span className="logo-mark offline-logo" aria-hidden="true"><img src="/icon-192.png" alt="" width="52" height="52" /></span>
+          <Logo size={52} />
           <h1>{tr('offlineTitle')}</h1>
           <p>{tr('offlineBody')}</p>
           <button type="button" className="btn primary" onClick={() => { setAuthChecked(false); checkAuth() }}>{tr('retry')}</button>
@@ -1272,7 +1313,7 @@ export default function App() {
             <IconMenu size={20} />
           </button>
           <div className="logo">
-            <div className="logo-mark" aria-hidden="true"><img src="/icon-192.png" alt="" width="40" height="40" /></div>
+            <Logo size={40} />
             <div>
               <b>KiluaAI</b>
               <span>{tr('freeForever')}</span>
@@ -1294,9 +1335,9 @@ export default function App() {
             <button type="button" className="icon-btn search-toggle-btn" onClick={() => setMobileSearchOpen((o) => !o)} aria-label={tr('ariaSearch')} aria-expanded={mobileSearchOpen}>
               <IconSearch size={18} />
             </button>
-            {!wsId && <IgStatusPill settings={settings} igBroken={igBroken} tr={tr} className="pill ig-pill" onOpen={() => setTab('connections')} />}
+            {!wsId && <ConnectionChip settings={settings} ytStatus={ytStatus} igBroken={igBroken} tr={tr} onOpen={() => setTab('connections')} />}
             {!wsId && (
-              <button type="button" className="pill" title={user.comp ? tr('planTitleComp') : tr('planTitle')} onClick={() => setTab('pricing')}>
+              <button type="button" className="pill plan-pill" title={user.comp ? tr('planTitleComp') : tr('planTitle')} onClick={() => setTab('pricing')}>
                 <PlanPillInner user={user} tr={tr} />
               </button>
             )}
@@ -1324,7 +1365,6 @@ export default function App() {
                       </>
                     )}
                     {!wsId && <button type="button" role="menuitem" onClick={menuAct(() => setTab('settings'))}>{tr('settings')}</button>}
-                    <a role="menuitem" href="/contact.html" onClick={(e) => { setAvatarMenuOpen(false); if (openExternalUrl(new URL('/contact.html', window.location.origin).href)) e.preventDefault() }}>{tr('contact')}</a>
                     <button type="button" role="menuitem" onClick={menuAct(() => setTheme(theme === 'dark' ? 'light' : 'dark'))}>{theme === 'dark' ? tr('lightTheme') : tr('darkTheme')}</button>
                     <button type="button" role="menuitem" onClick={menuAct(() => setLang(lang === 'hi' ? 'en' : 'hi'))}>{tr('language')}: {lang === 'hi' ? 'Hinglish' : 'English'} · {tr('switchWord')}</button>
                     {user.isOwner && user.adminUrl && (
@@ -1354,7 +1394,7 @@ export default function App() {
           <aside className="drawer" role="dialog" aria-modal="true" aria-label={tr('ariaMenu')} onClick={(e) => e.stopPropagation()}>
             <div className="drawer-head">
               <div className="logo">
-                <div className="logo-mark" aria-hidden="true"><img src="/icon-192.png" alt="" width="40" height="40" /></div>
+                <Logo size={40} />
                 <div>
                   <b>KiluaAI</b>
                   <span>{tr('freeForever')}</span>
@@ -1364,40 +1404,42 @@ export default function App() {
                 <IconX size={18} />
               </button>
             </div>
-            <form role="search" onSubmit={(e) => { e.preventDefault(); runGlobalSearch(globalQ) }} style={{ padding: '10px 14px 0' }}>
-              <input type="search" value={globalQ} onChange={(e) => setGlobalQ(e.target.value)} placeholder={tr('searchPlaceholder')} aria-label={tr('ariaSearchPosts')} />
-            </form>
             <nav className="drawer-nav" aria-label={tr('ariaMenuNav')}>
-              {NAV.filter(({ id }) => !wsId || !['tools', 'connections', 'settings', 'pricing'].includes(id)).map(({ id, Icon }) => (
-                <button key={id} type="button" className={`drawer-item ${tab === id ? 'active' : ''}`} aria-current={tab === id ? 'page' : undefined}
-                  onClick={() => { setTab(id); setMenuOpen(false); scrollTop() }}>
-                  <Icon size={20} /><span>{tr(id === 'ai' ? 'aiStudio' : id)}</span>
-                </button>
-              ))}
-              <button type="button" className="drawer-item drawer-create" onClick={() => { goStudio(null); setMenuOpen(false) }}>
-                <IconPlus size={20} /><span>{tr('createPost')}</span>
-              </button>
-            </nav>
-            <div className="drawer-foot">
-              <IgStatusPill settings={settings} igBroken={igBroken} tr={tr} />
               {wsId ? (
-                <span className="pill" title={user.comp ? tr('planTitleComp') : tr('planTitleShort')} style={{ marginLeft: 8 }}>
-                  <PlanPillInner user={user} tr={tr} />
-                </span>
+                <div className="drawer-plan-row">
+                  <IconCrown size={20} /><span className="drawer-plan-name">{tr('planBadge').replace('{name}', user.planName || 'Free')}</span>
+                </div>
               ) : (
-                <button type="button" className="pill" title={user.comp ? tr('planTitleComp') : tr('planTitle')} style={{ marginLeft: 8 }} onClick={() => { setTab('pricing'); setMenuOpen(false); scrollTop() }}>
-                  <PlanPillInner user={user} tr={tr} />
+                <button type="button" className="drawer-plan-row" title={user.comp ? tr('planTitleComp') : tr('planTitle')} onClick={() => { setTab('pricing'); setMenuOpen(false); scrollTop() }}>
+                  <IconCrown size={20} /><span className="drawer-plan-name">{tr('planBadge').replace('{name}', user.planName || 'Free')}</span><span className="drawer-plan-chevron"><IconChevronRight size={18} /></span>
                 </button>
               )}
-              <p className="muted small" style={{ marginTop: 10 }}>{user.email}</p>
-              <p style={{ marginTop: 8 }}><a href="/contact.html" className="small" onClick={(e) => { if (openExternalUrl(new URL('/contact.html', window.location.origin).href)) e.preventDefault() }}>{tr('contact')}</a></p>
-              <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-                <button type="button" className="btn ghost small" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
-                  {theme === 'dark' ? tr('lightTheme') : tr('darkTheme')}
-                </button>
-                <button type="button" className="btn ghost small" onClick={() => { setMenuOpen(false); handleLogout() }}>{tr('logout')}</button>
+              {DRAWER_GROUPS.map((group) => {
+                const items = group.ids.filter((id) => !wsId || !WS_DRAWER_HIDDEN.includes(id))
+                if (!items.length) return null
+                return (
+                  <div key={group.headingKey}>
+                    <p className="drawer-group-label">{tr(group.headingKey)}</p>
+                    {items.map((id) => {
+                      const entry = NAV.find((n) => n.id === id)
+                      const Icon = entry ? entry.Icon : IconTools
+                      return (
+                        <button key={id} type="button" className={`drawer-item ${tab === id ? 'active' : ''}`} aria-current={tab === id ? 'page' : undefined}
+                          onClick={() => { setTab(id); setMenuOpen(false); scrollTop() }}>
+                          <Icon size={20} /><span>{tr(id === 'ai' ? 'aiStudio' : id)}</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                )
+              })}
+              <div>
+                <p className="drawer-group-label">{tr('drawerGroupHelp')}</p>
+                <a className="drawer-item" href="/contact.html" onClick={(e) => { setMenuOpen(false); if (openExternalUrl(new URL('/contact.html', window.location.origin).href)) e.preventDefault() }}>
+                  <IconComment size={20} /><span>{tr('contact')}</span>
+                </a>
               </div>
-            </div>
+            </nav>
           </aside>
         </div>
       )}

@@ -27,6 +27,15 @@ function localTr() {
 
 const STATUS_KEYS = { scheduled: 'scheduled', draft: 'drafts', published: 'published', partial: 'partial', failed: 'failed' }
 
+export function Logo({ size = 40, className = '' }) {
+  return (
+    <span className={`logo-wrap${className ? ` ${className}` : ''}`} aria-hidden="true">
+      <img src="/logo-mark.png" alt="" className="logo-img-light" style={{ height: size, width: 'auto' }} />
+      <img src="/logo-mark-dark.png" alt="" className="logo-img-dark" style={{ height: size, width: 'auto' }} />
+    </span>
+  )
+}
+
 export function Badge({ tone = 'neutral', icon, children, className = '' }) {
   return <span className={`badge ${tone}${className ? ` ${className}` : ''}`}>{icon}{children}</span>
 }

@@ -624,6 +624,9 @@ export const DICT = {
     calSchedulePost: 'Schedule a post', calTimesNote: 'Times shown in your local timezone.',
     helpYtTitle: 'Why do YouTube uploads start as Private?',
     helpYtBody: 'KiluaAI uploads to YouTube through Google\u2019s official API. Until Google finishes approving the app, YouTube automatically keeps every new upload Private — only you can see it. The visibility you pick in the composer (Public, Unlisted or Private) is saved with the post and takes effect automatically once the approval passes — you never need to re-upload anything. Instagram posts are not affected.',
+    // Round 3 (B3): header connection chip + More drawer groups.
+    connBoth: '2/2 connected', connIgOnly: 'IG connected', connYtOnly: 'YT connected', connNone: 'Connect accounts',
+    drawerGroupPlan: 'Plan', drawerGroupAccount: 'Account', drawerGroupHelp: 'Help',
   },
   hi: {
     // Carried over from batches 3-4 (screen strings)
@@ -1237,5 +1240,8 @@ export const DICT = {
     calSchedulePost: 'Ek post schedule karein', calTimesNote: 'Samay aapke local timezone me dikhaye gaye hain.',
     helpYtTitle: 'YouTube uploads Private se kyun shuru hote hain?',
     helpYtBody: 'KiluaAI Google ke official API se YouTube par upload karta hai. Jab tak Google app ki approval poori nahi karta, YouTube har naye upload ko apne aap Private rakhta hai — use sirf aap dekh sakte hain. Composer me aap jo visibility chunte hain (Public, Unlisted ya Private) woh post ke saath save ho jati hai aur approval milte hi apne aap lagu ho jayegi — aapko kuch dobara upload nahi karna padega. Instagram posts par iska koi asar nahi padta.',
+    // Round 3 (B3): header connection chip + More drawer groups (EN jod).
+    connBoth: '2/2 jude hue', connIgOnly: 'IG juda hua', connYtOnly: 'YT juda hua', connNone: 'Accounts jodein',
+    drawerGroupPlan: 'Plan', drawerGroupAccount: 'Account', drawerGroupHelp: 'Madad',
   },
 }

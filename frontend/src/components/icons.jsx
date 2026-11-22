@@ -12,7 +12,9 @@ export const IconCal = (p) => <I {...p} d="M3 5h18v16H3z M3 10h18 M8 3v4 M16 3v4
 export const IconQueue = (p) => <I {...p}><path d="M4 6h16M4 12h16M4 18h10" /><circle cx="20" cy="18" r="2" /></I>
 export const IconPlus = (p) => <I {...p} d="M12 5v14M5 12h14" />
 export const IconMedia = (p) => <I {...p}><rect x="3" y="4" width="18" height="16" rx="3" /><circle cx="9" cy="10" r="2" /><path d="m4 18 5-5 3 3 4-4 4 4" /></I>
-export const IconBulk = (p) => <I {...p}><path d="M12 3v12m0 0 4-4m-4 4-4-4" /><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" /></I>
+export const IconBulk = (p) => <I {...p}><path d="M12 3 3 8l9 5 9-5-9-5z" /><path d="m3 12.5 9 5 9-5" /><path d="m3 17 9 5 9-5" /></I>
+export const IconCrown = (p) => <I {...p}><path d="m3 8 4.5 4L12 5l4.5 7L21 8l-1.6 9.2H4.6L3 8z" /><path d="M5 20.5h14" /></I>
+export const IconChevronRight = (p) => <I {...p} d="m9 6 6 6-6 6" />
 export const IconTools = (p) => <I {...p}><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4L14 13l-3-3 3.7-3.7z" /></I>
 export const IconSettings = (p) => <I {...p}><circle cx="12" cy="12" r="3" /><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 0 0 5 12a7 7 0 0 0 .1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6A7 7 0 0 0 19 12z" /></I>
 export const IconSun = (p) => <I {...p}><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></I>
