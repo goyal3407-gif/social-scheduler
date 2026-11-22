@@ -77,24 +77,26 @@ function client() {
 }
 
 (async () => {
-  // ---- PR-3: compact logged-out view (owner request, 22 Nov 2026) ----
-  // The Auth form comes FIRST (only the compact brand row above it);
-  // all marketing content lives below it in .landing-below; nothing
-  // was deleted (hero copy, sections, footer links all still present).
+  // ---- PR-3: logged-out views (owner requests, 22 Nov 2026) ----
+  // Login split (Prompt-4, later the same day — supersedes the
+  // compact embedded-form arrangement): the landing carries ONLY
+  // the marketing + the buttons that open the form; the form lives
+  // on its own clean Auth screen (brand row, form, Google button,
+  // OAuth trust line). Nothing was deleted (hero copy, sections,
+  // footer links all still present on the landing).
   {
     const landing = fs.readFileSync(path.join(__dirname, '..', 'frontend/src/components/Landing.jsx'), 'utf8');
+    const auth = fs.readFileSync(path.join(__dirname, '..', 'frontend/src/components/Auth.jsx'), 'utf8');
     const css = fs.readFileSync(path.join(__dirname, '..', 'frontend/src/index.css'), 'utf8');
-    const authIdx = landing.indexOf('<Auth');
-    const belowIdx = landing.indexOf('className="landing-below"');
-    const heroBlock = authIdx >= 0 ? landing.slice(0, authIdx) : '';
-    check('PR-3 Auth form renders before the marketing block', authIdx >= 0 && belowIdx > authIdx);
-    check('PR-3 hero above the form is only the brand row (no marketing copy)',
-      heroBlock.includes('landing-name') && !heroBlock.includes('landing-line') && !heroBlock.includes('landing-sub'));
-    check('PR-3 hero copy preserved below the form (nothing deleted)',
+    check('PR-3 landing carries no embedded Auth form (split)', !landing.includes('<Auth') && !landing.includes('components/Auth'));
+    check('PR-3 landing opens the form via its CTA buttons', landing.includes('landing-cta') && landing.includes("onShowAuth('login')") && landing.includes("onShowAuth('signup')"));
+    check('PR-3 hero copy preserved on the landing (nothing deleted)',
       landing.includes('An Instagram scheduler for Reels, Posts and Stories') &&
       landing.includes('Plan your posts once, and KiluaAI publishes them for you'));
     check('PR-3 footer links preserved', landing.includes('Privacy Policy') && landing.includes('Terms of Service') && landing.includes('Contact'));
-    check('PR-3 css: compact hero (no 7vh hero padding) + demoted below-block styles',
+    check('PR-3 Auth screen carries the OAuth trust line + back route',
+      auth.includes("tr('authTrustLine')") && auth.includes('onBack') && auth.includes("tr('authBackHome')"));
+    check('PR-3 css: compact hero (no 7vh hero padding) + below-block styles',
       !/\.landing-hero\{[^}]*7vh/.test(css) && css.includes('.landing-below{'));
   }
 

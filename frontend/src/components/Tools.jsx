@@ -58,7 +58,8 @@ function fallbackCopy(text, done) {
   document.body.removeChild(ta)
 }
 
-export default function Tools({ posts, stats, templates, onCreateTemplate, onUseTemplate }) {
+export default function Tools({ posts, stats, templates, onCreateTemplate, onUseTemplate, tr }) {
+  const t = tr || ((k) => k)
   const [tool, setTool] = useState('analytics')
   const [copied, setCopied] = useState('')
   const [vaultCat, setVaultCat] = useState('All')
@@ -126,10 +127,10 @@ export default function Tools({ posts, stats, templates, onCreateTemplate, onUse
     for (const p of posts || []) {
       if (p.status !== 'failed' || !p.lastPublishError) continue
       const e = p.lastPublishError
-      const key = /token|expired|invalid/i.test(e) ? 'Instagram token invalid or expired'
-        : /format|process|MP4|JPG/i.test(e) ? 'Media format / processing'
-        : /reach|connection|network/i.test(e) ? 'Could not reach Instagram'
-        : 'Other Instagram error'
+      const key = /token|expired|invalid/i.test(e) ? 'failReasonToken'
+        : /format|process|MP4|JPG/i.test(e) ? 'failReasonFormat'
+        : /reach|connection|network/i.test(e) ? 'failReasonReach'
+        : 'failReasonOther'
       m[key] = (m[key] || 0) + 1
     }
     return Object.entries(m).sort((a, b) => b[1] - a[1])
@@ -151,54 +152,54 @@ export default function Tools({ posts, stats, templates, onCreateTemplate, onUse
     e.preventDefault()
     if (!tplName.trim() || !tplText.trim()) return
     await onCreateTemplate({ name: tplName.trim(), text: tplText.trim() })
-    setTplMsg('Template saved — find it in Studio too.')
+    setTplMsg(t('toolsTplSaved'))
     setTplName(''); setTplText('')
     setTimeout(() => setTplMsg(''), 3000)
   }
 
   const tabs = [
-    ['analytics', 'Analytics'], ['hashtags', 'Hashtag vault'], ['hooks', 'Hooks'],
-    ['bank', 'Content bank'], ['besttime', 'Best time'], ['replies', 'Reply helper'], ['templates', 'Templates']
+    ['analytics', t('tabAnalytics')], ['hashtags', t('tabHashtags')], ['hooks', t('tabHooks')],
+    ['bank', t('tabBank')], ['besttime', t('tabBesttime')], ['replies', t('tabReplies')], ['templates', t('tabTemplates')]
   ]
 
   return (
     <div>
-      <h2 className="section-title">Tools</h2>
-      <p className="section-sub">Everything around scheduling — numbers, ideas and words that save you time.</p>
+      <h2 className="section-title">{t('tools')}</h2>
+      <p className="section-sub">{t('toolsSub')}</p>
       <div className="tabs mb" role="tablist">
         {tabs.map(([id, label]) => (
           <button key={id} type="button" className={`tab ${tool === id ? 'active' : ''}`} onClick={() => setTool(id)}>{label}</button>
         ))}
       </div>
-      {copied && <div className="alert success">Copied: {copied}</div>}
+      {copied && <div className="alert success">{t('toolsCopied')}{copied}</div>}
 
       {tool === 'analytics' && (
         <div className="two-col" style={{ alignItems: 'start' }}>
           <section className="card">
-            <h2>Your schedule at a glance</h2>
-            <p className="muted small mb">Counts from your posts — no guessing.</p>
-            <div className="bar-row"><span>Scheduled</span><div className="bar-track"><div className="bar-fill" style={{ width: `${(byStatus.scheduled / total) * 100}%` }} /></div><b>{byStatus.scheduled}</b></div>
-            <div className="bar-row"><span>Published</span><div className="bar-track"><div className="bar-fill" style={{ width: `${(byStatus.published / total) * 100}%` }} /></div><b>{byStatus.published}</b></div>
-            <div className="bar-row"><span>Drafts</span><div className="bar-track"><div className="bar-fill" style={{ width: `${(byStatus.draft / total) * 100}%` }} /></div><b>{byStatus.draft}</b></div>
-            <div className="bar-row"><span>Failed</span><div className="bar-track"><div className="bar-fill" style={{ width: `${(byStatus.failed / total) * 100}%` }} /></div><b>{byStatus.failed}</b></div>
-            <p className="muted small mt">Total posts: {posts?.length || 0} · Media files: {s.mediaCount ?? '—'}</p>
+            <h2>{t('toolsGlance')}</h2>
+            <p className="muted small mb">{t('toolsGlanceSub')}</p>
+            <div className="bar-row"><span>{t('scheduled')}</span><div className="bar-track"><div className="bar-fill" style={{ width: `${(byStatus.scheduled / total) * 100}%` }} /></div><b>{byStatus.scheduled}</b></div>
+            <div className="bar-row"><span>{t('published')}</span><div className="bar-track"><div className="bar-fill" style={{ width: `${(byStatus.published / total) * 100}%` }} /></div><b>{byStatus.published}</b></div>
+            <div className="bar-row"><span>{t('drafts')}</span><div className="bar-track"><div className="bar-fill" style={{ width: `${(byStatus.draft / total) * 100}%` }} /></div><b>{byStatus.draft}</b></div>
+            <div className="bar-row"><span>{t('failed')}</span><div className="bar-track"><div className="bar-fill" style={{ width: `${(byStatus.failed / total) * 100}%` }} /></div><b>{byStatus.failed}</b></div>
+            <p className="muted small mt">{t('toolsTotalLine').replace('{posts}', posts?.length || 0).replace('{media}', s.mediaCount ?? '—')}</p>
             {failureReasons.length > 0 && (
               <div style={{ marginTop: 16 }}>
-                <h3>Why publishes failed</h3>
+                <h3>{t('toolsWhyFailed')}</h3>
                 {failureReasons.map(([reason, n]) => (
-                  <div key={reason} className="bar-row"><span>{reason}</span><div className="bar-track"><div className="bar-fill" style={{ width: `${(n / Math.max(1, byStatus.failed)) * 100}%` }} /></div><b>{n}</b></div>
+                  <div key={reason} className="bar-row"><span>{t(reason)}</span><div className="bar-track"><div className="bar-fill" style={{ width: `${(n / Math.max(1, byStatus.failed)) * 100}%` }} /></div><b>{n}</b></div>
                 ))}
-                <p className="muted small mt">Token errors: reconnect in Settings. Media errors: use a standard MP4 (H.264) or JPG, and Reels format for vertical video.</p>
+                <p className="muted small mt">{t('toolsFailHint')}</p>
               </div>
             )}
-            <h3 style={{ marginTop: 20 }}>Posts per platform</h3>
-            {byPlatform.length === 0 ? <p className="muted small mt">No posts yet.</p> : byPlatform.map(([name, v]) => (
+            <h3 style={{ marginTop: 20 }}>{t('toolsPerPlatform')}</h3>
+            {byPlatform.length === 0 ? <p className="muted small mt">{t('toolsNoPosts')}</p> : byPlatform.map(([name, v]) => (
               <div key={name} className="bar-row"><span>{name}</span><div className="bar-track"><div className="bar-fill" style={{ width: `${(v / maxPlatform) * 100}%` }} /></div><b>{v}</b></div>
             ))}
           </section>
           <section className="card">
-            <h2>Next 7 days</h2>
-            <p className="muted small mb">Scheduled posts per day.</p>
+            <h2>{t('toolsNext7')}</h2>
+            <p className="muted small mb">{t('toolsNext7Sub')}</p>
             {weekAhead.map((d) => (
               <div key={d.date.toDateString()} className="bar-row">
                 <span>{d.date.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' })}</span>
@@ -206,50 +207,50 @@ export default function Tools({ posts, stats, templates, onCreateTemplate, onUse
                 <b>{d.count}</b>
               </div>
             ))}
-            <p className="muted small mt">Quiet day? That is a good day to batch-record. Aim for consistency over volume.</p>
+            <p className="muted small mt">{t('toolsNext7Hint')}</p>
           </section>
         </div>
       )}
 
       {tool === 'hashtags' && (
         <section className="card">
-          <h2>Hashtag vault</h2>
-          <p className="muted small mb">Tap to copy. Mix 2–3 big tags with smaller, specific ones — and stay under 30 per post.</p>
+          <h2>{t('tabHashtags')}</h2>
+          <p className="muted small mb">{t('toolsVaultSub')}</p>
           <div className="toolbar">
-            <input type="search" placeholder="Search hashtags…" value={vaultQ} onChange={(e) => setVaultQ(e.target.value)} aria-label="Search hashtags" />
-            <select value={vaultCat} onChange={(e) => setVaultCat(e.target.value)} aria-label="Filter by category">
+            <input type="search" placeholder={t('toolsSearchTagsPh')} value={vaultQ} onChange={(e) => setVaultQ(e.target.value)} aria-label={t('ariaSearchHashtags')} />
+            <select value={vaultCat} onChange={(e) => setVaultCat(e.target.value)} aria-label={t('ariaFilterCategory')}>
               {['All', 'Growth', 'Tips', 'Business', 'Lifestyle'].map((c) => <option key={c} value={c}>{c}</option>)}
             </select>
-            <button type="button" className="btn ghost small" onClick={() => copyText(vault.map((h) => h.tag).join(' '), setCopied)}>Copy all shown</button>
+            <button type="button" className="btn ghost small" onClick={() => copyText(vault.map((h) => h.tag).join(' '), setCopied)}>{t('toolsCopyAllShown')}</button>
           </div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             {vault.map((h) => (
-              <button key={h.tag} type="button" className="chip" style={{ padding: '8px 13px', fontSize: 13 }} onClick={() => copyText(h.tag, setCopied)} title={`${h.cat} · ${h.reach} reach`}>
+              <button key={h.tag} type="button" className="chip" style={{ padding: '8px 13px', fontSize: 13 }} onClick={() => copyText(h.tag, setCopied)} title={`${h.cat} · ${h.reach} ${t('toolsReachWord')}`}>
                 {h.tag} <span className="muted">· {h.reach}</span>
               </button>
             ))}
-            {vault.length === 0 && <p className="muted">No hashtags match that search.</p>}
+            {vault.length === 0 && <p className="muted">{t('toolsNoTagsMatch')}</p>}
           </div>
         </section>
       )}
 
       {tool === 'hooks' && (
         <section className="card">
-          <h2>Hooks library</h2>
-          <p className="muted small mb">First 3 seconds decide everything. Tap any hook to copy it, then finish it in your own words.</p>
+          <h2>{t('toolsHooksTitle')}</h2>
+          <p className="muted small mb">{t('toolsHooksSub')}</p>
           {HOOKS.map((h) => (
-            <div key={h} className="hook-item"><div className="row"><span>“{h}”</span><button type="button" className="copy-btn" onClick={() => copyText(h, setCopied)}>Copy</button></div></div>
+            <div key={h} className="hook-item"><div className="row"><span>“{h}”</span><button type="button" className="copy-btn" onClick={() => copyText(h, setCopied)}>{t('toolsCopy')}</button></div></div>
           ))}
         </section>
       )}
 
       {tool === 'bank' && (
         <section className="card">
-          <h2>Content bank</h2>
-          <p className="muted small mb">Six post ideas you can reuse every week. Tap “Use” to start a post from one in Studio.</p>
+          <h2>{t('tabBank')}</h2>
+          <p className="muted small mb">{t('toolsBankSub')}</p>
           {CONTENT_BANK.map((item) => (
             <div key={item.title} className="bank-item">
-              <div className="row"><div><b>{item.title}</b><p className="muted small" style={{ marginTop: 4 }}>{item.text}</p></div><button type="button" className="copy-btn" onClick={() => onUseTemplate && onUseTemplate({ text: item.text })}>Use</button></div>
+              <div className="row"><div><b>{item.title}</b><p className="muted small" style={{ marginTop: 4 }}>{item.text}</p></div><button type="button" className="copy-btn" onClick={() => onUseTemplate && onUseTemplate({ text: item.text })}>{t('toolsUse')}</button></div>
             </div>
           ))}
         </section>
@@ -257,40 +258,40 @@ export default function Tools({ posts, stats, templates, onCreateTemplate, onUse
 
       {tool === 'besttime' && (
         <section className="card">
-          <h2>Best-time heatmap</h2>
+          <h2>{t('toolsHeatTitle')}</h2>
           <p className="muted small mb">{heatmap.real
-            ? `Built from your own ${heatmap.count} scheduled/published posts — darker cells are the times you actually post most. It shows your pattern, not measured audience reach (Instagram does not share that with this app).`
-            : 'A general guide for when audiences are usually online — evenings, especially 7–9pm, tend to be strongest. Schedule 10+ posts and this heatmap switches to your own posting pattern.'}</p>
+            ? t('toolsHeatReal').replace('{n}', heatmap.count)
+            : t('toolsHeatGuide')}</p>
           <div style={{ display: 'grid', gridTemplateColumns: '44px 1fr', gap: 6, alignItems: 'start' }}>
             <div />
-            <div className="heatmap" style={{ marginBottom: 5 }}>{HOURS.map((h) => <span key={h} style={{ fontSize: 10.5, textAlign: 'center', color: 'var(--muted)', fontWeight: 700 }}>{h}</span>)}</div>
+            <div className="heatmap" style={{ marginBottom: 5 }}>{HOURS.map((h) => <span key={h} style={{ fontSize: 11.5, textAlign: 'center', color: 'var(--muted)', fontWeight: 700 }}>{h}</span>)}</div>
             {heatmap.grid.map((row, i) => (
               <Fragment key={DAYS[i]}>
                 <span style={{ fontSize: 12, fontWeight: 700, paddingTop: 6 }}>{DAYS[i]}</span>
-                <div className="heatmap">{row.map((v, j) => <div key={j} className={`heat heat-${v}`} title={`${DAYS[i]} ${HOURS[j]} — strength ${v}/4`}>{v >= 3 ? '●' : ''}</div>)}</div>
+                <div className="heatmap">{row.map((v, j) => <div key={j} className={`heat heat-${v}`} title={t('toolsHeatCell').replace('{day}', DAYS[i]).replace('{hour}', HOURS[j]).replace('{v}', v)}>{v >= 3 ? '●' : ''}</div>)}</div>
               </Fragment>
             ))}
           </div>
-          <p className="muted small mt">{heatmap.real ? 'Your posting pattern — darker = you post there more often.' : 'Darker = usually busier. This is a guide, not measured data from your account.'}</p>
+          <p className="muted small mt">{heatmap.real ? t('toolsHeatRealNote') : t('toolsHeatGuideNote')}</p>
         </section>
       )}
 
       {tool === 'replies' && (
         <section className="card">
-          <h2>Reply helper</h2>
-          <p className="muted small mb">Paste a comment, pick a tone, get a warm reply draft. Edit it in your own voice before sending — never auto-reply.</p>
-          <label htmlFor="replyComment">Their comment</label>
-          <textarea id="replyComment" rows={3} placeholder="e.g. This helped me so much, thank you!" value={replyComment} onChange={(e) => setReplyComment(e.target.value)} />
-          <label htmlFor="replyTone" style={{ marginTop: 12 }}>Tone</label>
+          <h2>{t('tabReplies')}</h2>
+          <p className="muted small mb">{t('toolsReplySub')}</p>
+          <label htmlFor="replyComment">{t('toolsTheirComment')}</label>
+          <textarea id="replyComment" rows={3} placeholder={t('toolsCommentPh')} value={replyComment} onChange={(e) => setReplyComment(e.target.value)} />
+          <label htmlFor="replyTone" style={{ marginTop: 12 }}>{t('toolsTone')}</label>
           <select id="replyTone" value={replyTone} onChange={(e) => setReplyTone(e.target.value)}>
-            {['Friendly', 'Professional', 'Playful', 'Grateful'].map((t) => <option key={t} value={t}>{t}</option>)}
+            {['Friendly', 'Professional', 'Playful', 'Grateful'].map((toneName) => <option key={toneName} value={toneName}>{toneName}</option>)}
           </select>
-          <button type="button" className="btn primary mt" onClick={makeReply}>Draft a reply</button>
+          <button type="button" className="btn primary mt" onClick={makeReply}>{t('toolsDraftReply')}</button>
           {replyDraft && (
             <div className="mt">
-              <label>Your draft reply</label>
+              <label>{t('toolsYourDraft')}</label>
               <div className="hook-item">{replyDraft}</div>
-              <button type="button" className="copy-btn" onClick={() => copyText(replyDraft, setCopied)}>Copy reply</button>
+              <button type="button" className="copy-btn" onClick={() => copyText(replyDraft, setCopied)}>{t('toolsCopyReply')}</button>
             </div>
           )}
         </section>
@@ -299,27 +300,27 @@ export default function Tools({ posts, stats, templates, onCreateTemplate, onUse
       {tool === 'templates' && (
         <div className="two-col" style={{ alignItems: 'start' }}>
           <form className="card" onSubmit={saveTemplate}>
-            <h2>New template</h2>
-            <p className="muted small mb">Save a caption you reuse often.</p>
-            <label htmlFor="tplName">Name</label>
+            <h2>{t('toolsTplNew')}</h2>
+            <p className="muted small mb">{t('toolsTplNewSub')}</p>
+            <label htmlFor="tplName">{t('authNameLabel')}</label>
             <input id="tplName" placeholder="e.g. Weekly tip" value={tplName} onChange={(e) => setTplName(e.target.value)} />
-            <label htmlFor="tplText" style={{ marginTop: 12 }}>Text</label>
-            <textarea id="tplText" rows={5} placeholder="Your reusable caption…" value={tplText} onChange={(e) => setTplText(e.target.value)} />
+            <label htmlFor="tplText" style={{ marginTop: 12 }}>{t('toolsTplText')}</label>
+            <textarea id="tplText" rows={5} placeholder={t('toolsTplTextPh')} value={tplText} onChange={(e) => setTplText(e.target.value)} />
             {tplMsg && <div className="alert success">{tplMsg}</div>}
-            <button type="submit" className="btn primary mt" disabled={!tplName.trim() || !tplText.trim()}>Save template</button>
+            <button type="submit" className="btn primary mt" disabled={!tplName.trim() || !tplText.trim()}>{t('toolsSaveTemplate')}</button>
           </form>
           <section className="card">
-            <h2>Your templates</h2>
-            <p className="muted small mb">{(templates || []).length} saved.</p>
-            {(!templates || templates.length === 0) ? <p className="muted">No templates yet — save one on the left.</p> : templates.map((t) => (
-              <div key={t.id} className="bank-item">
-                <div className="row"><div><b>{t.name}</b><p className="muted small" style={{ marginTop: 4 }}>{t.text}</p></div><button type="button" className="copy-btn" onClick={() => onUseTemplate && onUseTemplate(t)}>Use</button></div>
+            <h2>{t('toolsYourTpls')}</h2>
+            <p className="muted small mb">{t('toolsTplCount').replace('{n}', (templates || []).length)}</p>
+            {(!templates || templates.length === 0) ? <p className="muted">{t('toolsNoTpls')}</p> : templates.map((tpl) => (
+              <div key={tpl.id} className="bank-item">
+                <div className="row"><div><b>{tpl.name}</b><p className="muted small" style={{ marginTop: 4 }}>{tpl.text}</p></div><button type="button" className="copy-btn" onClick={() => onUseTemplate && onUseTemplate(tpl)}>{t('toolsUse')}</button></div>
               </div>
             ))}
           </section>
         </div>
       )}
-      <p className="muted small mt">Analytics here count your scheduled and published posts. Platform reach, likes and follower stats are not available until the server reports real insights — the numbers above never invent them.</p>
+      <p className="muted small mt">{t('toolsFoot')}</p>
     </div>
   )
 }

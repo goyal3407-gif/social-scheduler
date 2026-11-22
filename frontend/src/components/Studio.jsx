@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, captionScore, countHashtags, fromLocalInputValue, nextBestTime, toLocalInputValue } from '../api.js'
 import { IconWarn, IconCheck, IconHeart, IconComment, IconSend, IconBookmark } from './icons.jsx'
+import { Empty } from './shared.jsx'
+import BottomSheet from './BottomSheet.jsx'
 
 // Best-time chips (batch 6): the next occurrences of the widely-used
 // India Instagram slots (12:30 PM, 6:30 PM, 9:00 PM, local time).
@@ -70,7 +72,7 @@ const withYouTubeFields = (base, ytDefault) => {
 const isSeedTemplate = (t) => /^tpl-\d+$/.test(String(t?.id || '')) || /^pack-/.test(String(t?.id || ''))
 const isPackTemplate = (t) => /^pack-/.test(String(t?.id || ''))
 
-export default function Studio({ editing, seed, media, templates, hashtagGroups, onCreateTemplate, onDeleteTemplate, onCreateHashtagGroup, onDeleteHashtagGroup, drafts, onSaveLibraryDraft, onDeleteLibraryDraft, onSave, onCancel, saving, posts, igAccounts, defaultIgUserId, settings, onNavigate, tr }) {
+export default function Studio({ editing, seed, media, templates, hashtagGroups, onCreateTemplate, onDeleteTemplate, onCreateHashtagGroup, onDeleteHashtagGroup, drafts, onSaveLibraryDraft, onDeleteLibraryDraft, onSave, onCancel, saving, posts, igAccounts, defaultIgUserId, settings, onNavigate, onUploadFile, tr }) {
   const t = tr || ((k) => k)
   const [form, setForm] = useState(EMPTY)
   const [step, setStep] = useState(1)
@@ -86,6 +88,15 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
   const [draftLibName, setDraftLibName] = useState('')
   const [draftLibMsg, setDraftLibMsg] = useState('')
   const [ytStatus, setYtStatus] = useState(null)
+  // Round 2 (D-2): Step 1 leads with the library + upload; the URL
+  // paste box is an "advanced" row, opened on demand (or whenever
+  // the current media URL did not come from the library).
+  const [showUrl, setShowUrl] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const fileRef = useRef(null)
+  // Prompt-4: the drafts library lives behind a Drafts button +
+  // bottom sheet, not as a card at the top of the composer.
+  const [draftsOpen, setDraftsOpen] = useState(false)
   const restoredDraftRef = useRef(false)
 
   // YouTube cross-post availability (Phase B): the toggle renders only
@@ -415,6 +426,24 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
     setForm((f) => ({ ...f, mediaUrl: m.url, mediaType: m.kind === 'image' ? 'image' : 'video', posterUrl: m.posterUrl || '', title: m.title }))
   }
 
+  // Step 1 upload (D-2): the Library's own upload path (App's
+  // handleUpload → api.uploadMedia) — the created item lands in the
+  // library AND is picked for this post in the same tap.
+  const onPickFile = async (e) => {
+    const f = e.target.files && e.target.files[0]
+    e.target.value = ''
+    if (!f || !onUploadFile) return
+    setUploading(true)
+    try {
+      const item = await onUploadFile(f, { folder: 'Uploads' })
+      if (item && item.url) pickMedia({ url: item.url, kind: item.kind, posterUrl: item.posterUrl || '', title: item.title })
+    } catch { /* App surfaces upload errors */ }
+    setUploading(false)
+  }
+  // The URL paste row stays open when the current URL did not come
+  // from the library (a pasted link, an edited post's own URL).
+  const urlInLibrary = Boolean(form.mediaUrl) && (media || []).some((m) => m.url === form.mediaUrl)
+
   // Instagram preview identity: the first ticked account this post
   // will publish to, else the default connection.
   const previewAccount = useMemo(() => {
@@ -427,13 +456,19 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
   const previewAspect = form.format === 'FEED' ? '4 / 5' : '9 / 16'
 
   return (
-    <div>
-      <h2 className="section-title">{editing ? t('studioEditTitle') : t('studioTitle')}</h2>
-      <p className="section-sub">{t('studioSub')}</p>
-      {onSaveLibraryDraft && (
-        <div className="card" style={{ marginBottom: 16 }}>
-          <h3>{t('draftsLibrary')}</h3>
-          <p className="muted small" style={{ marginTop: 6 }}>{t('draftsLibrarySub')}</p>
+    <div style={{ paddingBottom: 28 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, flexWrap: 'wrap' }}>
+        <div style={{ flex: 1, minWidth: 200 }}>
+          <h2 className="section-title">{editing ? t('studioEditTitle') : t('studioTitle')}</h2>
+          <p className="section-sub">{t('studioSub')}</p>
+        </div>
+        {onSaveLibraryDraft && (
+          <button type="button" className="btn ghost" onClick={() => setDraftsOpen(true)}>{t('draftsLibrary')}</button>
+        )}
+      </div>
+      {draftsOpen && onSaveLibraryDraft && (
+        <BottomSheet title={t('draftsLibrary')} onClose={() => setDraftsOpen(false)}>
+          <p className="muted small" style={{ marginTop: 0 }}>{t('draftsLibrarySub')}</p>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
             <input placeholder={t('draftNamePh')} value={draftLibName} onChange={(e) => setDraftLibName(e.target.value)} style={{ flex: 1, minWidth: 180 }} aria-label={t('draftNameAria')} />
             <button type="button" className="btn small" onClick={saveToDraftsLibrary}>{t('saveToDrafts')}</button>
@@ -443,20 +478,19 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
             <div style={{ marginTop: 10 }}>
               {drafts.map((d) => (
                 <span key={d.id} className="chip" style={{ marginRight: 6, marginBottom: 6 }}>
-                  <button type="button" onClick={() => loadDraft(d)} style={{ border: 'none', background: 'transparent', fontWeight: 700, padding: 0, color: 'var(--ink)' }} title={d.caption || ''}>{d.name}</button>
+                  <button type="button" onClick={() => { loadDraft(d); setDraftsOpen(false) }} style={{ border: 'none', background: 'transparent', fontWeight: 700, padding: 0, color: 'var(--ink)' }} title={d.caption || ''}>{d.name}</button>
                   {onDeleteLibraryDraft && <button type="button" aria-label={t('deleteDraftAria').replace('{name}', d.name)} onClick={() => onDeleteLibraryDraft(d)} style={{ border: 'none', background: 'transparent', color: 'var(--red-text)', fontWeight: 700, padding: 0, marginLeft: 2 }}>✕</button>}
                 </span>
               ))}
             </div>
           )}
-        </div>
+        </BottomSheet>
       )}
 
-      <div className="steps" aria-label="Composer steps">
+      <div className="steps composer-steps" aria-label="Composer steps">
         {[t('stepMedia'), t('stepCaption'), t('stepSchedule')].map((label, i) => (
           <button key={label} type="button" className={`step ${step === i + 1 ? 'active' : ''}`} aria-current={step === i + 1 ? 'step' : undefined} onClick={() => setStep(i + 1)}>
             <b><span className="step-num">{i + 1}</span>{label}</b>
-            <span className="muted small">{[t('stepMediaSub'), t('stepCaptionSub'), t('stepScheduleSub')][i]}</span>
           </button>
         ))}
       </div>
@@ -467,8 +501,29 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
             <div>
               <h2>{t('step1Title')}</h2>
               <p className="muted small mb">{t('step1Sub')}</p>
-              <label htmlFor="mediaUrl">{t('mediaUrlLabel')}</label>
-              <input id="mediaUrl" type="url" placeholder="https://…/video.mp4 or image.jpg" value={form.mediaUrl} onChange={(e) => set({ mediaUrl: e.target.value, mediaType: /\.(png|jpe?g|gif|webp|avif)(\?|$)/i.test(e.target.value) ? 'image' : 'video', posterUrl: '' })} />
+              {/* D-2: the library + upload lead Step 1 — the URL paste
+                  box is demoted to an advanced row below. */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <label style={{ margin: 0, flex: 1 }}>{t('fromLibrary')}</label>
+                <input ref={fileRef} type="file" accept="video/*,image/*" hidden onChange={onPickFile} />
+                <button type="button" className="btn ghost small" disabled={uploading || !onUploadFile} onClick={() => fileRef.current && fileRef.current.click()}>{uploading ? t('uploadingWord') : t('uploadMediaBtn')}</button>
+                {onNavigate && <button type="button" className="btn ghost small" onClick={() => onNavigate('media')}>{t('seeAllInLibrary')}</button>}
+              </div>
+              {(!media || media.length === 0) ? (
+                <Empty title={t('noMediaYet')} body={t('step1Sub')} action={<button type="button" className="btn primary small" disabled={uploading || !onUploadFile} onClick={() => fileRef.current && fileRef.current.click()}>{t('uploadMediaBtn')}</button>} />
+              ) : (
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', maxHeight: 180, overflow: 'auto', marginTop: 8 }}>
+                  {media.slice(0, 24).map((m) => m.serverCopyRemoved ? (
+                    <button key={m.id} type="button" disabled title={t('removedCopyTitle')} style={{ border: '1px dashed var(--line)', borderRadius: 10, padding: 6, width: 72, height: 96, background: 'var(--surface-2)', color: 'var(--muted)', fontSize: 12, lineHeight: 1.4, cursor: 'not-allowed' }}>
+                      {t('publishedMark')}<br />{t('reuploadReuse')}
+                    </button>
+                  ) : (
+                    <button key={m.id} type="button" onClick={() => pickMedia(m)} style={{ border: form.mediaUrl === m.url ? '2px solid var(--brand)' : '1px solid var(--line)', borderRadius: 10, padding: 0, overflow: 'hidden', width: 72, height: 96, background: 'var(--surface-2)' }} title={m.title || m.url}>
+                      {m.kind === 'image' ? <img src={m.url} alt={m.title || ''} style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <video src={m.url} muted preload="metadata" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />}
+                    </button>
+                  ))}
+                </div>
+              )}
               <div className="two-col mt">
                 <div>
                   <label htmlFor="mediaType">{t('mediaTypeLabel')}</label>
@@ -503,19 +558,13 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
               </div>
 
               <div className="mt2">
-                <label>{t('fromLibrary')}</label>
-                {(!media || media.length === 0) ? <p className="muted small">{t('noMediaYet')}</p> : (
-                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', maxHeight: 180, overflow: 'auto' }}>
-                    {media.slice(0, 12).map((m) => m.serverCopyRemoved ? (
-                      <button key={m.id} type="button" disabled title={t('removedCopyTitle')} style={{ border: '1px dashed var(--line)', borderRadius: 10, padding: 6, width: 72, height: 96, background: 'var(--surface-2)', color: 'var(--muted)', fontSize: 10, lineHeight: 1.4, cursor: 'not-allowed' }}>
-                        {t('publishedMark')}<br />{t('reuploadReuse')}
-                      </button>
-                    ) : (
-                      <button key={m.id} type="button" onClick={() => pickMedia(m)} style={{ border: form.mediaUrl === m.url ? '2px solid var(--brand)' : '1px solid var(--line)', borderRadius: 10, padding: 0, overflow: 'hidden', width: 72, height: 96, background: 'var(--surface-2)' }} title={m.title || m.url}>
-                        {m.kind === 'image' ? <img src={m.url} alt={m.title || ''} style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <video src={m.url} muted preload="metadata" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />}
-                      </button>
-                    ))}
-                  </div>
+                {!(showUrl || urlInLibrary) ? (
+                  <button type="button" className="btn ghost small" onClick={() => setShowUrl(true)}>{t('studioUrlAdvanced')}</button>
+                ) : (
+                  <>
+                    <label htmlFor="mediaUrl">{t('mediaUrlLabel')}</label>
+                    <input id="mediaUrl" type="url" placeholder="https://…/video.mp4 or image.jpg" value={form.mediaUrl} onChange={(e) => set({ mediaUrl: e.target.value, mediaType: /\.(png|jpe?g|gif|webp|avif)(\?|$)/i.test(e.target.value) ? 'image' : 'video', posterUrl: '' })} />
+                  </>
                 )}
               </div>
               <button type="button" className="btn primary mt" onClick={() => setStep(2)}>{t('continueCaption')}</button>
@@ -614,7 +663,10 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
 
           {step === 3 && (
             <div>
-              <h2>{t('step3Title')}</h2>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                <h2 style={{ flex: 1, margin: 0 }}>{t('step3Title')}</h2>
+                <button type="button" className="btn ghost small" onClick={() => setStep(2)}>{t('backArrow')}</button>
+              </div>
               <p className="muted small mb">{t('step3Sub')}</p>
               <div className="two-col">
                 <div>
@@ -709,7 +761,7 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
                         </div>
                       </div>
                     </div>
-                    <p className="muted small" style={{ marginTop: 6 }}>{t('ytApprovalNote')}</p>
+                    <p className="muted small" style={{ marginTop: 6 }}>{t('ytApprovalShort')}</p>
                   </div>
                 )}
                 {!igTicked && form.youtubeEnabled && ytStatus?.connected && (
@@ -777,12 +829,8 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
                   </p>
                 )}
               </div>
-              <div style={{ display: 'flex', gap: 8, marginTop: 16, flexWrap: 'wrap' }}>
-                <button type="button" className="btn ghost" onClick={() => setStep(2)}>{t('backArrow')}</button>
-                <button type="button" className="btn ghost" disabled={!canSaveDraft || saving} onClick={() => submit('draft')}>{t('saveDraftBtn')}</button>
-                <button type="button" className="btn primary" disabled={!canSave || saving} onClick={() => submit('scheduled')}>{saving ? t('savingWord') : editing ? t('saveChangesBtn') : t('schedulePostBtn')}</button>
-              </div>
-              {!canSave && <p className="muted small mt">{canSaveDraft ? t('canSaveHintDraft') : t('canSaveHintMedia')}</p>}
+              {/* D-2: no second action row here — the sticky bar
+                  below is the ONE action row for every step. */}
             </div>
           )}
         </div>
@@ -825,12 +873,16 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
               </div>
             </div>
             <p className="muted small mt">{t('scoreMeta').replace('{tags}', nTags).replace('{chars}', form.caption.length).replace('{format}', form.format)}{reelSafe ? t('reelSafeMark') : ''}</p>
+            <p className="muted small" style={{ marginTop: 6 }}>{t('scoreExplain')}</p>
           </div>
         </div>
       </div>
 
       <div className="sticky-bar">
-        <div><b>{editing ? t('editingPost') : t('newPostWord')}</b> <span className="muted small">· {form.platform} · {form.format} · {t('scoreOf').replace('{score}', score)}</span></div>
+        <div>
+          <b>{editing ? t('editingPost') : t('newPostWord')}</b> <span className="muted small">· {form.platform} · {form.format} · {t('scoreOf').replace('{score}', score)}</span>
+          {!canSave && <div className="muted small" style={{ marginTop: 2 }}>{canSaveDraft ? t('canSaveHintDraft') : t('canSaveHintMedia')}</div>}
+        </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           {onCancel && <button type="button" className="btn ghost small" onClick={onCancel}>{t('cancel')}</button>}
           <button type="button" className="btn ghost small" disabled={!canSaveDraft || saving} onClick={() => submit('draft')}>{t('saveDraftBtn')}</button>

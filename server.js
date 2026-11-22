@@ -544,7 +544,7 @@ async function requireAuth(req, res, next) {
 // Gmail-alias cleanup gate: the first /api request in a process runs
 // the guarded one-time cleanup (runGmailAliasCleanup) before any
 // route answers; every later request reuses the settled promise.
-app.use('/api', (req, res, next) => { ensureAliasCleanup().then(() => next(), () => next()); });
+app.use('/api', (req, res, next) => { ensureAliasCleanup().then(() => ensureTestBroadcastCleanup()).then(() => next(), () => next()); });
 // Every /api/* route except /api/health, /api/db-status and /api/auth/*
 // requires login.
 app.use('/api', apiRateLimit, (req, res, next) => { if (req.path.startsWith('/auth/')) return authRateLimit(req, res, next); return next(); });
@@ -3355,6 +3355,49 @@ function ensureAliasCleanup() {
   }
   return aliasCleanupPromise;
 }
+// ---------- one-time cleanup: the 22 Nov test broadcast ----------
+// Owner-approved removal (22 Nov 2026): a Batch-6-era test broadcast
+// ("New update bhai" / "Hih") created one announcement notification
+// per user at 2026-11-22T07:32:11.5Z. There is no notification-delete
+// endpoint, so this guarded boot cleanup removes ONLY records that
+// match ALL of: type 'announcement', that exact title, that exact
+// message, and a createdAt inside 07:32:00–07:33:00Z that day. It
+// fires once — a marker in globalsettings (cleanups
+// .testBroadcast20261122) is written after the run, together with ONE
+// admin-audit entry carrying the actual deleted count — and it can
+// never fire again. Any other shape is left untouched.
+async function runTestBroadcastCleanup() {
+  const settings = await db.getGlobalSettings();
+  if (settings.cleanups && settings.cleanups.testBroadcast20261122) return;
+  const lo = Date.parse('2026-11-22T07:32:00.000Z');
+  const hi = Date.parse('2026-11-22T07:33:00.000Z');
+  const all = await db.listAllNotifications();
+  const matches = all.filter((n) => {
+    if (!n || n.type !== 'announcement') return false;
+    if (n.title !== 'New update bhai' || n.message !== 'Hih') return false;
+    const ts = Date.parse(n.createdAt || '');
+    return Number.isFinite(ts) && ts >= lo && ts < hi;
+  });
+  let deleted = 0;
+  if (matches.length) deleted = await db.deleteNotificationsByIds(matches.map((n) => n.id));
+  console.log(`[broadcast-cleanup] Removed ${deleted} test-broadcast notification(s) (expected 10).`);
+  await writeAdminAudit({ id: 'system' }, 'test-broadcast-cleanup', null,
+    `Removed ${deleted} test-broadcast notification(s) — title "New update bhai", message "Hih", created 2026-11-22 07:32 UTC window.`);
+  await db.saveGlobalSettings({
+    cleanups: { ...((settings && settings.cleanups) || {}), testBroadcast20261122: new Date().toISOString() },
+  });
+  bustGlobalSettingsCache();
+}
+let broadcastCleanupPromise = null;
+function ensureTestBroadcastCleanup() {
+  if (!broadcastCleanupPromise) {
+    broadcastCleanupPromise = runTestBroadcastCleanup().catch((e) => {
+      console.error('[broadcast-cleanup] check failed:', String((e && e.message) || e).slice(0, 200));
+      broadcastCleanupPromise = null;
+    });
+  }
+  return broadcastCleanupPromise;
+}
 // ---------- team / agency foundation (batch 3, Ultra) ----------
 // An Ultra workspace owner invites people by email with a limited
 // role. An invite binds to the account with that email (at invite
@@ -6002,12 +6045,13 @@ app.get(`/api/${ADMIN_SLUG}/backup-export`, ah(async (req, res) => {
 // any user. Plain numbers and simple bars, no chart library (house
 // rule: fast and ₹0).
 const ADMIN_PAGE_HTML = `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex">
 <title>Owner Console — KiluaAI</title>
 <style>
 body{margin:0;background:#0e1325;color:#f5f1e6;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
-header{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid #2b3560;background:#1a2140;position:sticky;top:0;z-index:5}
+header{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:14px 18px;padding-top:calc(14px + env(safe-area-inset-top,0px));border-bottom:1px solid #2b3560;background:#1a2140;position:sticky;top:0;z-index:5}
+#hdrSearch{width:220px;min-height:44px}
 header b{color:#e8c268}
 main{max-width:1180px;margin:0 auto;padding:16px}
 .card{background:#1a2140;border:1px solid #2b3560;border-radius:16px;padding:16px;margin:0 0 14px}
@@ -6016,21 +6060,27 @@ h2{margin:0 0 10px;font-size:17px}
 .err{color:#ff9a9a;font-size:14px;min-height:18px}
 .okmsg{color:#8fe3b0;font-size:14px;min-height:18px}
 label{display:block;font-size:13px;opacity:.8;margin:10px 0 4px}
-input,select,textarea{background:#0e1325;border:1px solid #2b3560;border-radius:12px;color:#f5f1e6;padding:9px 11px;font-size:14px;width:100%;box-sizing:border-box;font-family:inherit}
+input,select,textarea{background:#0e1325;border:1px solid #2b3560;border-radius:12px;color:#f5f1e6;padding:10px 11px;font-size:14px;width:100%;box-sizing:border-box;font-family:inherit;min-height:44px}
 input[type=date]{width:auto}
-input[type=checkbox]{width:auto}
-.btn{background:#1a2140;border:1px solid #2b3560;color:#f5f1e6;border-radius:12px;padding:8px 14px;font-size:14px;cursor:pointer}
+input[type=checkbox]{width:auto;min-height:0}
+.btn{background:#1a2140;border:1px solid #2b3560;color:#f5f1e6;border-radius:12px;padding:8px 14px;font-size:14px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;min-height:44px;box-sizing:border-box}
 .btn.primary{background:#e8c268;border-color:#e8c268;color:#191204;font-weight:700}
-.btn.small{padding:5px 10px;font-size:13px}
+.btn.small{padding:8px 12px;font-size:13px;min-height:44px}
 .btn.active{background:#e8c268;border-color:#e8c268;color:#191204;font-weight:700}
 .btn:disabled{opacity:.45;cursor:default}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(128px,1fr));gap:10px}
 .stat{background:#0e1325;border:1px solid #2b3560;border-radius:12px;padding:11px}
 .stat b{display:block;font-size:21px;color:#e8c268}
 .stat span{font-size:12px;opacity:.75}
+.secttl{font-size:12.5px;text-transform:uppercase;letter-spacing:.07em;opacity:.65;margin:16px 0 8px}
+.secttl:first-of-type{margin-top:2px}
+.conseq{font-size:12.5px;opacity:.65;margin:-4px 0 12px 27px}
+.preview{border:1px dashed #2b3560;border-radius:12px;padding:11px 13px;background:#0e1325;margin-top:10px}
+.pfchip{cursor:pointer;background:transparent;color:#f5f1e6;min-height:44px;display:inline-flex;align-items:center}
+.pfchip.active{background:#e8c268;border-color:#e8c268;color:#191204;font-weight:700}
 .chips{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
 .chip{border:1px solid #2b3560;border-radius:999px;padding:5px 12px;font-size:13px}
-.row{border-top:1px solid #2b3560;padding:11px 0}
+.row{border-top:1px solid #2b3560;padding:11px 0;overflow-wrap:anywhere}
 .row:first-of-type{border-top:none}
 .bar{height:8px;background:#2b3560;border-radius:99px;overflow:hidden;margin-top:5px}
 .bar i{display:block;height:100%;background:#e8c268}
@@ -6043,7 +6093,7 @@ input[type=checkbox]{width:auto}
 .klabel{font-size:12px;opacity:.7;width:100%}
 .layout{display:flex;gap:14px;align-items:flex-start}
 nav.side{flex:0 0 178px;background:#1a2140;border:1px solid #2b3560;border-radius:16px;padding:10px;position:sticky;top:74px}
-nav.side button{display:block;width:100%;text-align:left;background:transparent;border:1px solid transparent;color:#f5f1e6;border-radius:12px;padding:9px 11px;font-size:14px;cursor:pointer;margin:2px 0}
+nav.side button{display:block;width:100%;text-align:left;background:transparent;border:1px solid transparent;color:#f5f1e6;border-radius:12px;padding:11px;font-size:14px;cursor:pointer;margin:2px 0;min-height:44px}
 nav.side button:hover{border-color:#2b3560}
 nav.side button.active{background:#e8c268;color:#191204;font-weight:700}
 .views{flex:1;min-width:0}
@@ -6053,8 +6103,8 @@ nav.side button.active{background:#e8c268;color:#191204;font-weight:700}
 .filters{display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:6px}
 .filters>div{flex:1;min-width:140px}
 .filters label{margin-top:0}
-.toggle{display:flex;gap:9px;align-items:center;cursor:pointer;margin:12px 0}
-.toggle input{width:18px;height:18px}
+.toggle{display:flex;gap:9px;align-items:center;cursor:pointer;margin:12px 0;min-height:44px}
+.toggle input{width:18px;height:18px;flex:none}
 .banner{border:1px solid #a03d3d;background:#2a1420;border-radius:12px;padding:11px 13px;margin:0 0 12px;font-size:14px}
 .banner.info{border-color:#2b3560;background:#1a2140}
 table{width:100%;border-collapse:collapse;font-size:14px}
@@ -6062,11 +6112,12 @@ td,th{padding:7px 8px;border-top:1px solid #2b3560;text-align:left;vertical-alig
 tr:first-child td,tr:first-child th{border-top:none}
 input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid #e8c268;outline-offset:1px}
 .btn:focus-visible,nav.side button:focus-visible{outline:2px solid #e8c268;outline-offset:2px}
-@media (max-width:760px){.layout{flex-direction:column}nav.side{flex:none;width:100%;position:static;display:flex;flex-wrap:wrap;gap:4px}nav.side button{width:auto}}
+@media (max-width:760px){.layout{flex-direction:column}nav.side{flex:none;width:100%;position:static;display:flex;flex-wrap:nowrap;overflow-x:auto;gap:4px;padding:8px}nav.side button{width:auto;flex:0 0 auto}#hdrSearch{width:100%;margin-bottom:6px}}
 </style></head>
 <body>
 <header><b>KiluaAI — Owner Console</b>
 <span id="hdrBtns" hidden>
+<input id="hdrSearch" type="search" placeholder="Jump to user by email…" aria-label="Jump to user by email">
 <a class="btn small" href="/" style="text-decoration:none">Switch to User Panel</a>
 <button class="btn small" id="refreshBtn">Refresh</button>
 <button class="btn small" id="lockBtn">Lock</button>
@@ -6105,8 +6156,12 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px soli
 </nav>
 <div class="views">
 <section class="view on" id="view-dashboard">
-<div class="card"><h2>Dashboard</h2><div class="grid" id="stats"></div>
+<div id="attention"></div>
+<div class="card"><h2>Dashboard</h2>
+<h3 class="secttl">Users</h3><div class="grid" id="statsUsers"></div>
 <div class="chips" id="planDist"></div>
+<h3 class="secttl">Posts</h3><div class="grid" id="statsPosts"></div>
+<h3 class="secttl">Reliability</h3><div class="grid" id="statsRel"></div>
 <p class="muted" id="acctHealth" style="margin-top:10px"></p></div>
 <div class="card"><h2>Recent signups</h2><div id="signups"></div></div>
 <div class="card"><h2>Most active this month</h2><div id="active"></div></div>
@@ -6114,12 +6169,20 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px soli
 <section class="view" id="view-users">
 <div class="card"><h2>Users</h2>
 <input id="search" type="search" placeholder="Search by email or name">
+<div class="chips" id="planFilter" style="margin:10px 0 2px">
+<button class="chip pfchip active" data-pf="all">All plans</button>
+<button class="chip pfchip" data-pf="free">Free</button>
+<button class="chip pfchip" data-pf="pro">Pro</button>
+<button class="chip pfchip" data-pf="max">Max</button>
+<button class="chip pfchip" data-pf="ultra">Ultra</button>
+</div>
 <div id="users" style="margin-top:8px"></div>
 <div class="pager" id="usersPager"></div></div>
 </section>
 <section class="view" id="view-userdetail">
 <div class="card"><button class="btn small" data-act="back-users">← Back to Users</button>
 <h2 style="margin-top:12px">User Detail</h2><div id="udetail"></div></div>
+<div class="card"><h2>Actions</h2><div id="udActions"></div><p class="okmsg" id="udMsg"></p></div>
 <div class="card"><h2>Their posts (latest 50)</h2><div id="udetailPosts"></div></div>
 <div class="card"><h2>Audit entries for this user</h2><div id="udetailAudit"></div></div>
 </section>
@@ -6154,19 +6217,27 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px soli
 <input id="bcTitle" type="text" maxlength="120" placeholder="e.g. New: best-time suggestions are live">
 <label for="bcBody">Message</label>
 <textarea id="bcBody" rows="4" maxlength="1000" placeholder="Write the announcement…"></textarea>
-<p class="muted" id="bcCount"></p>
-<label class="toggle"><input type="checkbox" id="bcConfirm"> <span>Yes — send this to ALL users now</span></label>
+<div class="preview" id="bcPreview"></div>
+<label class="toggle"><input type="checkbox" id="bcConfirm"> <span>Yes — send this to ALL users now <span class="muted" id="bcCount"></span></span></label>
 <p><button class="btn primary" id="bcSend" disabled>Send broadcast</button></p>
 <p class="okmsg" id="bcMsg"></p><p class="err" id="bcErr"></p></div>
 </section>
 <section class="view" id="view-audit">
-<div class="card"><h2>Audit log</h2><div id="audit"></div>
+<div class="card"><h2>Audit log</h2>
+<div class="filters">
+<div><label for="auditAction">Action</label><select id="auditAction"><option value="">All actions</option></select></div>
+<div><label for="auditTarget">Target user</label><select id="auditTarget"><option value="">All users</option></select></div>
+</div>
+<p class="muted">Filters apply to the entries on this page.</p>
+<div id="audit"></div>
 <div class="pager" id="auditPager"></div></div>
 </section>
 <section class="view" id="view-settings">
 <div class="card"><h2>Settings — global toggles</h2>
 <label class="toggle"><input type="checkbox" id="setSignup"> <span><b>Signups open</b> — when off, new accounts cannot be created (existing users log in as usual)</span></label>
+<p class="conseq">Off karne se naye users account nahi bana payenge — jo pehle se hain, woh login karke sab use kar sakte hain.</p>
 <label class="toggle"><input type="checkbox" id="setMaint"> <span><b>Maintenance mode</b> — when on, posting and other changes pause for regular users; reading and login still work, and you (the owner) are never blocked</span></label>
+<p class="conseq">On karne se regular users ke posts aur changes ruk jayenge — sirf dekhna aur login chalega; aap (owner) kabhi block nahi hote.</p>
 <label for="setMaintMsg">Maintenance message (shown to users while maintenance is on)</label>
 <textarea id="setMaintMsg" rows="2" maxlength="300" placeholder="e.g. Back in 10 minutes — fixing something quick."></textarea>
 <p style="margin-top:12px"><button class="btn primary" id="setSave">Save settings</button> <span class="muted" id="setMsg"></span></p></div>
@@ -6300,17 +6371,36 @@ function pagerHtml(list, page, pages, total, label){
     + '<button class="btn small" data-act="page" data-list="' + list + '" data-dir="1"' + (page >= pages ? ' disabled' : '') + '>Next →</button>';
 }
 function stat(label, value){ return '<div class="stat"><b>' + esc(value) + '</b><span>' + esc(label) + '</span></div>'; }
+function loadingInto(id){ var n = el(id); if (n) n.innerHTML = '<p class="muted" aria-busy="true">Loading…</p>'; }
 
 // ---------- dashboard ----------
 function loadDashboard(){
+  ['statsUsers','statsPosts','statsRel','signups','active','attention'].forEach(loadingInto);
   api('/overview').then(function(o){
-    var s = '';
-    s += stat('Total users', o.users.total); s += stat('New today', o.users.today); s += stat('New in 7 days', o.users.week); s += stat('New this month', o.users.month);
-    s += stat('Posts total', o.posts.total); s += stat('Published today', o.posts.publishedToday); s += stat('Published in 7 days', o.posts.publishedWeek);
-    s += stat('Failed today', o.posts.failedToday); s += stat('Failed in 7 days', o.posts.failedWeek);
-    s += stat('Published (all time)', o.posts.published); s += stat('Failed (all time)', o.posts.failed); s += stat('Partly published', o.posts.partial); s += stat('Scheduled now', o.posts.scheduled);
-    s += stat('Publish success', o.posts.successPct == null ? '—' : o.posts.successPct + '%');
-    el('stats').innerHTML = s;
+    // Needs attention FIRST (owner expansion #2): current failures,
+    // partly-published posts and broken connections, with the newest
+    // failures listed and a jump into the Failures view.
+    var att = '';
+    var needN = (o.posts.failed || 0) + (o.posts.partial || 0);
+    if (needN > 0 || (o.accounts.instagramBroken || 0) > 0) {
+      att = '<div class="banner"><b>Needs attention:</b> ' + esc(o.posts.failed) + ' failed · ' + esc(o.posts.partial) + ' partly published · ' + esc(o.accounts.instagramBroken || 0) + ' broken Instagram connection(s).'
+        + ((o.failedPosts && o.failedPosts.length) ? o.failedPosts.slice(0, 5).map(function(f){
+            return '<div style="margin-top:7px"><span class="uemail">' + esc(f.userEmail) + '</span> — ' + esc(f.friendly || f.reason || 'Failed') + (f.failedAt ? ' <span class="muted">(' + esc(when(f.failedAt)) + ')</span>' : '') + '</div>';
+          }).join('') : '')
+        + '<div style="margin-top:9px"><button class="btn small" data-act="goto" data-view="failures">Open Failures</button></div></div>';
+    }
+    el('attention').innerHTML = att;
+    var su = '';
+    su += stat('Total users', o.users.total); su += stat('New today', o.users.today); su += stat('New in 7 days', o.users.week); su += stat('New this month', o.users.month);
+    el('statsUsers').innerHTML = su;
+    var sp = '';
+    sp += stat('Posts total', o.posts.total); sp += stat('Posts today', o.posts.today); sp += stat('Published today', o.posts.publishedToday); sp += stat('Published in 7 days', o.posts.publishedWeek); sp += stat('Scheduled now', o.posts.scheduled);
+    el('statsPosts').innerHTML = sp;
+    var sr = '';
+    sr += stat('Failed today', o.posts.failedToday); sr += stat('Failed in 7 days', o.posts.failedWeek);
+    sr += stat('Published (all time)', o.posts.published); sr += stat('Failed (all time)', o.posts.failed); sr += stat('Partly published', o.posts.partial);
+    sr += stat('Publish success', o.posts.successPct == null ? '—' : o.posts.successPct + '%');
+    el('statsRel').innerHTML = sr;
     var bp = o.users.byPlan || {};
     el('planDist').innerHTML = ['free','pro','max','ultra'].map(function(k){ return '<span class="chip">' + esc(k.toUpperCase()) + ' · ' + esc(bp[k] || 0) + ' users</span>'; }).join('');
     el('acctHealth').textContent = 'Connected accounts — Instagram: ' + o.accounts.instagram + ' (' + o.accounts.instagramBroken + ' broken, need reconnect) · YouTube channels: ' + o.accounts.youtube;
@@ -6321,13 +6411,53 @@ function loadDashboard(){
     el('active').innerHTML = (o.mostActive && o.mostActive.length) ? o.mostActive.map(function(x){
       return '<div class="row"><div style="display:flex;justify-content:space-between;gap:10px"><span>' + esc(x.email) + '</span><b>' + esc(x.count) + ' posts</b></div><div class="bar"><i style="width:' + (max ? Math.round(x.count / max * 100) : 0) + '%"></i></div></div>';
     }).join('') : '<p class="muted">No posts yet this month.</p>';
-  }).catch(function(){});
+  }).catch(function(){ el('statsUsers').innerHTML = '<p class="err">Could not load the dashboard — tap Refresh.</p>'; el('attention').innerHTML = ''; });
 }
+
+// ---------- header jump-to-user (owner expansion #9) ----------
+// Rides the existing Users search endpoint: an exact email (or the
+// first match) opens straight in User Detail.
+el('hdrSearch').addEventListener('keydown', function(ev){
+  if (ev.key !== 'Enter') return;
+  var q = el('hdrSearch').value.trim();
+  if (!q) return;
+  api('/users?page=1&pageSize=5&q=' + encodeURIComponent(q)).then(function(d){
+    var rows = d.users || [];
+    var hit = rows.find(function(u){ return String(u.email || '').toLowerCase() === q.toLowerCase(); }) || rows[0];
+    if (hit) { currentUserId = hit.id; el('hdrSearch').value = ''; showView('userdetail'); }
+    else { el('hdrSearch').value = ''; el('hdrSearch').placeholder = 'No user with that email — try the Users search'; }
+  }).catch(function(){});
+});
+el('hdrSearch').addEventListener('focus', function(){ el('hdrSearch').placeholder = 'Jump to user by email…'; });
 
 // ---------- users ----------
 el('search').addEventListener('input', function(){ pageState.users = 1; loadUsers(); });
+// Plan filter chips (owner expansion #4): the Users endpoint returns
+// each row's effective plan, so filtering rides the same endpoint —
+// with a filter on, one wide page (100) is loaded and filtered here;
+// the pager is replaced by a count note while a filter is active.
+var planFilter = 'all';
+el('planFilter').addEventListener('click', function(ev){
+  var b = ev.target && ev.target.closest ? ev.target.closest('[data-pf]') : null;
+  if (!b) return;
+  planFilter = b.getAttribute('data-pf') || 'all';
+  el('planFilter').querySelectorAll('[data-pf]').forEach(function(x){ x.classList.toggle('active', x.getAttribute('data-pf') === planFilter); });
+  pageState.users = 1;
+  loadUsers();
+});
+function effectivePlanKey(u){ return u.plan && u.plan.comp ? 'ultra' : (u.plan ? u.plan.plan : 'free'); }
 function loadUsers(){
+  loadingInto('users');
   var q = el('search').value.trim();
+  if (planFilter !== 'all') {
+    api('/users?page=1&pageSize=100' + (q ? '&q=' + encodeURIComponent(q) : '')).then(function(d){
+      var rows = (d.users || []).filter(function(u){ return effectivePlanKey(u) === planFilter; });
+      renderUsers(rows);
+      el('usersPager').innerHTML = '<span class="muted">' + rows.length + ' user(s) on the ' + esc(planFilter.toUpperCase()) + ' plan'
+        + ((d.total || 0) > (d.users || []).length ? ' (filter over the first 100 users)' : ' (filter over the full list)') + '</span>';
+    }).catch(function(){});
+    return;
+  }
   api('/users?page=' + pageState.users + '&pageSize=50' + (q ? '&q=' + encodeURIComponent(q) : '')).then(function(d){
     pageState.users = d.page || 1;
     renderUsers(d.users || []);
@@ -6346,7 +6476,7 @@ function renderUsers(rows){
   if (!rows.length) { el('users').innerHTML = '<p class="muted">No users match.</p>'; return; }
   el('users').innerHTML = rows.map(function(u){
     var accts = (u.accounts || []).map(function(a){ return '@' + esc(a.username || '?') + (a.broken ? ' <span class="badge bad">BROKEN</span>' : ''); }).join(', ');
-    return '<div class="row"><div class="uhead"><span class="uemail">' + esc(u.email) + (u.name ? ' <span class="muted">(' + esc(u.name) + ')</span>' : '') + '</span>'
+    return '<div class="row"><div class="uhead"><span class="uemail" data-act="open-user" data-id="' + u.id + '" style="cursor:pointer" title="Open user detail">' + esc(u.email) + (u.name ? ' <span class="muted">(' + esc(u.name) + ')</span>' : '') + '</span>'
       + '<span><span class="badge">' + esc(u.plan.planName) + ' plan</span> <button class="btn small" data-act="open-user" data-id="' + u.id + '">Open</button></span></div>'
       + '<div class="muted">Joined ' + esc(when(u.createdAt)) + ' · Posts: ' + esc(u.postsTotal) + ' total, ' + esc(u.postsThisMonth) + ' this month · Instagram: ' + (accts || 'none') + ' · YouTube: ' + (u.youtubeConnected ? 'connected' : 'no') + '</div>'
       + '<div class="controls"><span class="klabel">Plan (one tap)</span>' + planChips(u) + '</div></div>';
@@ -6354,10 +6484,13 @@ function renderUsers(rows){
 }
 function patchUser(id, body, after){
   api('/users/' + id, { method: 'PATCH', body: JSON.stringify(body) }).then(function(){
+    // Owner expansion #5: every completed action says so, with the
+    // audit-log note, right inside the Actions card.
+    var m = el('udMsg'); if (m) m.textContent = 'Saved ✓ — this action is recorded in the Audit Log.';
     if (after) after();
     if (currentView === 'users') loadUsers();
     if (currentView === 'userdetail' && currentUserId === id) openUser(id, true);
-  }).catch(function(){});
+  }).catch(function(){ var m = el('udMsg'); if (m) m.textContent = 'That change did not save — try again.'; });
 }
 
 // ---------- user detail ----------
@@ -6366,16 +6499,20 @@ function openUser(id, stay){
   currentUserId = id;
   if (!stay) { showView('userdetail'); return; }
   el('navUserDetail').hidden = false;
+  loadingInto('udetail'); loadingInto('udetailPosts'); loadingInto('udetailAudit');
   api('/users/' + id).then(function(d){
     var u = d.user;
     var accts = (u.accounts || []).map(function(a){ return '@' + esc(a.username || '?') + (a.broken ? ' <span class="badge bad">BROKEN</span>' : ''); }).join(', ');
     var h = '<div class="uhead"><span class="uemail">' + esc(u.email) + (u.name ? ' <span class="muted">(' + esc(u.name) + ')</span>' : '') + '</span>'
       + '<span class="badge">' + esc(u.plan.planName) + ' plan</span></div>'
       + '<div class="muted">Joined ' + esc(when(u.createdAt)) + ' · Role: ' + esc(u.role) + ' · Posts: ' + esc(u.postsTotal) + ' total, ' + esc(u.postsThisMonth) + ' this month</div>'
-      + '<div class="muted">Instagram: ' + (accts || 'none') + ' · YouTube: ' + (u.youtubeConnected ? 'connected' : 'not connected') + '</div>'
-      + '<div class="controls"><span class="klabel">Plan (one tap)</span>' + planChips(u) + '</div>';
+      + '<div class="muted">Instagram: ' + (accts || 'none') + ' · YouTube: ' + (u.youtubeConnected ? 'connected' : 'not connected') + '</div>';
+    el('udetail').innerHTML = h;
+    // Owner expansion #5: all owner actions live in ONE labelled
+    // Actions card; every save confirms there with its audit note.
+    var ah = '<div class="controls"><span class="klabel">Plan (one tap)</span>' + planChips(u) + '</div>';
     if (u.role !== 'owner') {
-      h += '<div class="controls"><span class="klabel">Paid-plan expiry (blank = no expiry)</span>'
+      ah += '<div class="controls"><span class="klabel">Paid-plan expiry (blank = no expiry)</span>'
         + '<input type="date" id="exp-' + u.id + '" value="' + esc((u.plan.planExpiresAt || '').slice(0, 10)) + '">'
         + '<button class="btn small" data-act="expiry" data-id="' + u.id + '">Save expiry</button>'
         + '<button class="btn small" data-act="expiry-clear" data-id="' + u.id + '">Clear</button></div>'
@@ -6388,7 +6525,7 @@ function openUser(id, stay){
         + '<button class="btn small" data-act="override" data-id="' + u.id + '">Save override</button>'
         + '<button class="btn small" data-act="override-clear" data-id="' + u.id + '">Clear</button></div>';
     }
-    el('udetail').innerHTML = h;
+    el('udActions').innerHTML = ah;
     el('udetailPosts').innerHTML = (d.posts && d.posts.length) ? d.posts.map(postRowHtml).join('') : '<p class="muted">No posts yet.</p>';
     el('udetailAudit').innerHTML = (d.audit && d.audit.length) ? d.audit.map(auditRowHtml).join('') : '<p class="muted">No admin actions on this user yet.</p>';
   }).catch(function(){});
@@ -6404,13 +6541,14 @@ function postRowHtml(r){
   if (r.status === 'failed' || r.status === 'partial') {
     h += '<div style="color:#ff9a9a">' + esc(r.friendly || r.reason || 'Failed') + '</div>'
       + (r.reason && r.reason !== r.friendly ? '<div class="muted">' + esc(r.reason) + '</div>' : '')
-      + '<div class="controls"><button class="btn small" data-act="retry" data-user="' + esc(r.userId) + '" data-id="' + esc(r.postId) + '">Retry this post</button> <span class="muted" id="retry-' + esc(r.postId) + '"></span></div>';
+      + '<div class="controls"><button class="btn small" data-act="retry" data-user="' + esc(r.userId) + '" data-id="' + esc(r.postId) + '">Retry this post</button> <button class="btn small" data-act="open-user" data-id="' + esc(r.userId) + '">Open user</button> <span class="muted" id="retry-' + esc(r.postId) + '"></span></div>';
   }
   return h + '</div>';
 }
 el('postStatus').addEventListener('change', function(){ pageState.posts = 1; loadPosts(); });
 el('postQ').addEventListener('input', function(){ pageState.posts = 1; loadPosts(); });
 function loadPosts(){
+  loadingInto('posts');
   var st = el('postStatus').value, q = el('postQ').value.trim();
   api('/posts?page=' + pageState.posts + '&pageSize=50' + (st ? '&status=' + encodeURIComponent(st) : '') + (q ? '&q=' + encodeURIComponent(q) : '')).then(function(d){
     pageState.posts = d.page || 1;
@@ -6419,6 +6557,7 @@ function loadPosts(){
   }).catch(function(){});
 }
 function loadFailures(){
+  loadingInto('failures');
   api('/failures?page=' + pageState.failures + '&pageSize=50').then(function(d){
     pageState.failures = d.page || 1;
     el('failures').innerHTML = (d.posts && d.posts.length) ? d.posts.map(postRowHtml).join('') : '<p class="muted">No failed posts. </p>';
@@ -6449,6 +6588,7 @@ function planCardsHtml(plans, perPlan){
   }).join('');
 }
 function loadPlans(){
+  loadingInto('plans');
   api('/plans').then(function(d){
     el('plansNote').innerHTML = d.paymentsLive ? '' : '<div class="banner">' + esc(d.paymentsNote || '') + '</div>';
     el('plans').innerHTML = planCardsHtml(d.plans, d.usersPerPlan);
@@ -6457,6 +6597,7 @@ function loadPlans(){
 
 // ---------- connections ----------
 function loadConnections(){
+  loadingInto('disconnected'); loadingInto('connections');
   api('/connections').then(function(d){
     el('disconnected').innerHTML = (d.disconnected && d.disconnected.length) ? d.disconnected.map(function(x){
       return '<div class="row"><span class="uemail">' + esc(x.userEmail) + '</span> — Instagram @' + esc(x.username || '?') + ' <span class="badge bad">DISCONNECTED</span><div class="muted">Their posts to this account cannot publish until they reconnect.</div></div>';
@@ -6470,8 +6611,16 @@ function loadConnections(){
 }
 
 // ---------- broadcast ----------
+function renderBcPreview(){
+  var title = el('bcTitle').value.trim(), body = el('bcBody').value.trim();
+  el('bcPreview').innerHTML = '<div class="muted" style="margin-bottom:5px">Preview — this is how it lands in each user\u2019s notifications:</div>'
+    + '<b>' + esc(title || '(no title yet)') + '</b><div class="muted">' + esc(body || '(no message yet)') + '</div>';
+}
+el('bcTitle').addEventListener('input', renderBcPreview);
+el('bcBody').addEventListener('input', renderBcPreview);
 function loadBroadcast(){
-  api('/overview').then(function(o){ el('bcCount').textContent = 'This will go to ' + o.users.total + ' users.'; }).catch(function(){});
+  renderBcPreview();
+  api('/overview').then(function(o){ el('bcCount').textContent = '— it will go to ' + o.users.total + ' users.'; }).catch(function(){});
 }
 el('bcConfirm').addEventListener('change', function(){ el('bcSend').disabled = !el('bcConfirm').checked; });
 el('bcSend').addEventListener('click', function(){
@@ -6489,10 +6638,37 @@ el('bcSend').addEventListener('click', function(){
 function auditRowHtml(e){
   return '<div class="row"><div class="uhead"><span><b>' + esc(e.action) + '</b> · ' + esc(e.targetEmail || '') + '</span><span class="muted">' + esc(when(e.at)) + '</span></div><div class="muted">' + esc(e.summary || '') + '</div></div>';
 }
+// Audit filters (owner expansion #7): client-side over the entries
+// the endpoint already returned for this page — by action type and
+// by target user. (Entries record the acting admin's id only; the
+// owner is the sole actor today, so the target is the useful axis.)
+var auditCache = [];
+function fillAuditFilter(sel, values, allLabel){
+  var cur = sel.value;
+  sel.innerHTML = '<option value="">' + esc(allLabel) + '</option>' + values.map(function(v){ return '<option value="' + esc(v) + '">' + esc(v) + '</option>'; }).join('');
+  sel.value = values.indexOf(cur) >= 0 ? cur : '';
+}
+function renderAudit(){
+  var a = el('auditAction').value, tg = el('auditTarget').value;
+  var rows = auditCache.filter(function(e){ return (!a || e.action === a) && (!tg || (e.targetEmail || '') === tg); });
+  el('audit').innerHTML = rows.length ? rows.map(auditRowHtml).join('') : '<p class="muted">No entries match those filters on this page.</p>';
+}
+el('auditAction').addEventListener('change', renderAudit);
+el('auditTarget').addEventListener('change', renderAudit);
 function loadAudit(){
+  loadingInto('audit');
   api('/audit?page=' + pageState.audit + '&pageSize=50').then(function(d){
     pageState.audit = d.page || 1;
-    el('audit').innerHTML = (d.entries && d.entries.length) ? d.entries.map(auditRowHtml).join('') : '<p class="muted">No admin actions yet.</p>';
+    auditCache = d.entries || [];
+    var actions = [], targets = [];
+    auditCache.forEach(function(e){
+      if (e.action && actions.indexOf(e.action) < 0) actions.push(e.action);
+      if (e.targetEmail && targets.indexOf(e.targetEmail) < 0) targets.push(e.targetEmail);
+    });
+    fillAuditFilter(el('auditAction'), actions.sort(), 'All actions');
+    fillAuditFilter(el('auditTarget'), targets.sort(), 'All users');
+    if (auditCache.length) renderAudit();
+    else el('audit').innerHTML = '<p class="muted">No admin actions yet.</p>';
     el('auditPager').innerHTML = pagerHtml('audit', d.page || 1, d.pages || 1, d.total || 0, 'entries');
   }).catch(function(){});
 }
@@ -6535,7 +6711,8 @@ document.addEventListener('click', function(ev){
   else if (act === 'comp-off') setComp(id, false);
   else if (act === 'override') saveOverride(id);
   else if (act === 'override-clear') clearOverride(id);
-  else if (act === 'open-user') { currentUserId = id; showView('userdetail'); }
+  else if (act === 'open-user') { currentUserId = id; var um = el('udMsg'); if (um) um.textContent = ''; showView('userdetail'); }
+  else if (act === 'goto') showView(b.getAttribute('data-view'));
   else if (act === 'back-users') showView('users');
   else if (act === 'retry') retryPost(b.getAttribute('data-user'), id, b);
   else if (act === 'page') {

@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react'
-import Auth from './Auth.jsx'
 import { api } from '../api.js'
 import { openExternalUrl } from '../openExternal.js'
 
@@ -13,22 +12,19 @@ const staticLink = (path) => ({
 })
 
 // Public landing page (Phase F) — what a logged-out visitor sees at
-// the root: a real page about KiluaAI around the login/sign-up form.
-// It exists so anyone (including Google's OAuth reviewer) can see
-// what the app does without an account. Every feature named here is
-// live today; no user counts, no testimonials, no pricing promises,
-// no app-store claims. Logged-in users never see this — App.jsx only
-// renders it in the signed-out branch. The form is the existing Auth
-// component in `bare` mode (its own branding head would duplicate
-// the hero below).
+// the root: a real page about KiluaAI. It exists so anyone
+// (including Google's OAuth reviewer) can see what the app does
+// without an account. Every feature named here is live today; no
+// user counts, no testimonials, no pricing promises, no app-store
+// claims. Logged-in users never see this — App.jsx only renders it
+// in the signed-out branch.
 //
-// Compact order (owner request, 22 Nov 2026 — "the login page feels
-// too big"): a small brand row (logo + name), then the form FIRST,
-// above the fold; everything marketing — including the two hero
-// paragraphs, which moved into the first section below — lives in
-// the .landing-below block under the form, visually secondary.
-// Nothing was deleted: the copy, sections and footer links are all
-// still here for first-visit info and SEO.
+// Login split (Prompt-4, 22 Nov 2026 — supersedes the earlier
+// compact arrangement that embedded the form here): the marketing
+// lives on this page; the login/sign-up form lives on its OWN clean
+// screen, reached from the buttons under the brand row. Nothing was
+// deleted: the copy, sections and footer links are all still here
+// for first-visit info and SEO.
 
 const FEATURES = [
   ['Reels, Posts & Stories', 'Schedule every Instagram format from one composer, with a live Instagram-style preview before anything posts.'],
@@ -47,7 +43,7 @@ const STEPS = [
   ['Pick a time', 'Write the caption, choose the day and time, and KiluaAI publishes the post for you — exactly on time.'],
 ]
 
-export default function Landing({ onAuth }) {
+export default function Landing({ onShowAuth }) {
   // Pricing strip (Phase 3 Batch D, L-02): plan names + prices come
   // from the server's single PLANS config via the public app-status
   // endpoint — the strip simply does not render if that fetch fails.
@@ -64,7 +60,10 @@ export default function Landing({ onAuth }) {
         <h1 className="landing-name">KiluaAI</h1>
       </header>
 
-      <Auth onAuth={onAuth} bare />
+      <div className="landing-cta">
+        <button type="button" className="btn primary" onClick={() => onShowAuth && onShowAuth('login')}>Log in</button>
+        <button type="button" className="btn ghost" onClick={() => onShowAuth && onShowAuth('signup')}>Create free account</button>
+      </div>
 
       <div className="landing-below">
       <section className="landing-sec">
@@ -100,7 +99,7 @@ export default function Landing({ onAuth }) {
 
       <section className="landing-sec">
         <h2>YouTube, too</h2>
-        <p>KiluaAI uses YouTube API Services to upload videos to your own YouTube channel. Tick YouTube next to Instagram in the composer, set the title, the visibility (Public, Unlisted or Private) and whether the video is made for kids, and the same video is published to both platforms at the scheduled time. Until Google approves the app, YouTube keeps new uploads Private — the visibility you chose applies automatically once that approval passes.</p>
+        <p>KiluaAI uses YouTube API Services to upload videos to your own YouTube channel. Tick YouTube next to Instagram in the composer, set the title, the visibility (Public, Unlisted or Private) and whether the video is made for kids, and the same video is published to both platforms at the scheduled time.</p>
       </section>
 
       {plans.length > 0 && (

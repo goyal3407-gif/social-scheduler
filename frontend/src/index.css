@@ -19,6 +19,10 @@
   --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px; --space-5:20px; --space-6:24px; --space-8:32px; --space-10:40px;
   --motion-fast:120ms; --motion:200ms; --motion-slow:320ms;
   --font-head:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif; --font-body:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+  /* Type scale (design system §2), adopted as tokens in Round 2
+     (D-4/R2-L12): the scale's anchor rules use these; the remaining
+     px literals in this file already carry the same values. */
+  --type-display:32px; --type-h1:24px; --type-h2:19px; --type-h3:16px; --type-body:15px; --type-body-sm:13.5px; --type-small:13px; --type-caption:12px; --type-overline:11.5px;
 }
 [data-theme="dark"]{
   --bg:#0f0f1a; --surface:#181826; --surface-2:#1f1f31; --surface-3:#26263c; --ink:#f2f1fa; --ink-2:#b9b9c9;
@@ -90,16 +94,16 @@ textarea{resize:vertical;min-height:90px}
 .stat span{font-size:12.5px;color:var(--muted);font-weight:600}
 .stat small{display:block;color:var(--muted);font-size:12px;margin-top:4px}
 .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:20px;box-shadow:var(--shadow-sm)}
-.card h2{font-size:18px}
+.card h2{font-size:var(--type-h2)}
 .card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px;flex-wrap:wrap}
 .card-head p{color:var(--muted);font-size:13px;margin-top:4px}
 .section{margin-top:22px}
-.section-title{font-size:19px;margin-bottom:4px}
+.section-title{font-size:var(--type-h2);margin-bottom:4px}
 .section-sub{color:var(--muted);font-size:13.5px;margin-bottom:14px}
 .two-col{display:grid;grid-template-columns:1fr 1fr;gap:16px}
 .three-col{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
 @media(max-width:820px){.two-col,.three-col{grid-template-columns:1fr}.stats{grid-template-columns:repeat(2,1fr)}.stat:last-child{grid-column:1/-1}}
-@media(max-width:520px){.logo span{display:none}.hero{padding:20px}.cd{min-width:64px;padding:8px 10px}}
+@media(max-width:520px){.logo span{display:none}}
 
 .badge{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:700;padding:5px 10px;border-radius:999px;text-transform:capitalize}
 .badge.scheduled{background:var(--blue-soft);color:var(--blue-text)}
@@ -169,6 +173,11 @@ textarea{resize:vertical;min-height:90px}
 
 .steps{display:flex;gap:8px;margin:16px 0;flex-wrap:wrap}
 .step{flex:1;min-width:150px;border:1px solid var(--line);border-radius:12px;padding:11px 13px;background:var(--surface-2);font-size:13px}
+/* Prompt-4: the COMPOSER steps are a single-row stepper —
+   1 Media · 2 Caption · 3 Schedule on one line at every width
+   (the Landing page's own .steps list keeps the wrapped layout). */
+.composer-steps{flex-wrap:nowrap}
+.composer-steps .step{min-width:0;padding:9px 8px;display:flex;align-items:center;justify-content:center;text-align:center}
 .step b{display:block;font-family:var(--font-head);font-size:13.5px}
 .step.active{border-color:var(--brand);background:var(--brand-soft)}
 .step-num{width:22px;height:22px;border-radius:50%;background:var(--ink);color:var(--bg);display:inline-grid;place-items:center;font-size:11px;font-weight:700;margin-right:6px}
@@ -196,6 +205,10 @@ textarea{resize:vertical;min-height:90px}
 .media-card .mc-body{padding:10px 11px;font-size:12.5px}
 .media-card .mc-body b{display:block;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .drop{border:2px dashed var(--line);border-radius:14px;padding:22px;text-align:center;color:var(--muted);background:var(--surface-2)}
+/* Prompt-4 #7: on touch-sized screens the dropzone leads with the
+   tap affordance, not drag-and-drop wording. */
+.drop .drop-mobile{display:none}
+@media (max-width:720px){.drop .drop-desktop{display:none}.drop .drop-mobile{display:inline}}
 .drop.drag{border-color:var(--brand);background:var(--brand-soft);color:var(--brand-text)}
 .chip{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:600;background:var(--surface-2);border:1px solid var(--line);border-radius:999px;padding:3px 9px}
 /* Icon-only buttons inside chips (the ✕ delete buttons carry an
@@ -229,8 +242,18 @@ td{max-width:220px;overflow:hidden;text-overflow:ellipsis}
 .kbd{font-size:11px;border:1px solid var(--line);border-radius:6px;padding:1px 6px;background:var(--surface-2)}
 .toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
 .toolbar input,.toolbar select{width:auto;flex:1;min-width:140px}
-.modal-bg{position:fixed;inset:0;background:rgba(10,10,20,.55);z-index:80;display:grid;place-items:center;padding:18px}
-.modal{background:var(--surface);border-radius:var(--radius-lg);padding:22px;max-width:520px;width:100%;max-height:88vh;overflow:auto;box-shadow:var(--shadow)}
+.modal-bg{position:fixed;inset:0;background:rgba(10,10,20,.55);z-index:80;display:grid;place-items:center;padding:18px;animation:modalFade var(--motion) ease}
+.modal{background:var(--surface);border-radius:var(--radius-lg);padding:22px;max-width:520px;width:100%;max-height:88vh;overflow:auto;box-shadow:var(--shadow);animation:modalRise var(--motion) ease}
+@keyframes modalFade{from{opacity:0}to{opacity:1}}
+@keyframes modalRise{from{transform:translateY(10px);opacity:.4}to{transform:none;opacity:1}}
+/* Bottom sheet (shared.jsx BottomSheet): rises from the bottom on
+   phones, a centred panel on wider screens. */
+.sheet-bg{position:fixed;inset:0;background:rgba(10,10,20,.55);z-index:80;display:flex;align-items:flex-end;justify-content:center}
+.sheet{background:var(--surface);width:100%;max-width:560px;max-height:84dvh;overflow:auto;border-radius:var(--radius-sheet) var(--radius-sheet) 0 0;padding:18px 18px calc(18px + env(safe-area-inset-bottom, 0px));box-shadow:var(--shadow);animation:sheetUp var(--motion) ease}
+.sheet-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px}
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap}
+@keyframes sheetUp{from{transform:translateY(16px);opacity:.5}to{transform:none;opacity:1}}
+@media(min-width:721px){.sheet-bg{align-items:center;padding:18px}.sheet{border-radius:var(--radius-sheet)}}
 
 /* Mobile top bar: the full "Social Scheduler" wordmark + IG pill + buttons
    do not fit in 390px — the wordmark was cut mid-word. Shrink the mark
@@ -342,16 +365,26 @@ button,.tab{touch-action:manipulation}
    REDESIGN — minimal "Muse-style" shell (2026-11-18):
    light off-white surfaces, thin borders, no heavy cards,
    gold accents. Desktop gets a TOP navigation bar; phones and
-   the app get the slim top bar + burger drawer. There is NO
-   bottom tab bar anywhere.
+   the app get the slim top bar + burger drawer, plus the mobile
+   bottom tab bar added in Phase 3 (Batch B).
    ============================================================ */
 
 /* --- Auth (login / sign-up): narrow column, no card --- */
-.auth-wrap{max-width:400px;margin:0 auto;padding:9vh 18px 40px}
+.auth-wrap{max-width:400px;margin:0 auto;padding:5vh 18px 40px}
 .auth-head{text-align:center;margin-bottom:26px}
 .auth-logo{width:52px;height:52px;border-radius:14px;margin:0 auto 14px}
-.auth-wordmark{font-size:27px;letter-spacing:-.02em}
 .auth-head p{margin-top:6px;font-size:14px}
+/* Round 2 (R2-L11): the standalone auth screens use the Landing
+   page's compact brand row — 34px logo + name on one line. */
+.auth-brand-row{display:flex;align-items:center;justify-content:center;gap:10px}
+.auth-brand-row .auth-logo{width:34px;height:34px;border-radius:10px;margin:0}
+.auth-name{font-size:22px;font-weight:700;letter-spacing:-.02em}
+/* Password visibility: the eye toggle sits INSIDE the field
+   (Prompt-3) — the input reserves room for it on the right. */
+.pw-field{position:relative}
+.pw-field input{padding-right:48px}
+.pw-eye{position:absolute;right:4px;top:50%;transform:translateY(-50%);width:40px;height:40px;display:flex;align-items:center;justify-content:center;border:none;background:transparent;color:var(--muted);border-radius:10px;cursor:pointer}
+.pw-eye:hover{color:var(--ink);background:var(--surface-2)}
 .auth-wrap label{margin-top:0}
 .auth-switch{border:none;background:transparent;color:var(--gold-text);font-weight:700;padding:0;font-size:12.5px;cursor:pointer;min-height:44px;min-width:44px}
 .auth-switch:hover{text-decoration:underline}
@@ -363,6 +396,12 @@ button,.tab{touch-action:manipulation}
    button and ran underneath it (owner screenshot, 22 Nov 2026). */
 .auth-google-app{flex-direction:column;align-items:stretch}
 .auth-google-app p{text-align:center}
+/* Round 2 (D-5 / R2-L9): the native-shell Google button carries the
+   Google identity — light surface, thin border, multicolour "G" —
+   instead of the generic ink button. */
+.btn.google-app-btn{display:flex;align-items:center;justify-content:center;gap:10px;background:var(--surface);color:var(--ink);border:1px solid var(--line)}
+.btn.google-app-btn:hover{background:var(--surface-2)}
+.btn.google-app-btn img{flex:none}
 
 /* --- Public landing (logged-out root page, Phase F): the same plain
    off-white, narrow-column language as Auth, widened a little for the
@@ -373,9 +412,11 @@ button,.tab{touch-action:manipulation}
 .landing-hero{display:flex;align-items:center;justify-content:center;gap:10px;padding:20px 0 0}
 .landing-hero .auth-logo{width:34px;height:34px;border-radius:10px;margin:0}
 .landing-name{font-size:22px;letter-spacing:-.02em;margin:0}
+/* Login split (Prompt-4): the landing carries the marketing; its
+   two buttons open the form on its own screen. */
+.landing-cta{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:20px}
 .landing-line{font-size:15.5px;font-weight:600;line-height:1.4;margin:0 0 8px;max-width:640px}
 .landing-sub{margin:10px 0 0;max-width:640px;font-size:14.5px}
-.landing .auth-wrap{padding-top:12px;padding-bottom:8px}
 /* Marketing below the form: present but visually secondary. */
 .landing-below{margin-top:36px;border-top:1px solid var(--line);padding-top:2px}
 .landing-below .landing-sec{margin-top:28px}
@@ -506,7 +547,6 @@ button.pill::after{content:"";position:absolute;inset:-8px 0}
 
 /* --- Empty states: the app logo as the illustration --- */
 .empty-art{width:66px;height:66px;border-radius:50%;background:var(--gold-soft);display:grid;place-items:center;margin:0 auto 12px}
-.empty-art img{border-radius:15px;display:block}
 
 /* --- Global toast: bottom-centre dark pill --- */
 /* --- Update guard banner (a newer build is live) --- */
@@ -552,8 +592,8 @@ button.pill::after{content:"";position:absolute;inset:-8px 0}
   .stats-3 .stat:last-child{grid-column:auto}
   .stats-3 .stat{padding:12px 10px;border-radius:14px}
   .stats-3 .stat b{font-size:20px}
-  .stats-3 .stat span{font-size:11px}
-  .stats-3 .stat small{font-size:10.5px}
+  .stats-3 .stat span{font-size:12px}
+  .stats-3 .stat small{font-size:11.5px}
 }
 
 /* ============================================================
@@ -601,7 +641,7 @@ a,[role="button"],input,select,textarea,label{touch-action:manipulation}
 .ptr-spinner{width:16px;height:16px;border-radius:50%;border:2px solid var(--brand-soft);border-top-color:var(--brand);animation:ptrspin .7s linear infinite;flex:none}
 @keyframes ptrspin{to{transform:rotate(360deg)}}
 
-.swipe-hint{display:flex;align-items:center;gap:10px;background:var(--gold-soft);color:var(--gold-text);border-radius:var(--radius-md);padding:9px 12px;font-size:13px;font-weight:600;margin:0 0 12px}
+.swipe-hint{display:flex;align-items:center;gap:10px;background:var(--gold-soft);color:var(--gold-text);border-radius:var(--radius-sm);padding:9px 12px;font-size:13px;font-weight:600;margin:0 0 12px}
 .swipe-hint span{flex:1}
 .swipe-hint .update-close{color:var(--gold-text)}
 

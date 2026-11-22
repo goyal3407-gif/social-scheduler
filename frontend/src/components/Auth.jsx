@@ -1,7 +1,41 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api.js'
-import { trFor } from '../i18n.js'
+import { trFor, dictSync, loadDict } from '../i18n.js'
 import GoogleButton from './GoogleButton.jsx'
+import { IconEye, IconEyeOff } from './icons.jsx'
+
+// The compact brand row (34px logo + name, subtitle under it) —
+// shared by the Auth screens and the reset screen (R2-L11).
+function BrandHead({ subtitle }) {
+  return (
+    <div className="auth-head">
+      <div className="auth-brand-row">
+        <div className="logo-mark auth-logo" aria-hidden="true"><img src="/icon-192.png" alt="" width="34" height="34" /></div>
+        <span className="auth-name">KiluaAI</span>
+      </div>
+      <p className="muted">{subtitle}</p>
+    </div>
+  )
+}
+
+// The "back to the landing page" link shown on the split login
+// screen (login split, Prompt-4).
+function BackLink({ tr, onBack }) {
+  if (!onBack) return null
+  return <button type="button" className="auth-switch" onClick={onBack}>← {tr('authBackHome')}</button>
+}
+
+// The branded boot state shown while the dictionary chunk lands
+// (the same markup the app shell's gates use).
+function AuthBootLoad({ lang }) {
+  return (
+    <div className="boot-load" role="status">
+      <span className="logo-mark offline-logo" aria-hidden="true"><img src="/icon-192.png" alt="" width="52" height="52" /></span>
+      <span className="boot-spinner" aria-hidden="true" />
+      <span className="muted small">{trFor(lang, null)('loading')}</span>
+    </div>
+  )
+}
 
 // Login / sign-up screen. Shown on its own — no app content, no queue,
 // no stats — until the server confirms a session.
@@ -11,8 +45,8 @@ import GoogleButton from './GoogleButton.jsx'
 // branding head and the closing tagline are skipped: the landing hero
 // above the form already carries the name, logo and the explanation,
 // and the landing page only describes features that are live today.
-export default function Auth({ onAuth, bare = false }) {
-  const [mode, setMode] = useState('login') // 'login' | 'signup' | 'forgot'
+export default function Auth({ onAuth, bare = false, initialMode = 'login', onBack }) {
+  const [mode, setMode] = useState(initialMode) // 'login' | 'signup' | 'forgot'
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -20,12 +54,21 @@ export default function Auth({ onAuth, bare = false }) {
   const [notice, setNotice] = useState('')
   const [gError, setGError] = useState('')
   const [busy, setBusy] = useState(false)
-  // The two NEW strings on this screen (the divider + the Google
-  // failure line) go through the dictionary like everywhere else —
-  // EN/Hinglish parity lives in i18n.js CORE. The persisted choice
-  // is read the same way the app shell reads it.
+  // Round 2 (D-1 / R2-M1): EVERY string on this screen renders
+  // through the dictionary, like everywhere else — the screen gates
+  // on loadDict() exactly like the app shell, so nothing flashes as
+  // a raw key and nothing stays English in Hinglish mode. (The four
+  // oldest strings — divider, Google lines — live in i18n.js CORE;
+  // the rest of this screen's strings live in DICT.) The persisted
+  // language choice is read the same way the app shell reads it.
   const [lang] = useState(() => { try { return localStorage.getItem('ss-lang') || 'en' } catch { return 'en' } })
-  const tr = trFor(lang, null)
+  const [dict, setDict] = useState(() => dictSync())
+  useEffect(() => {
+    let live = true
+    loadDict().then((d) => { if (live) setDict(d) })
+    return () => { live = false }
+  }, [])
+  const tr = trFor(lang, dict)
   // Google sign-in shows everywhere: on the web it is the GIS button;
   // inside the native app (where Google blocks WebView sign-in) the
   // button opens the system-browser flow instead — GoogleButton
@@ -42,14 +85,14 @@ export default function Auth({ onAuth, bare = false }) {
   }, [])
   const signupsPaused = mode === 'signup' && !!appStatus && appStatus.signupOpen === false
   const maintBanner = appStatus && appStatus.maintenance ? (
-    <div className="alert error" role="status" style={{ marginBottom: 14 }}>{appStatus.maintenanceMessage || 'KiluaAI is under quick maintenance — please try again in a few minutes.'}</div>
+    <div className="alert error" role="status" style={{ marginBottom: 14 }}>{appStatus.maintenanceMessage || tr('authMaintDefault')}</div>
   ) : null
 
   const submit = async (e) => {
     e.preventDefault()
     setError('')
-    if (!email.trim() || !password) { setError('Enter your email and password.'); return }
-    if (mode === 'signup' && password.length < 8) { setError('Password must be at least 8 characters.'); return }
+    if (!email.trim() || !password) { setError(tr('authErrEmailPw')); return }
+    if (mode === 'signup' && password.length < 8) { setError(tr('authErrPwShort')); return }
     setBusy(true)
     try {
       // D11: a ?ref=CODE in the signup URL is passed through so the
@@ -60,7 +103,7 @@ export default function Auth({ onAuth, bare = false }) {
         : await api.login(email.trim(), password)
       onAuth(res.user)
     } catch (err) {
-      setError(err.message || 'Could not sign in.')
+      setError(err.message || tr('authErrGeneric'))
     } finally { setBusy(false) }
   }
 
@@ -85,36 +128,39 @@ export default function Auth({ onAuth, bare = false }) {
   const submitForgot = async (e) => {
     e.preventDefault()
     setError(''); setNotice('')
-    if (!email.trim()) { setError('Enter your email address first.'); return }
+    if (!email.trim()) { setError(tr('authErrEmailFirst')); return }
     setBusy(true)
     try {
       await api.forgotPassword(email.trim())
-      setNotice('If an account exists for that email, a reset link is on its way. Check your inbox (and spam folder) — the link works for 60 minutes.')
+      setNotice(tr('authForgotNotice'))
     } catch (err) {
-      setError(err.message || 'Could not send the reset link.')
+      setError(err.message || tr('authErrResetSend'))
     } finally { setBusy(false) }
   }
+
+  // Dictionary gate (the shell's own pattern): until DICT lands the
+  // screen shows the branded boot state instead of raw keys.
+  if (!dict) return <AuthBootLoad lang={lang} />
+
+  // Round 2 (R2-L11): the standalone screens carry the same compact
+  // brand row as the Landing page instead of the old 52px header.
+  const brandHead = (subtitle) => (!bare ? <BrandHead subtitle={subtitle} /> : null)
 
   if (mode === 'forgot') {
     return (
       <div className="auth-wrap">
-        {!bare && (
-          <div className="auth-head">
-            <div className="logo-mark auth-logo" aria-hidden="true"><img src="/icon-192.png" alt="" width="52" height="52" /></div>
-            <h1 className="auth-wordmark">KiluaAI</h1>
-            <p className="muted">Reset your password</p>
-          </div>
-        )}
+        <BackLink tr={tr} onBack={onBack} />
+        {brandHead(tr('authResetHead'))}
         {maintBanner}
         <form onSubmit={submitForgot}>
-          <label htmlFor="forgotEmail">Email</label>
+          <label htmlFor="forgotEmail">{tr('authEmailLabel')}</label>
           <input id="forgotEmail" type="email" autoComplete="email" placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} />
           {error && <div className="alert error">{error}</div>}
           {notice && <div className="alert success">{notice}</div>}
-          <button type="submit" className="btn block mt2" disabled={busy}>{busy ? 'Please wait…' : 'Send reset link'}</button>
+          <button type="submit" className="btn block mt2" disabled={busy}>{busy ? tr('authPleaseWait') : tr('authSendResetBtn')}</button>
           <p className="muted small" style={{ marginTop: 16, textAlign: 'center' }}>
-            Remembered it?{' '}
-            <button type="button" className="auth-switch" onClick={() => { setMode('login'); setError(''); setNotice('') }}>Back to log in</button>
+            {tr('authRemembered')}{' '}
+            <button type="button" className="auth-switch" onClick={() => { setMode('login'); setError(''); setNotice('') }}>{tr('authBackToLogin')}</button>
           </p>
         </form>
       </div>
@@ -123,45 +169,40 @@ export default function Auth({ onAuth, bare = false }) {
 
   return (
     <div className="auth-wrap">
-      {!bare && (
-        <div className="auth-head">
-          <div className="logo-mark auth-logo" aria-hidden="true"><img src="/icon-192.png" alt="" width="52" height="52" /></div>
-          <h1 className="auth-wordmark">KiluaAI</h1>
-          <p className="muted">{mode === 'signup' ? 'Create your account' : 'Log in to your account'}</p>
-        </div>
-      )}
+      <BackLink tr={tr} onBack={onBack} />
+      {brandHead(mode === 'signup' ? tr('authSignupHead') : tr('authLoginHead'))}
       {maintBanner}
       <form onSubmit={submit}>
         {mode === 'signup' && (
           <>
-            <label htmlFor="authName">Name</label>
-            <input id="authName" type="text" autoComplete="name" placeholder="Your name" value={name} onChange={(e) => setName(e.target.value)} />
+            <label htmlFor="authName">{tr('authNameLabel')}</label>
+            <input id="authName" type="text" autoComplete="name" placeholder={tr('authNamePlaceholder')} value={name} onChange={(e) => setName(e.target.value)} />
           </>
         )}
-        <label htmlFor="authEmail" style={mode === 'signup' ? { marginTop: 14 } : undefined}>Email</label>
+        <label htmlFor="authEmail" style={mode === 'signup' ? { marginTop: 14 } : undefined}>{tr('authEmailLabel')}</label>
         <input id="authEmail" type="email" autoComplete="email" placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} />
-        <label htmlFor="authPassword" style={{ marginTop: 14 }}>Password</label>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <input id="authPassword" type={showPw ? 'text' : 'password'} autoComplete={mode === 'signup' ? 'new-password' : 'current-password'} placeholder={mode === 'signup' ? 'At least 8 characters' : 'Your password'} value={password} onChange={(e) => setPassword(e.target.value)} />
-          <button type="button" className="btn ghost small" style={{ flex: 'none' }} onClick={() => setShowPw(!showPw)} aria-label={showPw ? 'Hide password' : 'Show password'}>{showPw ? 'Hide' : 'Show'}</button>
+        <label htmlFor="authPassword" style={{ marginTop: 14 }}>{tr('authPasswordLabel')}</label>
+        <div className="pw-field">
+          <input id="authPassword" type={showPw ? 'text' : 'password'} autoComplete={mode === 'signup' ? 'new-password' : 'current-password'} placeholder={mode === 'signup' ? tr('authPwPlaceholderNew') : tr('authPwPlaceholder')} value={password} onChange={(e) => setPassword(e.target.value)} />
+          <button type="button" className="pw-eye" onClick={() => setShowPw(!showPw)} aria-label={showPw ? tr('ariaHidePassword') : tr('ariaShowPassword')}>{showPw ? <IconEyeOff size={19} /> : <IconEye size={19} />}</button>
         </div>
         {error && <div className="alert error">{error}</div>}
         {signupsPaused ? (
-          <div className="alert error" style={{ marginTop: 16 }}>Signups are paused right now — please try again later. If you already have an account, log in instead.</div>
+          <div className="alert error" style={{ marginTop: 16 }}>{tr('authSignupsPaused')}</div>
         ) : (
           <button type="submit" className="btn block mt2" disabled={busy}>
-            {busy ? 'Please wait…' : mode === 'signup' ? 'Create account' : 'Log in'}
+            {busy ? tr('authPleaseWait') : mode === 'signup' ? tr('authSignupBtn') : tr('authLoginBtn')}
           </button>
         )}
         {mode === 'login' && (
           <p className="muted small" style={{ marginTop: 12, textAlign: 'center' }}>
-            <button type="button" className="auth-switch" onClick={() => { setMode('forgot'); setError('') }}>Forgot password?</button>
+            <button type="button" className="auth-switch" onClick={() => { setMode('forgot'); setError('') }}>{tr('authForgotLink')}</button>
           </p>
         )}
         <p className="muted small" style={{ marginTop: 16, textAlign: 'center' }}>
-          {mode === 'signup' ? 'Already have an account? ' : 'No account yet? '}
+          {mode === 'signup' ? tr('authHaveAccount') : tr('authNoAccount')}
           <button type="button" className="auth-switch" onClick={() => { setMode(mode === 'signup' ? 'login' : 'signup'); setError(''); setGError('') }}>
-            {mode === 'signup' ? 'Log in' : 'Sign up'}
+            {mode === 'signup' ? tr('authLoginBtn') : tr('authSignupSwitch')}
           </button>
         </p>
       </form>
@@ -169,12 +210,13 @@ export default function Auth({ onAuth, bare = false }) {
         <>
           <div className="auth-divider" aria-hidden="true"><span>{tr('authOrDivider')}</span></div>
           {gError && <div className="alert error" style={{ marginBottom: 12 }}>{gError}</div>}
-          <GoogleButton mode={mode} onCredential={onGoogleCredential} onFailure={() => setGError(tr('googleSignInFailed'))} appLabel={tr('googleContinueApp')} appHint={tr('googleAppHint')} />
+          <GoogleButton mode={mode} onCredential={onGoogleCredential} onFailure={() => setGError(tr('googleSignInFailed'))} appLabel={tr('googleContinueApp')} appHint={tr('googleAppHint')} loadFailedText={tr('googleLoadFailed')} />
         </>
       )}
+      <p className="muted small" style={{ marginTop: 16, textAlign: 'center' }}>{tr('authTrustLine')}</p>
       {!bare && (
         <p className="muted small" style={{ marginTop: 28, textAlign: 'center' }}>
-          Schedule Reels, Feed posts &amp; Stories for Instagram, YouTube, Facebook and TikTok. Free forever.
+          {tr('authTagline')}
         </p>
       )}
     </div>
@@ -195,49 +237,56 @@ export function ResetPassword() {
   const [done, setDone] = useState(false)
   const [busy, setBusy] = useState(false)
   const [showPw, setShowPw] = useState(false)
+  // Round 2 (D-1 / R2-M1): same dictionary wiring + gate as Auth.
+  const [lang] = useState(() => { try { return localStorage.getItem('ss-lang') || 'en' } catch { return 'en' } })
+  const [dict, setDict] = useState(() => dictSync())
+  useEffect(() => {
+    let live = true
+    loadDict().then((d) => { if (live) setDict(d) })
+    return () => { live = false }
+  }, [])
+  const tr = trFor(lang, dict)
 
   const submit = async (e) => {
     e.preventDefault()
     setError('')
-    if (!token) { setError('That reset link is not valid or has expired — request a new one from the login screen.'); return }
-    if (password.length < 8) { setError('The new password must be at least 8 characters long.'); return }
-    if (password !== confirm) { setError('The two passwords do not match — type the same one twice.'); return }
+    if (!token) { setError(tr('resetErrInvalidLink')); return }
+    if (password.length < 8) { setError(tr('resetErrShort')); return }
+    if (password !== confirm) { setError(tr('resetErrMismatch')); return }
     setBusy(true)
     try {
       await api.resetPassword(token, password)
       setDone(true)
     } catch (err) {
-      setError(err.message || 'Could not reset the password.')
+      setError(err.message || tr('resetErrGeneric'))
     } finally { setBusy(false) }
   }
 
+  if (!dict) return <AuthBootLoad lang={lang} />
+
   return (
     <div className="auth-wrap">
-      <div className="auth-head">
-        <div className="logo-mark auth-logo" aria-hidden="true"><img src="/icon-192.png" alt="" width="52" height="52" /></div>
-        <h1 className="auth-wordmark">KiluaAI</h1>
-        <p className="muted">Choose a new password</p>
-      </div>
+      <BrandHead subtitle={tr('resetHead')} />
       {done ? (
         <div>
-          <div className="alert success">Your password has been changed. Every device was logged out — log in with the new password.</div>
-          <button type="button" className="btn block mt2" onClick={() => { window.location.href = '/' }}>Go to log in</button>
+          <div className="alert success">{tr('resetDoneMsg')}</div>
+          <button type="button" className="btn block mt2" onClick={() => { window.location.href = '/' }}>{tr('resetGoLogin')}</button>
         </div>
       ) : (
         <form onSubmit={submit}>
-          <label htmlFor="resetPassword">New password</label>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <input id="resetPassword" type={showPw ? 'text' : 'password'} autoComplete="new-password" placeholder="At least 8 characters" value={password} onChange={(e) => setPassword(e.target.value)} />
-            <button type="button" className="btn ghost small" style={{ flex: 'none' }} onClick={() => setShowPw(!showPw)} aria-label={showPw ? 'Hide password' : 'Show password'}>{showPw ? 'Hide' : 'Show'}</button>
+          <label htmlFor="resetPassword">{tr('resetNewPwLabel')}</label>
+          <div className="pw-field">
+            <input id="resetPassword" type={showPw ? 'text' : 'password'} autoComplete="new-password" placeholder={tr('authPwPlaceholderNew')} value={password} onChange={(e) => setPassword(e.target.value)} />
+            <button type="button" className="pw-eye" onClick={() => setShowPw(!showPw)} aria-label={showPw ? tr('ariaHidePassword') : tr('ariaShowPassword')}>{showPw ? <IconEyeOff size={19} /> : <IconEye size={19} />}</button>
           </div>
-          <label htmlFor="resetConfirm" style={{ marginTop: 14 }}>Type it again</label>
-          <input id="resetConfirm" type={showPw ? 'text' : 'password'} autoComplete="new-password" placeholder="Same password again" value={confirm} onChange={(e) => setConfirm(e.target.value)} />
+          <label htmlFor="resetConfirm" style={{ marginTop: 14 }}>{tr('resetConfirmLabel')}</label>
+          <input id="resetConfirm" type={showPw ? 'text' : 'password'} autoComplete="new-password" placeholder={tr('resetConfirmPlaceholder')} value={confirm} onChange={(e) => setConfirm(e.target.value)} />
           {error && <div className="alert error">{error}</div>}
-          <button type="submit" className="btn block mt2" disabled={busy}>{busy ? 'Please wait…' : 'Set new password'}</button>
+          <button type="submit" className="btn block mt2" disabled={busy}>{busy ? tr('authPleaseWait') : tr('resetSetBtn')}</button>
           <p className="muted small" style={{ marginTop: 16, textAlign: 'center' }}>
-            Link not working?{' '}
-            <button type="button" className="auth-switch" onClick={() => { window.location.href = '/' }}>Back to log in</button>
-            {' '}and use “Forgot password?” for a fresh link.
+            {tr('resetLinkBroken')}{' '}
+            <button type="button" className="auth-switch" onClick={() => { window.location.href = '/' }}>{tr('authBackToLogin')}</button>
+            {' '}{tr('resetLinkHelpTail')}
           </p>
         </form>
       )}

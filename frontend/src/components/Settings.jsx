@@ -336,6 +336,11 @@ export default function Settings({ settings, dbStatus, onSave, saving, onInstagr
             <li>{t('aboutApi')}</li>
             <li>{t('aboutDevices')}</li>
           </ul>
+          {/* Prompt-3: the full YouTube-visibility explanation lives
+              here on the help surface — the composer keeps only the
+              one short line (ytApprovalShort). */}
+          <h3 style={{ marginTop: 18 }}>{t('helpYtTitle')}</h3>
+          <p className="muted small" style={{ marginTop: 6 }}>{t('helpYtBody')}</p>
         </section>
     </div>
   )

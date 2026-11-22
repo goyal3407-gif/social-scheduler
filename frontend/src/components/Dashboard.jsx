@@ -129,6 +129,37 @@ export default function Dashboard({ posts, media, user, loading, error, onRetry,
     return (posts || []).some((p) => p.status === 'scheduled' && p.scheduleTime && new Date(p.scheduleTime).toDateString() === key)
   }, [posts])
 
+  // Prompt-4: with NEITHER platform connected, the checklist is
+  // the primary surface (its first step is Connect Instagram) and
+  // the composer's Create Post steps back to a secondary button
+  // until something is connected.
+  const nothingConnected = Boolean(settings) && !settings.instagramConnected && yt != null && !yt.connected
+  const checklistSection = (!loading && !inWorkspace && !checklistDismissed && !checklistDone) ? (
+    <section className="card section" aria-label="Getting started checklist">
+      <div className="card-head">
+        <div><h2>{t('gettingStarted')}</h2><p>{t('doneOfTotal').replace('{done}', checklist.filter((c) => c.done).length).replace('{total}', checklist.length)}</p></div>
+        <button type="button" className="btn ghost small" onClick={onDismissChecklist}>{t('dismiss')}</button>
+      </div>
+      <div className="pbar" style={{ marginBottom: 12 }} aria-hidden="true"><span style={{ width: `${(checklist.filter((c) => c.done).length / checklist.length) * 100}%`, background: 'var(--gold)' }} /></div>
+      <div>
+        {checklist.map((c, i) => (
+          <div key={c.label} style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '8px 0', borderTop: i ? '1px solid var(--line-2)' : 'none' }}>
+            <span aria-hidden="true" style={{ flex: 'none', width: 22, height: 22, borderRadius: '50%', display: 'grid', placeItems: 'center', fontSize: 12, fontWeight: 700, background: c.done ? 'var(--green-soft)' : 'var(--surface-2)', color: c.done ? 'var(--green)' : 'var(--muted)', border: '1px solid var(--line)' }}>{c.done ? '✓' : i + 1}</span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <b style={{ color: c.done ? 'var(--muted)' : 'var(--ink)', textDecoration: c.done ? 'line-through' : 'none' }}>{c.label}</b>
+              {!c.done && <span className="muted small" style={{ display: 'block' }}>{c.hint}</span>}
+            </div>
+            {!c.done && (
+              c.tab === 'studio'
+                ? <button type="button" className="btn small" onClick={onCreate}>{c.cta}</button>
+                : <button type="button" className="btn ghost small" onClick={() => onNavigate && onNavigate(c.tab)}>{c.cta}</button>
+            )}
+          </div>
+        ))}
+      </div>
+    </section>
+  ) : null
+
   // Batch 5: the first-run story lives in ONE place now — the
   // SetupWizard (3 steps: connect, import, first post). The old
   // second wizard (GuideWizard) is gone; this checklist is the same
@@ -144,7 +175,7 @@ export default function Dashboard({ posts, media, user, loading, error, onRetry,
             <p className="muted" style={{ marginTop: 6 }}>{t('nextUpPrefix')}: <b style={{ color: 'var(--ink)' }}>{next.caption ? (next.caption.length > 90 ? `${next.caption.slice(0, 90)}…` : next.caption) : t('untitledPost')}</b></p>
             <p className="muted small" style={{ marginTop: 4 }}>{next.platform || 'Instagram'} · {next.format || 'REELS'} · {fmtDateTime(next.scheduleTime)} · {t('nextInLabel').replace('{label}', cd.label)}{next.hashtags ? ` · ${next.hashtags}` : ''}</p>
             <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
-              <button type="button" className="btn" onClick={onCreate}>{t('createPost')}</button>
+              <button type="button" className={nothingConnected ? 'btn ghost' : 'btn'} onClick={onCreate}>{t('createPost')}</button>
               <button type="button" className="btn ghost" onClick={() => onPublish && onPublish(next)} disabled={publishingId === next.id}>{t('publishNextNow')}</button>
               <button type="button" className="btn ghost" onClick={onGoQueue}>{t('viewQueue')}</button>
             </div>
@@ -153,12 +184,14 @@ export default function Dashboard({ posts, media, user, loading, error, onRetry,
           <>
             <p className="muted" style={{ marginTop: 6 }}>{t('nothingScheduledYet')}</p>
             <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
-              <button type="button" className="btn" onClick={onCreate}>{t('createPost')}</button>
+              <button type="button" className={nothingConnected ? 'btn ghost' : 'btn'} onClick={onCreate}>{t('createPost')}</button>
               <button type="button" className="btn ghost" onClick={onGoQueue}>{t('viewQueue')}</button>
             </div>
           </>
         )}
       </section>
+
+      {nothingConnected ? checklistSection : null}
 
       {error && <ErrorBox error={error} onRetry={onRetry} />}
 
@@ -242,31 +275,7 @@ export default function Dashboard({ posts, media, user, loading, error, onRetry,
         </section>
       )}
 
-      {!loading && !inWorkspace && !checklistDismissed && !checklistDone && (
-        <section className="card section" aria-label="Getting started checklist">
-          <div className="card-head">
-            <div><h2>{t('gettingStarted')}</h2><p>{t('doneOfTotal').replace('{done}', checklist.filter((c) => c.done).length).replace('{total}', checklist.length)}</p></div>
-            <button type="button" className="btn ghost small" onClick={onDismissChecklist}>{t('dismiss')}</button>
-          </div>
-          <div className="pbar" style={{ marginBottom: 12 }} aria-hidden="true"><span style={{ width: `${(checklist.filter((c) => c.done).length / checklist.length) * 100}%`, background: 'var(--gold)' }} /></div>
-          <div>
-            {checklist.map((c, i) => (
-              <div key={c.label} style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '8px 0', borderTop: i ? '1px solid var(--line-2)' : 'none' }}>
-                <span aria-hidden="true" style={{ flex: 'none', width: 22, height: 22, borderRadius: '50%', display: 'grid', placeItems: 'center', fontSize: 12, fontWeight: 700, background: c.done ? 'var(--green-soft)' : 'var(--surface-2)', color: c.done ? 'var(--green)' : 'var(--muted)', border: '1px solid var(--line)' }}>{c.done ? '✓' : i + 1}</span>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <b style={{ color: c.done ? 'var(--muted)' : 'var(--ink)', textDecoration: c.done ? 'line-through' : 'none' }}>{c.label}</b>
-                  {!c.done && <span className="muted small" style={{ display: 'block' }}>{c.hint}</span>}
-                </div>
-                {!c.done && (
-                  c.tab === 'studio'
-                    ? <button type="button" className="btn small" onClick={onCreate}>{c.cta}</button>
-                    : <button type="button" className="btn ghost small" onClick={() => onNavigate && onNavigate(c.tab)}>{c.cta}</button>
-                )}
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
+      {!nothingConnected ? checklistSection : null}
 
       {!loading && !hasTomorrow && !nudgeDismissed && (
         <div className="warn amber nudge" role="status">

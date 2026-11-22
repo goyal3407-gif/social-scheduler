@@ -222,6 +222,11 @@ export default function MediaLibrary({ media, loading, error, onRetry, onAddLink
   const [title, setTitle] = useState('')
   const [tags, setTags] = useState('')
   const [newFolder, setNewFolder] = useState('')
+  // Prompt-4 #7: the upload folder is picked from a Select of the
+  // existing folders; '__new' reveals the name input (folder logic
+  // itself — a plain folder string on the item — is unchanged).
+  const [folderChoice, setFolderChoice] = useState('')
+  const uploadFolder = folderChoice === '__new' ? newFolder.trim() : folderChoice
   const [drag, setDrag] = useState(false)
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
@@ -262,7 +267,7 @@ export default function MediaLibrary({ media, loading, error, onRetry, onAddLink
         const isVideo = /^video\//.test(f.type) || /\.(mp4|mov|webm)$/i.test(f.name)
         const meta = await probeUrl(URL.createObjectURL(f), isVideo)
         setProgress({ name: f.name, frac: 0 })
-        await onUpload(f, { folder: newFolder || undefined, ...meta }, (frac) => setProgress({ name: f.name, frac }))
+        await onUpload(f, { folder: uploadFolder || undefined, ...meta }, (frac) => setProgress({ name: f.name, frac }))
         ok++
       } catch (e) { setErr(e.message || t('errUploadFailed')) }
       setProgress(null)
@@ -279,7 +284,7 @@ export default function MediaLibrary({ media, loading, error, onRetry, onAddLink
     try {
       const isVideo = !/\.(png|jpe?g|gif|webp|avif)(\?|$)/i.test(url.trim())
       const meta = await probeUrl(url.trim(), isVideo)
-      await onAddLink({ url: url.trim(), title: title.trim() || url.trim(), folder: newFolder || undefined, tags: tags.split(',').map((tg) => tg.trim()).filter(Boolean), ...meta })
+      await onAddLink({ url: url.trim(), title: title.trim() || url.trim(), folder: uploadFolder || undefined, tags: tags.split(',').map((tg) => tg.trim()).filter(Boolean), ...meta })
       setMsg(t('msgLinkAdded'))
       setUrl(''); setTitle(''); setTags('')
     } catch (e2) { setErr(e2.message || t('errAddLink')) }
@@ -307,7 +312,7 @@ export default function MediaLibrary({ media, loading, error, onRetry, onAddLink
             onClick={() => fileRef.current?.click()}
             role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter') fileRef.current?.click() }}
           >
-            <b>{busy ? t('uploadingWord') : t('dropHere')}</b>
+            <b>{busy ? t('uploadingWord') : <><span className="drop-desktop">{t('dropHere')}</span><span className="drop-mobile">{t('dropTapHere')}</span></>}</b>
             <p className="small">{t('dropFormats')}</p>
             <input ref={fileRef} type="file" multiple accept="video/*,image/*" style={{ display: 'none' }} onChange={(e) => handleFiles(e.target.files)} />
           </div>
@@ -318,7 +323,14 @@ export default function MediaLibrary({ media, loading, error, onRetry, onAddLink
             </div>
           )}
           <label htmlFor="upFolder" style={{ marginTop: 14 }}>{t('folderForUploads')}</label>
-          <input id="upFolder" placeholder={t('folderPh')} value={newFolder} onChange={(e) => setNewFolder(e.target.value)} />
+          <select id="upFolder" value={folderChoice} onChange={(e) => setFolderChoice(e.target.value)}>
+            <option value="">{t('folderDefaultOpt')}</option>
+            {folders.filter((f) => f !== 'all').map((f) => <option key={f} value={f}>{f}</option>)}
+            <option value="__new">{t('folderNewOption')}</option>
+          </select>
+          {folderChoice === '__new' && (
+            <input aria-label={t('folderForUploads')} placeholder={t('folderPh')} value={newFolder} onChange={(e) => setNewFolder(e.target.value)} style={{ marginTop: 8 }} />
+          )}
         </div>
 
         <form className="card" onSubmit={addLink}>
@@ -348,7 +360,7 @@ export default function MediaLibrary({ media, loading, error, onRetry, onAddLink
         <span className="pill">{t(filtered.length === 1 ? 'filesCountOne' : 'filesCountMany').replace('{n}', filtered.length)}</span>
       </div>
 
-      {loading ? <Skeleton variant="media" rows={3} /> : filtered.length === 0 ? (
+      {loading ? <div aria-busy="true"><span className="sr-only">{t('loading')}</span><Skeleton variant="media" rows={3} /></div> : filtered.length === 0 ? (
         <div className="card"><Empty title={t('libraryEmpty')} body={q || folder !== 'all' || onlyFav ? t('libraryNoMatch') : t('libraryEmptyBody')} action={q || folder !== 'all' || onlyFav ? undefined : <button type="button" className="btn primary small" onClick={() => fileRef.current?.click()}>{t('uploadMediaBtn')}</button>} /></div>
       ) : (
         <div>

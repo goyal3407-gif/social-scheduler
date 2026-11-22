@@ -212,15 +212,16 @@ async function runScenario(scenario, bundleDir) {
 
   const root = window.document.getElementById('root')
   if (scenario === 'A') {
+    // Login split (Prompt-4): the logged-out root is the public
+    // landing page (marketing only) — Google's OAuth reviewer must
+    // be able to read what the app does without an account. Assert
+    // the hero line, a feature-grid entry, the How-it-works steps
+    // and the footer legal links, then follow the Log in button to
+    // the form on its own screen (with the OAuth trust line).
     await waitFor(
-      () => root.innerHTML.length > 0 && window.document.querySelector('input[type="password"]'),
-      'login form to render'
+      () => root.innerHTML.length > 0 && root.textContent.includes('Instagram scheduler for Reels, Posts and Stories'),
+      'landing page to render'
     )
-    // Phase F: the logged-out root is a public landing page, not a bare
-    // form — Google's OAuth reviewer must be able to read what the app
-    // does without an account. Assert the hero line, a feature-grid
-    // entry, the How-it-works steps and the footer legal links all
-    // rendered alongside the (still present) login form.
     const txt = root.textContent
     if (!txt.includes('Instagram scheduler for Reels, Posts and Stories')) fail('landing hero line missing on the logged-out page')
     if (!txt.includes('YouTube cross-posting')) fail('landing hero YouTube mention missing')
@@ -229,7 +230,16 @@ async function runScenario(scenario, bundleDir) {
     if (!window.document.querySelector('a[href="/privacy.html"]')) fail('landing footer Privacy Policy link missing')
     if (!window.document.querySelector('a[href="/terms.html"]')) fail('landing footer Terms of Service link missing')
     if (!window.document.querySelector('a[href="/contact.html"]')) fail('landing footer Contact link missing')
-    console.log('render-smoke scenario A: PASS (landing page + login form render, #root ' + root.innerHTML.length + ' bytes)')
+    if (window.document.querySelector('input[type="password"]')) fail('login form must NOT be embedded in the landing (split)')
+    const loginBtn = [...window.document.querySelectorAll('button')].find((el) => el.textContent.trim() === 'Log in')
+    if (!loginBtn) fail('landing Log in button missing')
+    loginBtn.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }))
+    await waitFor(
+      () => window.document.querySelector('input[type="password"]'),
+      'login form to render after the Log in click'
+    )
+    if (!root.textContent.includes('Secure login via official OAuth')) fail('auth screen OAuth trust line missing')
+    console.log('render-smoke scenario A: PASS (landing page renders, Log in opens the form screen, #root ' + root.innerHTML.length + ' bytes)')
   } else if (scenario === 'B') {
     await waitFor(() => root.innerHTML.length > 0, 'app shell to render')
     // A fresh account lands on the setup wizard first; skip through to the

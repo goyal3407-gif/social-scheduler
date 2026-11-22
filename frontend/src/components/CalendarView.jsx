@@ -1,10 +1,20 @@
 import { useMemo, useState } from 'react'
 import { fmtDateTime } from '../api.js'
 import { PostRow, Skeleton, Empty, MediaVisual } from './shared.jsx'
+import { trFor, dictSync } from '../i18n.js'
 
 const DOW = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
+// Round 2 (D-1, observed extra): CalendarView localises through the
+// same dict-based helper its PostRow children already use.
+function localTr() {
+  let lang = 'en'
+  try { lang = localStorage.getItem('ss-lang') || 'en' } catch { /* storage unavailable */ }
+  return trFor(lang, dictSync())
+}
+
 export default function CalendarView({ posts, loading, onEdit, onDelete, onPublish, publishingId, onGoQueue, onCreate, onReconnect, onReschedule }) {
+  const t = localTr()
   const today = new Date()
   const [cursor, setCursor] = useState(new Date(today.getFullYear(), today.getMonth(), 1))
   const [selected, setSelected] = useState(today.toDateString())
@@ -58,18 +68,18 @@ export default function CalendarView({ posts, loading, onEdit, onDelete, onPubli
 
   return (
     <div>
-      <h2 className="section-title">Calendar</h2>
-      <p className="section-sub">Month view of everything scheduled. Tap a day to see its posts — on desktop you can also drag a scheduled post to another day.</p>
+      <h2 className="section-title">{t('calendar')}</h2>
+      <p className="section-sub">{t('calSub')}</p>
       <div className="card">
         <div className="card-head">
-          <div><h2>{monthLabel}</h2><p>{(posts || []).length} posts in total</p></div>
+          <div><h2>{monthLabel}</h2><p>{t('calTotalLine').replace('{n}', (posts || []).length)}</p></div>
           <div style={{ display: 'flex', gap: 8 }}>
-            <button type="button" className="btn ghost small" onClick={() => shift(-1)}>← Prev</button>
-            <button type="button" className="btn ghost small" onClick={() => { setCursor(new Date(today.getFullYear(), today.getMonth(), 1)); setSelected(today.toDateString()) }}>Today</button>
-            <button type="button" className="btn ghost small" onClick={() => shift(1)}>Next →</button>
+            <button type="button" className="btn ghost small" onClick={() => shift(-1)}>{t('calPrev')}</button>
+            <button type="button" className="btn ghost small" onClick={() => { setCursor(new Date(today.getFullYear(), today.getMonth(), 1)); setSelected(today.toDateString()) }}>{t('calToday')}</button>
+            <button type="button" className="btn ghost small" onClick={() => shift(1)}>{t('calNext')}</button>
           </div>
         </div>
-        {loading ? <Skeleton variant="calendar" /> : (
+        {loading ? <div aria-busy="true"><span className="sr-only">{t('loading')}</span><Skeleton variant="calendar" /></div> : (
           <>
             <div className="cal-head">{DOW.map((d) => <span key={d}>{d}</span>)}</div>
             <div className="cal-grid">
@@ -82,7 +92,7 @@ export default function CalendarView({ posts, loading, onEdit, onDelete, onPubli
                 const nPub = dayPosts.filter((p) => p.status === 'published').length
                 const nFail = dayPosts.filter((p) => p.status === 'failed').length
                 return (
-                  <button key={k + d.getDate()} type="button" className={`cal-day ${isOther ? 'other' : ''} ${isToday ? 'today' : ''} ${dayPosts.length ? 'has' : ''}`} onClick={() => setSelected(k)} aria-label={`${d.toDateString()}, ${dayPosts.length} posts`}
+                  <button key={k + d.getDate()} type="button" className={`cal-day ${isOther ? 'other' : ''} ${isToday ? 'today' : ''} ${dayPosts.length ? 'has' : ''}`} onClick={() => setSelected(k)} aria-label={t('calDayAria').replace('{date}', d.toDateString()).replace('{n}', dayPosts.length)}
                     onDragOver={(e) => { e.preventDefault(); if (dragOverDay !== k) setDragOverDay(k) }}
                     onDragLeave={() => { if (dragOverDay === k) setDragOverDay('') }}
                     onDrop={(e) => onDayDrop(e, d)}
@@ -96,16 +106,16 @@ export default function CalendarView({ posts, loading, onEdit, onDelete, onPubli
                       </span>
                     )}
                     {dayPosts.length > 0 && (
-                      <span className="cal-count">{dayPosts.length} post{dayPosts.length === 1 ? '' : 's'}{nSched ? ` · ${nSched} to go` : ''}{nPub ? ` · ${nPub} live` : ''}{nFail ? ` · ${nFail} failed` : ''}</span>
+                      <span className="cal-count">{t(dayPosts.length === 1 ? 'calCountOne' : 'calCountMany').replace('{n}', dayPosts.length)}{nSched ? t('calToGo').replace('{n}', nSched) : ''}{nPub ? t('calLive').replace('{n}', nPub) : ''}{nFail ? t('calFailedPart').replace('{n}', nFail) : ''}</span>
                     )}
                     {dayPosts.slice(0, 2).map((p) => (
                       <span key={p.id} className={`cal-chip ${p.status}`}
                         draggable={p.status === 'scheduled' && Boolean(onReschedule)}
                         onDragStart={p.status === 'scheduled' ? (e) => onChipDragStart(e, p) : undefined}
-                        title={p.status === 'scheduled' ? 'Drag to another day to reschedule' : undefined}
+                        title={p.status === 'scheduled' ? t('calDragTitle') : undefined}
                         style={p.status === 'scheduled' && onReschedule ? { cursor: 'grab' } : undefined}>{new Date(p.scheduleTime).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })} · {(p.caption || 'Post').slice(0, 18)}</span>
                     ))}
-                    {dayPosts.length > 2 && <span className="cal-chip">+{dayPosts.length - 2} more</span>}
+                    {dayPosts.length > 2 && <span className="cal-chip">{t('calMore').replace('{n}', dayPosts.length - 2)}</span>}
                   </button>
                 )
               })}
@@ -116,15 +126,15 @@ export default function CalendarView({ posts, loading, onEdit, onDelete, onPubli
 
       <section className="card section">
         <div className="card-head">
-          <div><h2>{new Date(selected).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}</h2><p>{selectedPosts.length} post{selectedPosts.length === 1 ? '' : 's'}</p></div>
-          {onGoQueue && <button type="button" className="btn ghost small" onClick={onGoQueue}>Open in Queue →</button>}
+          <div><h2>{new Date(selected).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}</h2><p>{t(selectedPosts.length === 1 ? 'calCountOne' : 'calCountMany').replace('{n}', selectedPosts.length)}</p></div>
+          {onGoQueue && <button type="button" className="btn ghost small" onClick={onGoQueue}>{t('calOpenQueue')}</button>}
         </div>
         {selectedPosts.length === 0 ? (
-          <Empty title="Nothing scheduled yet" body="No posts on this day. Schedule one and it will show up here and in your queue." action={onCreate ? <button type="button" className="btn primary small" onClick={onCreate}>Schedule a post</button> : undefined} />
+          <Empty title={t('calEmptyTitle')} body={t('calEmptyBody')} action={onCreate ? <button type="button" className="btn primary small" onClick={onCreate}>{t('calSchedulePost')}</button> : undefined} />
         ) : selectedPosts.map((p) => (
           <PostRow key={p.id} post={p} onEdit={onEdit} onDelete={onDelete} onPublish={onPublish} publishing={publishingId === p.id} onReconnect={onReconnect} />
         ))}
-        <p className="muted mt">Times shown in your local timezone. {fmtDateTime(selectedPosts[0]?.scheduleTime)}</p>
+        <p className="muted mt">{t('calTimesNote')} {fmtDateTime(selectedPosts[0]?.scheduleTime)}</p>
       </section>
     </div>
   )

@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { fmtDateTime } from '../api.js'
 import { queueOrder } from '../queueOrder.js'
+import { registerOverlayCloser } from '../overlayRegistry.js'
 import { PostRow, Skeleton, Empty, StatusBadge, PlatformBadge, Thumb } from './shared.jsx'
+import BottomSheet from './BottomSheet.jsx'
 
 const STATUSES = ['scheduled', 'draft', 'published', 'partial', 'failed']
 
@@ -15,6 +17,27 @@ export default function Queue({ posts, loading, onEdit, onDelete, onPublish, pub
   const [q, setQ] = useState('')
   const [qDebounced, setQDebounced] = useState('')
   const [selected, setSelected] = useState(new Set())
+  // Prompt-4: the two filter selects live in ONE Filters bottom
+  // sheet; Export CSV lives in the overflow (⋯) menu.
+  const [filtersOpen, setFiltersOpen] = useState(false)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const menuRef = useRef(null)
+  useEffect(() => {
+    if (!menuOpen) return undefined
+    return registerOverlayCloser(() => setMenuOpen(false))
+  }, [menuOpen])
+  useEffect(() => {
+    if (!menuOpen) return undefined
+    const onKey = (e) => { if (e.key === 'Escape') setMenuOpen(false) }
+    const onDoc = (e) => { if (menuRef.current && !menuRef.current.contains(e.target)) setMenuOpen(false) }
+    document.addEventListener('keydown', onKey)
+    document.addEventListener('mousedown', onDoc)
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      document.removeEventListener('mousedown', onDoc)
+    }
+  }, [menuOpen])
+  const filtersActive = filter !== 'all' || platform !== 'all'
 
   useEffect(() => {
     const t2 = setTimeout(() => setQDebounced(q), 150)
@@ -97,18 +120,36 @@ export default function Queue({ posts, loading, onEdit, onDelete, onPublish, pub
           <button type="button" className={`tab ${view === 'list' ? 'active' : ''}`} onClick={() => setView('list')}>{t('listView')}</button>
           <button type="button" className={`tab ${view === 'kanban' ? 'active' : ''}`} onClick={() => setView('kanban')}>{t('kanbanView')}</button>
         </div>
-        <select value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="Filter by status">
-          <option value="all">{t('allStatuses')}</option>
-          {STATUSES.map((s) => <option key={s} value={s}>{LABELS[s]}</option>)}
-        </select>
-        <select value={platform} onChange={(e) => setPlatform(e.target.value)} aria-label="Filter by platform">
-          <option value="all">{t('allPlatforms')}</option>
-          {['Instagram', 'YouTube', 'Facebook', 'TikTok'].map((p) => <option key={p} value={p}>{p}</option>)}
-        </select>
-        <input type="search" placeholder={t('searchQueuePh')} value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search queue" />
-        <button type="button" className="btn ghost" onClick={exportCsv}>{t('exportCsv')}</button>
+        <input type="search" placeholder={t('searchQueuePh')} value={q} onChange={(e) => setQ(e.target.value)} aria-label={t('ariaSearchPosts')} />
+        <button type="button" className={`btn ${filtersActive ? 'primary' : 'ghost'}`} onClick={() => setFiltersOpen(true)}>{t('queueFilters')}{filtersActive ? ' •' : ''}</button>
+        <div className="post-menu-wrap" ref={menuRef}>
+          <button type="button" className="btn ghost" aria-label={t('moreActions')} aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => setMenuOpen((o) => !o)}>⋯</button>
+          {menuOpen && (
+            <div className="post-menu" role="menu">
+              <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); exportCsv() }}>{t('exportCsv')}</button>
+            </div>
+          )}
+        </div>
         <button type="button" className="btn primary" onClick={onCreate}>{t('newPostBtn')}</button>
       </div>
+
+      {filtersOpen && (
+        <BottomSheet title={t('queueFilters')} onClose={() => setFiltersOpen(false)}>
+          <label htmlFor="qFilterStatus">{t('statusLabel')}</label>
+          <select id="qFilterStatus" value={filter} onChange={(e) => setFilter(e.target.value)}>
+            <option value="all">{t('allStatuses')}</option>
+            {STATUSES.map((s) => <option key={s} value={s}>{LABELS[s]}</option>)}
+          </select>
+          <label htmlFor="qFilterPlatform" style={{ marginTop: 14 }}>{t('platformLabel')}</label>
+          <select id="qFilterPlatform" value={platform} onChange={(e) => setPlatform(e.target.value)}>
+            <option value="all">{t('allPlatforms')}</option>
+            {['Instagram', 'YouTube', 'Facebook', 'TikTok'].map((p) => <option key={p} value={p}>{p}</option>)}
+          </select>
+          {filtersActive && (
+            <button type="button" className="btn ghost block" style={{ marginTop: 18 }} onClick={() => { setFilter('all'); setPlatform('all') }}>{t('clearFilters')}</button>
+          )}
+        </BottomSheet>
+      )}
 
       {selected.size > 0 && (
         <div className="toolbar" role="region" aria-label="Bulk actions">
@@ -119,7 +160,7 @@ export default function Queue({ posts, loading, onEdit, onDelete, onPublish, pub
         </div>
       )}
 
-      {loading ? <div className="card"><Skeleton variant="posts" rows={4} /></div> : filtered.length === 0 ? (
+      {loading ? <div className="card" aria-busy="true"><span className="sr-only">{t('loading')}</span><Skeleton variant="posts" rows={4} /></div> : filtered.length === 0 ? (
         (posts || []).length === 0 ? (
           <div className="card"><Empty title={t('emptyQueueTitle')} body={t('emptyQueueBody')} action={<button type="button" className="btn primary small" onClick={onCreate}>{t('scheduleFirstPost')}</button>} /></div>
         ) : (

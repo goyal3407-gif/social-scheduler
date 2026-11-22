@@ -3,7 +3,7 @@ import { registerOverlayCloser } from '../overlayRegistry.js'
 import { openExternalUrl } from '../openExternal.js'
 import { fmtDateTime } from '../api.js'
 import { trFor, dictSync } from '../i18n.js'
-import { IconPlay } from './icons.jsx'
+import { IconPlay, IconQueue } from './icons.jsx'
 
 // These shared pieces receive no tr prop (they render inside Queue,
 // Calendar and Dashboard alike), so they translate from the same
@@ -122,7 +122,7 @@ export function ErrorBox({ error, onRetry }) {
 export function Empty({ title, body, action }) {
   return (
     <div className="empty">
-      <div className="empty-art" aria-hidden="true"><img src="/icon-192.png" alt="" width="42" height="42" /></div>
+      <div className="empty-art" aria-hidden="true"><span style={{ color: 'var(--gold-text)', display: 'grid', placeItems: 'center' }}><IconQueue size={30} /></span></div>
       <b>{title}</b>
       <p style={{ maxWidth: 420, margin: '0 auto' }}>{body}</p>
       {action && <div style={{ marginTop: 14 }}>{action}</div>}

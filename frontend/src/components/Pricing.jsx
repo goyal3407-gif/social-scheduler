@@ -114,7 +114,7 @@ export default function Pricing({ tr }) {
       <section className="card" aria-label={t('myPlan')} style={{ marginBottom: 14 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <h2 style={{ margin: 0 }}>{t('myPlan')} — {plan.planName}</h2>
-          {rec && rec.planId === plan.plan && <span className="badge" style={{ background: 'var(--gold-bright)', color: 'var(--ink)' }}>{t('bestForYou')}</span>}
+          {rec && rec.planId === plan.plan && <span className="badge" style={{ background: 'var(--brand-soft)', color: 'var(--brand-text)' }}>{t('bestForYou')}</span>}
         </div>
         <p className="muted small" style={{ margin: '6px 0 0' }}>{PLAN_BLURBS[plan.plan] ? t(PLAN_BLURBS[plan.plan]) : ''}</p>
         {plan.comp
@@ -129,7 +129,7 @@ export default function Pricing({ tr }) {
           {data.ai && meter(t('aiCaptionsToday'), data.ai.usedToday || 0, data.ai.perDay)}
         </div>
         {rec && (
-          <p className="small" role="status" style={{ margin: '12px 0 0', padding: '9px 12px', borderRadius: 10, background: 'var(--surface-2)', border: '1px solid var(--gold, #e8c268)' }}>
+          <p className="small" role="status" style={{ margin: '12px 0 0', padding: '9px 12px', borderRadius: 10, background: 'var(--surface-2)', border: '1px solid var(--brand)' }}>
             <b>{t('bestForYou')}:</b> {rec.msg}
           </p>
         )}
@@ -147,11 +147,11 @@ export default function Pricing({ tr }) {
           const isRec = rec && rec.planId === o.plan && !isCurrent
           return (
             <section key={o.plan} className="card" aria-label={`${o.name} plan`}
-              style={{ display: 'flex', flexDirection: 'column', gap: 8, ...(o.plan === 'max' ? { border: '2px solid var(--gold, #e8c268)' } : {}), ...(isRec ? { outline: '2px solid var(--gold, #e8c268)', outlineOffset: 2 } : {}) }}>
+              style={{ display: 'flex', flexDirection: 'column', gap: 8, ...(o.plan === 'max' ? { border: '2px solid var(--gold, #e8c268)' } : {}), ...(isRec ? { outline: '2px solid var(--brand)', outlineOffset: 2 } : {}) }}>
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', minHeight: 22 }}>
                 {o.plan === 'max' && <span className="badge" style={{ background: 'var(--gold-bright)', color: 'var(--ink)' }}>{t('mostPopular')}</span>}
                 {isCurrent && <span className="badge">{t('currentPlan')}</span>}
-                {isRec && <span className="badge" style={{ background: 'var(--gold-bright)', color: 'var(--ink)' }}>{t('bestForYou')}</span>}
+                {isRec && <span className="badge" style={{ background: 'var(--brand-soft)', color: 'var(--brand-text)' }}>{t('bestForYou')}</span>}
               </div>
               <h3 style={{ margin: 0, fontSize: 19 }}>{o.name}</h3>
               <p style={{ margin: 0 }}><b style={{ fontSize: 24 }}>{inr(o.priceInr * factor)}</b> <span className="muted small">{period === 'yearly' ? t('perYear') : t('perMonth')}</span></p>

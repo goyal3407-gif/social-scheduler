@@ -10,7 +10,9 @@
 //  4. The plugin is declared in the frontend package.json.
 //  5. When the sibling Android project is present in this workspace,
 //     the SHIPPED packaging contract (v1.3.5, production-ready pass
-//     22 Nov 2026): the SplashScreen plugin is NOT packaged — the
+//     22 Nov 2026; version aligned to the shipped v1.3.6 in the
+//     Round 2 pass the same day): the SplashScreen plugin is NOT
+//     packaged — the
 //     v1.3.3 hand-merge that added it dropped the compiled bridge
 //     layouts and crashed on launch, so v1.3.4 removed it and v1.3.5
 //     rebuilt on the complete v1.3 resource table. The Android
@@ -18,7 +20,7 @@
 //     NO SplashScreen section, capacitor.plugins.json must register
 //     exactly App + Filesystem, both stub pages keep their guarded
 //     (harmless, no-op) hide attempt, and build.gradle is at
-//     versionCode 9 / 1.3.5. (The plugin stays declared in the
+//     versionCode 10 / 1.3.6. (The plugin stays declared in the
 //     Android project's package.json as a documented leftover —
 //     uninstall before any future `cap sync`; not asserted here.)
 //     These section-5 assertions replaced the v1.3.3-era ones in the
@@ -107,8 +109,8 @@ function main() {
   }
 
   const gradle = fs.readFileSync(path.join(andRoot, 'android', 'app', 'build.gradle'), 'utf8');
-  check('build.gradle versionCode 9', /versionCode\s+9\b/.test(gradle));
-  check('build.gradle versionName 1.3.5', gradle.includes('versionName "1.3.5"'));
+  check('build.gradle versionCode 10', /versionCode\s+10\b/.test(gradle));
+  check('build.gradle versionName 1.3.6', gradle.includes('versionName "1.3.6"'));
 
   return done();
 }

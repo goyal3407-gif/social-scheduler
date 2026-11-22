@@ -398,8 +398,11 @@ async function main() {
       script.textContent = appJs;
       window.document.body.appendChild(script);
       const doc = window.document;
-      check('jsdom: dashboard renders stats', await waitFor(() => doc.getElementById('stats') && doc.getElementById('stats').textContent.includes('Total users')));
-      check('jsdom: dashboard shows the user total', doc.getElementById('stats').textContent.includes('3'));
+      // Round 2 console upgrade: the dashboard stats are grouped
+      // (Users / Posts / Reliability) instead of one flat #stats grid.
+      check('jsdom: dashboard renders stats', await waitFor(() => doc.getElementById('statsUsers') && doc.getElementById('statsUsers').textContent.includes('Total users')));
+      check('jsdom: dashboard shows the user total', doc.getElementById('statsUsers').textContent.includes('3'));
+      check('jsdom: dashboard reliability group renders', doc.getElementById('statsRel') && doc.getElementById('statsRel').textContent.includes('Publish success'));
       check('jsdom: recent signups render', doc.getElementById('signups').textContent.includes('m2@b6.test'));
       doc.querySelector('[data-nav="users"]').click();
       check('jsdom: users page renders rows', await waitFor(() => doc.getElementById('users').textContent.includes('m1@b6.test')));

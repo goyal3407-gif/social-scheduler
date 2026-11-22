@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { isNativeShell, openExternalUrl } from '../openExternal.js'
 
 // Sign in with Google — the official Google Identity Services button.
@@ -42,11 +42,16 @@ function loadGis() {
   return gisPromise
 }
 
-export default function GoogleButton({ mode, onCredential, onFailure, appLabel, appHint }) {
+export default function GoogleButton({ mode, onCredential, onFailure, appLabel, appHint, loadFailedText }) {
   const ref = useRef(null)
   const cbRef = useRef({ onCredential, onFailure })
   cbRef.current = { onCredential, onFailure }
   const native = (() => { try { return isNativeShell() } catch { return false } })()
+  // Round 2 (D-5 / R2-M6): a GIS load failure used to fail silently,
+  // leaving a 44px empty gap under the divider. It now swaps the slot
+  // for a plain-language line (the email + password form above keeps
+  // working exactly as before), mirroring app-start.js's fail().
+  const [failed, setFailed] = useState(false)
 
   useEffect(() => {
     if (native) return undefined
@@ -54,24 +59,23 @@ export default function GoogleButton({ mode, onCredential, onFailure, appLabel, 
     loadGis()
       .then((g) => {
         if (!live || !ref.current) return
-        g.accounts.id.initialize({
-          client_id: GOOGLE_CLIENT_ID,
-          callback: (resp) => {
-            if (resp && resp.credential) cbRef.current.onCredential(resp.credential)
-            else cbRef.current.onFailure()
-          },
-        })
-        const w = Math.min(400, Math.max(200, ref.current.clientWidth || 320))
-        g.accounts.id.renderButton(ref.current, {
-          type: 'standard', theme: 'outline', size: 'large',
-          text: mode === 'signup' ? 'signup_with' : 'signin_with',
-          shape: 'rectangular', logo_alignment: 'left', width: w,
-        })
+        try {
+          g.accounts.id.initialize({
+            client_id: GOOGLE_CLIENT_ID,
+            callback: (resp) => {
+              if (resp && resp.credential) cbRef.current.onCredential(resp.credential)
+              else cbRef.current.onFailure()
+            },
+          })
+          const w = Math.min(400, Math.max(200, ref.current.clientWidth || 320))
+          g.accounts.id.renderButton(ref.current, {
+            type: 'standard', theme: 'outline', size: 'large',
+            text: mode === 'signup' ? 'signup_with' : 'signin_with',
+            shape: 'rectangular', logo_alignment: 'left', width: w,
+          })
+        } catch { if (live) setFailed(true) }
       })
-      // The GIS script itself could not load (offline, blocked):
-      // stay silent — the button area simply remains empty and
-      // email + password keeps working exactly as before.
-      .catch(() => {})
+      .catch(() => { if (live) setFailed(true) })
     return () => { live = false }
   }, [mode, native])
 
@@ -81,8 +85,18 @@ export default function GoogleButton({ mode, onCredential, onFailure, appLabel, 
     }
     return (
       <div className="auth-google auth-google-app">
-        <button type="button" className="btn block google-app-btn" onClick={openAppGoogle}>{appLabel || 'Continue with Google'}</button>
+        <button type="button" className="btn block google-app-btn" onClick={openAppGoogle}>
+          <img src="/google-g.svg" alt="" width="18" height="18" aria-hidden="true" />
+          <span>{appLabel || 'Continue with Google'}</span>
+        </button>
         {appHint ? <p className="muted small" style={{ marginTop: 8 }}>{appHint}</p> : null}
+      </div>
+    )
+  }
+  if (failed) {
+    return (
+      <div className="auth-google">
+        {loadFailedText ? <p className="muted small" role="status" style={{ margin: 0, textAlign: 'center' }}>{loadFailedText}</p> : null}
       </div>
     )
   }

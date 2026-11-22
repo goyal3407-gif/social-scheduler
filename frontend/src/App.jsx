@@ -3,7 +3,7 @@ import { api, nextBestTime, getWorkspaceId, setWorkspaceId } from './api.js'
 import { trFor, loadDict, dictSync } from './i18n.js'
 import { closeTopOverlay } from './overlayRegistry.js'
 import { isNativeShell, openExternalUrl } from './openExternal.js'
-import { ResetPassword } from './components/Auth.jsx'
+
 import { IconHome, IconCal, IconQueue, IconPlus, IconMedia, IconBulk, IconTools, IconSpark, IconSettings, IconSun, IconMoon, IconMenu, IconX, IconBell, IconLink, IconSearch, IconTag } from './components/icons.jsx'
 import { Skeleton, isOwnMediaUrl } from './components/shared.jsx'
 // The build id baked in at build time (vite define). The update guard
@@ -40,6 +40,11 @@ function lazyRetry(factory) {
 // chunk budget (220 KB smoke guard) no longer fits the shell +
 // Dashboard + the batch-3 workspace/guide code eagerly. The home tab
 // shows the same skeleton fallback every other tab uses.
+// The auth screens (login form + reset page, with the Google
+// button) are only ever needed while logged out — they lazy-load
+// so the signed-in shell's main bundle never pays for them.
+const Auth = lazyRetry(() => import('./components/Auth.jsx'))
+const ResetPassword = lazyRetry(() => import('./components/Auth.jsx').then((m) => ({ default: m.ResetPassword })))
 const Dashboard = lazyRetry(() => import('./components/Dashboard.jsx'))
 const SetupWizard = lazyRetry(() => import('./components/SetupWizard.jsx'))
 const CalendarView = lazyRetry(() => import('./components/CalendarView.jsx'))
@@ -58,22 +63,66 @@ const Pricing = lazyRetry(() => import('./components/Pricing.jsx'))
 const Landing = lazyRetry(() => import('./components/Landing.jsx'))
 
 function TabFallback() {
-  return <div className="section"><div className="card"><Skeleton rows={4} /></div></div>
+  return <div className="section"><div className="card" aria-busy="true"><Skeleton rows={4} /></div></div>
 }
 
+// The branded boot state (auth check, landing chunk, dictionary) —
+// one component so the three gates can never drift apart.
+function BootLoad({ label }) {
+  return (
+    <div className="boot-load" role="status">
+      <span className="logo-mark offline-logo" aria-hidden="true"><img src="/icon-192.png" alt="" width="52" height="52" /></span>
+      <span className="boot-spinner" aria-hidden="true" />
+      <span className="muted small">{label}</span>
+    </div>
+  )
+}
+
+const scrollTop = () => { try { window.scrollTo({ top: 0 }) } catch { /* no window */ } }
+
+// The plan pill's inner content (dot + plan name) — shared by the
+// top-bar button and the two drawer variants.
+function PlanPillInner({ user, tr }) {
+  return (
+    <>
+      <span className="dot" />
+      {tr('planBadge').replace('{name}', user.planName || 'Free')}
+    </>
+  )
+}
+
+// The Instagram connection pill (top bar + drawer share it, so the
+// two copies can never drift). In the top bar it is the header's ONE
+// labelled connection-status chip (Prompt-4): a button that opens
+// Connections. In the drawer it stays a plain labelled pill.
+function IgStatusPill({ settings, igBroken, tr, className = 'pill', onOpen }) {
+  const label = !settings ? tr('igChecking') : igBroken ? tr('igBrokenShort') : settings.instagramConnected ? `IG ${settings.instagramHandle || tr('igConnectedWord')}` : tr('igNotConnected')
+  const inner = (
+    <>
+      <span className={`dot ${!settings ? 'amber' : igBroken ? 'off' : settings.instagramConnected ? '' : 'off'}`} />
+      {label}
+    </>
+  )
+  return onOpen ? (
+    <button type="button" className={className} title={label} onClick={onOpen}>{inner}</button>
+  ) : (
+    <span className={className} title={label}>{inner}</span>
+  )
+}
+
+// Labels come from the dictionary (CORE carries every id; the AI
+// tab's key is aiStudio) — NAV carries only ids + icons.
 const NAV = [
-  { id: 'home', label: 'Home', Icon: IconHome },
-  { id: 'calendar', label: 'Calendar', Icon: IconCal },
-  { id: 'queue', label: 'Queue', Icon: IconQueue },
-  { id: 'media', label: 'Media', Icon: IconMedia },
-  { id: 'bulk', label: 'Bulk', Icon: IconBulk },
-  { id: 'tools', label: 'Tools', Icon: IconTools },
-  // Dock slots are ~41px wide on phones: the full "AI Studio" label
-  // truncated to "AI Stud…", so the dock renders it on two lines.
-  { id: 'ai', label: 'AI Studio', dockLabel: 'AI\nStudio', Icon: IconSpark },
-  { id: 'connections', label: 'Connections', Icon: IconLink },
-  { id: 'pricing', label: 'Pricing', Icon: IconTag },
-  { id: 'settings', label: 'Settings', Icon: IconSettings }
+  { id: 'home', Icon: IconHome },
+  { id: 'calendar', Icon: IconCal },
+  { id: 'queue', Icon: IconQueue },
+  { id: 'media', Icon: IconMedia },
+  { id: 'bulk', Icon: IconBulk },
+  { id: 'tools', Icon: IconTools },
+  { id: 'ai', Icon: IconSpark },
+  { id: 'connections', Icon: IconLink },
+  { id: 'pricing', Icon: IconTag },
+  { id: 'settings', Icon: IconSettings }
 ]
 
 // Phase 3 (Batch B): tabs are URL-backed. The tab lives in the hash
@@ -124,6 +173,10 @@ export default function App() {
     try { return localStorage.getItem('ss-theme') || (window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') } catch { return 'light' }
   })
   const [user, setUser] = useState(null)
+  // Login split (Prompt-4): logged-out visitors land on the public
+  // landing page; the form lives on its own screen, reached from the
+  // landing's Log in / Create account buttons (null = landing).
+  const [authScreen, setAuthScreen] = useState(null)
   const [authChecked, setAuthChecked] = useState(false)
   // Phase 3 (Batch C): the auth check failed while offline — the
   // user gets the offline screen (with Retry), never the login page.
@@ -183,6 +236,8 @@ export default function App() {
   // language current at call time, not at definition time).
   const trRef = useRef(tr); trRef.current = tr
   const tt = useCallback((k) => trRef.current(k), [])
+  // Avatar-menu items all close the menu first, then act.
+  const menuAct = (fn) => () => { setAvatarMenuOpen(false); if (fn) fn() }
   const [offline, setOffline] = useState(() => typeof navigator !== 'undefined' && navigator.onLine === false)
   const [globalQ, setGlobalQ] = useState('')
   const [searchNonce, setSearchNonce] = useState(0)
@@ -196,11 +251,12 @@ export default function App() {
   const refreshSettingsRef = useRef(null)
   const exchangeAppCodeRef = useRef(null)
 
-  // Per-tab document title (screen readers + history).
+  // Per-tab document title (screen readers + history) — Round 2
+  // (R2-L7): the label follows the UI language like everything else.
   useEffect(() => {
-    const label = (NAV.find((n) => n.id === tab) || {}).label || (tab === 'studio' ? 'Studio' : 'Home')
-    document.title = tab === 'home' ? 'KiluaAI' : `${label} · KiluaAI`
-  }, [tab])
+    const key = tab === 'studio' ? 'create' : tab === 'ai' ? 'aiStudio' : tab
+    document.title = tab === 'home' ? 'KiluaAI' : `${tt(key)} · KiluaAI`
+  }, [tab, tt, lang, dict])
 
   // --- Phase 3 (Batch B): tab ⇄ hash synchronisation. Tab changes
   // push a history entry; popstate (browser back/forward, Android
@@ -304,7 +360,7 @@ export default function App() {
           if (s.mobileSearchOpen) { setMobileSearchOpen(false); return }
           if (s.menuOpen) { setMenuOpen(false); return }
           if (tabStackRef.current.length > 1) { window.history.back(); return }
-          if (s.tab !== 'home') { setTab('home'); window.scrollTo({ top: 0 }); return }
+          if (s.tab !== 'home') { setTab('home'); scrollTop(); return }
           if (capAppRef.current) capAppRef.current.exitApp()
         }).then((handle) => { if (!cancelled) remove = handle; else if (handle && handle.remove) handle.remove() })
           .catch(() => { /* listener unavailable */ })
@@ -746,7 +802,7 @@ export default function App() {
     setTemplateSeed(null)
     setStudioKey((k) => k + 1)
     setTab('studio')
-    window.scrollTo({ top: 0 })
+    scrollTop()
   }
 
   const handleSavePost = useCallback(async (payload, isEdit) => {
@@ -985,7 +1041,7 @@ export default function App() {
   // everything read, locally and on the server.
   const openNotifications = useCallback(async () => {
     setTab('home')
-    window.scrollTo({ top: 0 })
+    scrollTop()
     setUnread(0)
     setNotifications((prev) => prev.map((n) => ({ ...n, read: true })))
     try { await api.markNotificationsRead() } catch { /* badge already cleared locally */ }
@@ -1086,7 +1142,7 @@ export default function App() {
     })
     setStudioKey((k) => k + 1)
     setTab('studio')
-    window.scrollTo({ top: 0 })
+    scrollTop()
     if (mediaGone) showToast(tt('toastMediaGone'))
   }, [media])
 
@@ -1103,7 +1159,7 @@ export default function App() {
     setEditing(null)
     setStudioKey((k) => k + 1)
     setTab('studio')
-    window.scrollTo({ top: 0 })
+    scrollTop()
   }, [])
 
   const statsFallback = useMemo(() => stats || {
@@ -1121,14 +1177,16 @@ export default function App() {
   if (isResetRoute) {
     return (
       <div className="app">
-        <ResetPassword />
+        <Suspense fallback={<BootLoad label={tr('loading')} />}>
+          <ResetPassword />
+        </Suspense>
       </div>
     )
   }
 
   // --- Login gate: nothing but the Auth screen until the server says who this is.
   if (!authChecked) {
-    return <div className="app"><div className="boot-load" role="status"><span className="logo-mark offline-logo" aria-hidden="true"><img src="/icon-192.png" alt="" width="52" height="52" /></span><span className="boot-spinner" aria-hidden="true" /><span className="muted small">Loading…</span></div></div>
+    return <div className="app"><BootLoad label={tr('loading')} /></div>
   }
   if (!user && authBlocked) {
     // Offline cold start (Batch C, C-02): the auth check could not
@@ -1145,13 +1203,18 @@ export default function App() {
     )
   }
   if (!user) {
-    // Logged-out root: the public landing page (Phase F) with the
-    // login/sign-up form inside it — a visitor can read what KiluaAI
-    // does before creating an account. Signed-in users never see it.
+    // Logged-out root (login split, Prompt-4): the public landing
+    // page carries the marketing; the login/sign-up form lives on
+    // its own clean screen behind the landing's buttons. Signed-in
+    // users never see either.
     return (
       <div className="app">
-        <Suspense fallback={<div className="boot-load" role="status"><span className="logo-mark offline-logo" aria-hidden="true"><img src="/icon-192.png" alt="" width="52" height="52" /></span><span className="boot-spinner" aria-hidden="true" /><span className="muted small">Loading…</span></div>}>
-          <Landing onAuth={(u) => { setUser(u); setTab('home') }} />
+        <Suspense fallback={<BootLoad label={tr('loading')} />}>
+          {authScreen ? (
+            <Auth initialMode={authScreen} onBack={() => setAuthScreen(null)} onAuth={(u) => { setAuthScreen(null); setUser(u); setTab('home') }} />
+          ) : (
+            <Landing onShowAuth={(m) => setAuthScreen(m)} />
+          )}
         </Suspense>
       </div>
     )
@@ -1160,7 +1223,7 @@ export default function App() {
   // --- Dictionary gate: the signed-in shell waits for the lazy
   // dictionary chunk so no screen can flash untranslated strings.
   if (dict === null) {
-    return <div className="app"><div className="boot-load" role="status"><span className="logo-mark offline-logo" aria-hidden="true"><img src="/icon-192.png" alt="" width="52" height="52" /></span><span className="boot-spinner" aria-hidden="true" /><span className="muted small">{tr('loading')}</span></div></div>
+    return <div className="app"><BootLoad label={tr('loading')} /></div>
   }
 
   // --- Setup wizard: first login only, until it is finished or skipped.
@@ -1205,7 +1268,7 @@ export default function App() {
       </div>
       <header className="topbar">
         <div className="topbar-in">
-          <button type="button" className="icon-btn burger-btn" onClick={() => setMenuOpen(true)} aria-label="Open menu" aria-expanded={menuOpen}>
+          <button type="button" className="icon-btn burger-btn" onClick={() => setMenuOpen(true)} aria-label={tr('ariaOpenMenu')} aria-expanded={menuOpen}>
             <IconMenu size={20} />
           </button>
           <div className="logo">
@@ -1215,7 +1278,7 @@ export default function App() {
               <span>{tr('freeForever')}</span>
             </div>
           </div>
-          <nav className="topnav" aria-label="Main navigation">
+          <nav className="topnav" aria-label={tr('ariaMainNav')}>
             <button type="button" className={tab === 'home' ? 'active' : ''} onClick={() => setTab('home')}>{tr('home')}</button>
             <button type="button" onClick={() => goStudio(null)}>{tr('create')}</button>
             <button type="button" className={tab === 'queue' ? 'active' : ''} onClick={() => setTab('queue')}>{tr('queue')}</button>
@@ -1228,27 +1291,21 @@ export default function App() {
             {!wsId && <button type="button" className={tab === 'pricing' ? 'active' : ''} onClick={() => setTab('pricing')}>{tr('pricing')}</button>}
           </nav>
           <div className="top-actions">
-            <button type="button" className="icon-btn search-toggle-btn" onClick={() => setMobileSearchOpen((o) => !o)} aria-label="Search" aria-expanded={mobileSearchOpen}>
+            <button type="button" className="icon-btn search-toggle-btn" onClick={() => setMobileSearchOpen((o) => !o)} aria-label={tr('ariaSearch')} aria-expanded={mobileSearchOpen}>
               <IconSearch size={18} />
             </button>
-            {!wsId && (
-              <span className="pill ig-pill" title={!settings ? tr('igChecking') : igBroken ? tr('igBrokenShort') : settings.instagramConnected ? `IG ${settings.instagramHandle || tr('igConnectedWord')}` : tr('igNotConnected')}>
-                <span className={`dot ${!settings ? 'amber' : igBroken ? 'off' : settings.instagramConnected ? '' : 'off'}`} />
-                {!settings ? tr('igChecking') : igBroken ? tr('igBrokenShort') : settings.instagramConnected ? `IG ${settings.instagramHandle || tr('igConnectedWord')}` : tr('igNotConnected')}
-              </span>
-            )}
+            {!wsId && <IgStatusPill settings={settings} igBroken={igBroken} tr={tr} className="pill ig-pill" onOpen={() => setTab('connections')} />}
             {!wsId && (
               <button type="button" className="pill" title={user.comp ? tr('planTitleComp') : tr('planTitle')} onClick={() => setTab('pricing')}>
-                <span className="dot" />
-                {tr('planBadge').replace('{name}', user.planName || 'Free')}
+                <PlanPillInner user={user} tr={tr} />
               </button>
             )}
-            <button type="button" className="icon-btn bell-btn" onClick={openNotifications} aria-label={unread ? `${tr('notificationsTitle')} — ${unread} unread` : tr('notificationsTitle')}>
+            <button type="button" className="icon-btn bell-btn" onClick={openNotifications} aria-label={unread ? `${tr('notificationsTitle')} — ${unread}${tr('ariaUnreadSuffix')}` : tr('notificationsTitle')}>
               <IconBell size={18} />
               {unread > 0 && <span className="bell-badge">{unread > 9 ? '9+' : unread}</span>}
             </button>
             <div className="avatar-wrap">
-              <button type="button" className="avatar-btn" onClick={() => setAvatarMenuOpen((o) => !o)} aria-haspopup="menu" aria-expanded={avatarMenuOpen} aria-label="Account menu" title={user.email || ''}>
+              <button type="button" className="avatar-btn" onClick={() => setAvatarMenuOpen((o) => !o)} aria-haspopup="menu" aria-expanded={avatarMenuOpen} aria-label={tr('ariaAccountMenu')} title={user.email || ''}>
                 {(user.name || user.email || 'K').trim().charAt(0).toUpperCase()}
               </button>
               {avatarMenuOpen && (
@@ -1260,20 +1317,20 @@ export default function App() {
                     {memberships.length > 0 && (
                       <>
                         <p className="muted small" style={{ padding: '6px 10px 2px' }}>{tr('workspace')}</p>
-                        <button type="button" role="menuitem" onClick={() => { setAvatarMenuOpen(false); switchWorkspace('') }}>{!wsId ? '✓ ' : ''}{tr('myWorkspace')}</button>
+                        <button type="button" role="menuitem" onClick={menuAct(() => switchWorkspace(''))}>{!wsId ? '✓ ' : ''}{tr('myWorkspace')}</button>
                         {memberships.map((m) => (
-                          <button key={m.ownerId} type="button" role="menuitem" onClick={() => { setAvatarMenuOpen(false); switchWorkspace(m.ownerId) }}>{wsId === m.ownerId ? '✓ ' : ''}{m.ownerEmail} · {m.role === 'viewer' ? tr('roleViewerShort') : tr('roleSchedulerShort')}</button>
+                          <button key={m.ownerId} type="button" role="menuitem" onClick={menuAct(() => switchWorkspace(m.ownerId))}>{wsId === m.ownerId ? '✓ ' : ''}{m.ownerEmail} · {m.role === 'viewer' ? tr('roleViewerShort') : tr('roleSchedulerShort')}</button>
                         ))}
                       </>
                     )}
-                    {!wsId && <button type="button" role="menuitem" onClick={() => { setAvatarMenuOpen(false); setTab('settings') }}>{tr('settings')}</button>}
+                    {!wsId && <button type="button" role="menuitem" onClick={menuAct(() => setTab('settings'))}>{tr('settings')}</button>}
                     <a role="menuitem" href="/contact.html" onClick={(e) => { setAvatarMenuOpen(false); if (openExternalUrl(new URL('/contact.html', window.location.origin).href)) e.preventDefault() }}>{tr('contact')}</a>
-                    <button type="button" role="menuitem" onClick={() => { setAvatarMenuOpen(false); setTheme(theme === 'dark' ? 'light' : 'dark') }}>{theme === 'dark' ? tr('lightTheme') : tr('darkTheme')}</button>
-                    <button type="button" role="menuitem" onClick={() => { setAvatarMenuOpen(false); setLang(lang === 'hi' ? 'en' : 'hi') }}>{tr('language')}: {lang === 'hi' ? 'Hinglish' : 'English'} · {tr('switchWord')}</button>
+                    <button type="button" role="menuitem" onClick={menuAct(() => setTheme(theme === 'dark' ? 'light' : 'dark'))}>{theme === 'dark' ? tr('lightTheme') : tr('darkTheme')}</button>
+                    <button type="button" role="menuitem" onClick={menuAct(() => setLang(lang === 'hi' ? 'en' : 'hi'))}>{tr('language')}: {lang === 'hi' ? 'Hinglish' : 'English'} · {tr('switchWord')}</button>
                     {user.isOwner && user.adminUrl && (
                       <a role="menuitem" href={user.adminUrl} onClick={() => setAvatarMenuOpen(false)}>{tr('switchToAdmin')}</a>
                     )}
-                    <button type="button" role="menuitem" onClick={() => { setAvatarMenuOpen(false); handleLogout() }}>{tr('logout')}</button>
+                    <button type="button" role="menuitem" onClick={menuAct(handleLogout)}>{tr('logout')}</button>
                   </div>
                 </>
               )}
@@ -1284,8 +1341,8 @@ export default function App() {
           <form className="mobile-search-row" role="search" onSubmit={(e) => { e.preventDefault(); runGlobalSearch(globalQ) }}>
             <input type="search" autoFocus value={globalQ} onChange={(e) => setGlobalQ(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Escape') setMobileSearchOpen(false) }}
-              placeholder={tr('searchPlaceholder')} aria-label="Search posts and media" />
-            <button type="button" className="icon-btn mobile-search-close" onClick={() => { setGlobalQ(''); setMobileSearchOpen(false) }} aria-label="Close search">
+              placeholder={tr('searchPlaceholder')} aria-label={tr('ariaSearchPosts')} />
+            <button type="button" className="icon-btn mobile-search-close" onClick={() => { setGlobalQ(''); setMobileSearchOpen(false) }} aria-label={tr('ariaCloseSearch')}>
               <IconX size={16} />
             </button>
           </form>
@@ -1294,7 +1351,7 @@ export default function App() {
 
       {menuOpen && (
         <div className="drawer-bg" onClick={() => setMenuOpen(false)} onKeyDown={(e) => trapTabKey(e, e.currentTarget.querySelector('.drawer'))}>
-          <aside className="drawer" role="dialog" aria-modal="true" aria-label="Menu" onClick={(e) => e.stopPropagation()}>
+          <aside className="drawer" role="dialog" aria-modal="true" aria-label={tr('ariaMenu')} onClick={(e) => e.stopPropagation()}>
             <div className="drawer-head">
               <div className="logo">
                 <div className="logo-mark" aria-hidden="true"><img src="/icon-192.png" alt="" width="40" height="40" /></div>
@@ -1303,18 +1360,18 @@ export default function App() {
                   <span>{tr('freeForever')}</span>
                 </div>
               </div>
-              <button type="button" className="icon-btn" onClick={() => setMenuOpen(false)} aria-label="Close menu" autoFocus>
+              <button type="button" className="icon-btn" onClick={() => setMenuOpen(false)} aria-label={tr('ariaCloseMenu')} autoFocus>
                 <IconX size={18} />
               </button>
             </div>
             <form role="search" onSubmit={(e) => { e.preventDefault(); runGlobalSearch(globalQ) }} style={{ padding: '10px 14px 0' }}>
-              <input type="search" value={globalQ} onChange={(e) => setGlobalQ(e.target.value)} placeholder={tr('searchPlaceholder')} aria-label="Search posts and media" />
+              <input type="search" value={globalQ} onChange={(e) => setGlobalQ(e.target.value)} placeholder={tr('searchPlaceholder')} aria-label={tr('ariaSearchPosts')} />
             </form>
-            <nav className="drawer-nav" aria-label="Menu navigation">
-              {NAV.filter(({ id }) => !wsId || !['tools', 'connections', 'settings', 'pricing'].includes(id)).map(({ id, label, Icon }) => (
+            <nav className="drawer-nav" aria-label={tr('ariaMenuNav')}>
+              {NAV.filter(({ id }) => !wsId || !['tools', 'connections', 'settings', 'pricing'].includes(id)).map(({ id, Icon }) => (
                 <button key={id} type="button" className={`drawer-item ${tab === id ? 'active' : ''}`} aria-current={tab === id ? 'page' : undefined}
-                  onClick={() => { setTab(id); setMenuOpen(false); window.scrollTo({ top: 0 }) }}>
-                  <Icon size={20} /><span>{tr(id === 'ai' ? 'aiStudio' : id) || label}</span>
+                  onClick={() => { setTab(id); setMenuOpen(false); scrollTop() }}>
+                  <Icon size={20} /><span>{tr(id === 'ai' ? 'aiStudio' : id)}</span>
                 </button>
               ))}
               <button type="button" className="drawer-item drawer-create" onClick={() => { goStudio(null); setMenuOpen(false) }}>
@@ -1322,19 +1379,14 @@ export default function App() {
               </button>
             </nav>
             <div className="drawer-foot">
-              <span className="pill" title={!settings ? tr('igChecking') : igBroken ? tr('igBrokenShort') : settings.instagramConnected ? `IG ${settings.instagramHandle || tr('igConnectedWord')}` : tr('igNotConnected')}>
-                <span className={`dot ${!settings ? 'amber' : igBroken ? 'off' : settings.instagramConnected ? '' : 'off'}`} />
-                {!settings ? tr('igChecking') : igBroken ? tr('igBrokenShort') : settings.instagramConnected ? `IG ${settings.instagramHandle || tr('igConnectedWord')}` : tr('igNotConnected')}
-              </span>
+              <IgStatusPill settings={settings} igBroken={igBroken} tr={tr} />
               {wsId ? (
                 <span className="pill" title={user.comp ? tr('planTitleComp') : tr('planTitleShort')} style={{ marginLeft: 8 }}>
-                  <span className="dot" />
-                  {tr('planBadge').replace('{name}', user.planName || 'Free')}
+                  <PlanPillInner user={user} tr={tr} />
                 </span>
               ) : (
-                <button type="button" className="pill" title={user.comp ? tr('planTitleComp') : tr('planTitle')} style={{ marginLeft: 8 }} onClick={() => { setTab('pricing'); setMenuOpen(false); window.scrollTo({ top: 0 }) }}>
-                  <span className="dot" />
-                  {tr('planBadge').replace('{name}', user.planName || 'Free')}
+                <button type="button" className="pill" title={user.comp ? tr('planTitleComp') : tr('planTitle')} style={{ marginLeft: 8 }} onClick={() => { setTab('pricing'); setMenuOpen(false); scrollTop() }}>
+                  <PlanPillInner user={user} tr={tr} />
                 </button>
               )}
               <p className="muted small" style={{ marginTop: 10 }}>{user.email}</p>
@@ -1405,7 +1457,7 @@ export default function App() {
         )}
         {tab === 'studio' && (
           <div className="section">
-            <Studio tr={tr} key={`${studioKey}-${editing?.id || 'new'}`} editing={editing} seed={templateSeed ? { caption: templateSeed.text || templateSeed.caption || '', hashtags: templateSeed.hashtags || '', cta: templateSeed.cta || '', mediaUrl: templateSeed.mediaUrl || '', mediaType: templateSeed.mediaType || 'video', posterUrl: templateSeed.posterUrl || '', scheduleTime: templateSeed.scheduleTime || '', platform: templateSeed.platform || 'Instagram', format: templateSeed.format || 'REELS', igTargets: Array.isArray(templateSeed.igTargets) ? templateSeed.igTargets : (templateSeed.igAccountId ? [templateSeed.igAccountId] : []), youtube: templateSeed.youtube || null, igEnabled: templateSeed.igEnabled, firstComment: templateSeed.firstComment || '', repeat: templateSeed.repeat || '' } : null} media={media} templates={templates} hashtagGroups={hashtagGroups} onCreateTemplate={handleCreateTemplate} onDeleteTemplate={handleDeleteTemplate} onCreateHashtagGroup={handleCreateHashtagGroup} onDeleteHashtagGroup={handleDeleteHashtagGroup} drafts={drafts} onSaveLibraryDraft={handleCreateDraft} onDeleteLibraryDraft={handleDeleteDraft} onSave={handleSavePost} onCancel={() => setTab('queue')} saving={saving} posts={visiblePosts} igAccounts={settings?.instagramAccounts || []} defaultIgUserId={settings?.defaultIgUserId || ''} settings={settings} onNavigate={setTab} />
+            <Studio tr={tr} key={`${studioKey}-${editing?.id || 'new'}`} editing={editing} seed={templateSeed ? { caption: templateSeed.text || templateSeed.caption || '', hashtags: templateSeed.hashtags || '', cta: templateSeed.cta || '', mediaUrl: templateSeed.mediaUrl || '', mediaType: templateSeed.mediaType || 'video', posterUrl: templateSeed.posterUrl || '', scheduleTime: templateSeed.scheduleTime || '', platform: templateSeed.platform || 'Instagram', format: templateSeed.format || 'REELS', igTargets: Array.isArray(templateSeed.igTargets) ? templateSeed.igTargets : (templateSeed.igAccountId ? [templateSeed.igAccountId] : []), youtube: templateSeed.youtube || null, igEnabled: templateSeed.igEnabled, firstComment: templateSeed.firstComment || '', repeat: templateSeed.repeat || '' } : null} media={media} templates={templates} hashtagGroups={hashtagGroups} onCreateTemplate={handleCreateTemplate} onDeleteTemplate={handleDeleteTemplate} onCreateHashtagGroup={handleCreateHashtagGroup} onDeleteHashtagGroup={handleDeleteHashtagGroup} drafts={drafts} onSaveLibraryDraft={handleCreateDraft} onDeleteLibraryDraft={handleDeleteDraft} onSave={handleSavePost} onCancel={() => setTab('queue')} saving={saving} posts={visiblePosts} igAccounts={settings?.instagramAccounts || []} defaultIgUserId={settings?.defaultIgUserId || ''} settings={settings} onNavigate={setTab} onUploadFile={handleUpload} />
           </div>
         )}
         {tab === 'bulk' && <div className="section"><Bulk onImport={handleBulkImport} posts={visiblePosts} onUploadFile={handleUpload} igAccounts={settings?.instagramAccounts || []} defaultIgUserId={settings?.defaultIgUserId || ''} hashtagGroups={hashtagGroups} /></div>}
@@ -1414,13 +1466,13 @@ export default function App() {
             onAddLink={handleAddLink} onUpload={handleUpload}
             onToggleFav={async (m) => { const u = await api.updateMedia(m.id, { favorite: !m.favorite }); setMedia((prev) => prev.map((x) => (x.id === m.id ? { ...x, ...(u || {}), favorite: !m.favorite } : x))) }}
             onDelete={(m) => setConfirmDelete({ type: 'media', item: m })}
-            onUse={(m) => { setEditing(null); setTemplateSeed({ mediaUrl: m.url, mediaType: m.kind === 'image' ? 'image' : 'video', posterUrl: m.posterUrl || '', caption: '', scheduleTime: '' }); setStudioKey((k) => k + 1); setTab('studio'); window.scrollTo({ top: 0 }) }} /></div>
+            onUse={(m) => { setEditing(null); setTemplateSeed({ mediaUrl: m.url, mediaType: m.kind === 'image' ? 'image' : 'video', posterUrl: m.posterUrl || '', caption: '', scheduleTime: '' }); setStudioKey((k) => k + 1); setTab('studio'); scrollTop() }} /></div>
         )}
         {tab === 'tools' && (
-          <div className="section"><Tools posts={visiblePosts} stats={statsFallback} templates={templates} onCreateTemplate={handleCreateTemplate} onUseTemplate={useInStudio} /></div>
+          <div className="section"><Tools posts={visiblePosts} stats={statsFallback} templates={templates} onCreateTemplate={handleCreateTemplate} onUseTemplate={useInStudio} tr={tr} /></div>
         )}
         {tab === 'ai' && (
-          <div className="section"><AIStudio posts={visiblePosts} settings={settings} onSendToStudio={useInStudio} onSaveDraft={handleSaveDraft} onSaveDrafts={handleSaveDrafts} /></div>
+          <div className="section"><AIStudio posts={visiblePosts} settings={settings} onSendToStudio={useInStudio} onSaveDraft={handleSaveDraft} onSaveDrafts={handleSaveDrafts} tr={tr} /></div>
         )}
         {tab === 'settings' && (
           <div className="section"><Settings settings={settings} dbStatus={dbStatus} saving={saving} onSave={async (s) => { setSaving(true); try { const u = await api.saveSettings(s); setSettings(u || s) } finally { setSaving(false) } }} onInstagramChanged={refreshSettings} user={user} onAccountDeleted={handleLogout} onNavigate={setTab} lang={lang} onLangChange={setLang} tr={tr} /></div>
@@ -1444,18 +1496,18 @@ export default function App() {
           §4.8) — the core loop only; everything else lives in the
           drawer that "More" opens. Hidden while the keyboard, the
           drawer or a modal is up. */}
-      <nav className={`bottom-nav${menuOpen || confirmDelete || kbOpen ? ' bn-hidden' : ''}`} aria-label="Primary">
-        <button type="button" className={`bn-item${tab === 'home' ? ' active' : ''}`} aria-current={tab === 'home' ? 'page' : undefined} onClick={() => { setTab('home'); window.scrollTo({ top: 0 }) }}>
+      <nav className={`bottom-nav${menuOpen || confirmDelete || kbOpen ? ' bn-hidden' : ''}`} aria-label={tr('ariaPrimaryNav')}>
+        <button type="button" className={`bn-item${tab === 'home' ? ' active' : ''}`} aria-current={tab === 'home' ? 'page' : undefined} onClick={() => { setTab('home'); scrollTop() }}>
           <IconHome size={22} /><span>{tr('home')}</span>
         </button>
-        <button type="button" className={`bn-item${tab === 'queue' ? ' active' : ''}`} aria-current={tab === 'queue' ? 'page' : undefined} onClick={() => { setTab('queue'); window.scrollTo({ top: 0 }) }}>
+        <button type="button" className={`bn-item${tab === 'queue' ? ' active' : ''}`} aria-current={tab === 'queue' ? 'page' : undefined} onClick={() => { setTab('queue'); scrollTop() }}>
           <IconQueue size={22} /><span>{tr('queue')}</span>
           {(visiblePosts || []).some((p) => p.status === 'failed') && <span className="bn-dot" aria-hidden="true" />}
         </button>
         <button type="button" className={`bn-item bn-create${tab === 'studio' ? ' active' : ''}`} aria-current={tab === 'studio' ? 'page' : undefined} onClick={() => goStudio(null)}>
           <span className="bn-disc"><IconPlus size={24} /></span><span>{tr('create')}</span>
         </button>
-        <button type="button" className={`bn-item${tab === 'media' ? ' active' : ''}`} aria-current={tab === 'media' ? 'page' : undefined} onClick={() => { setTab('media'); window.scrollTo({ top: 0 }) }}>
+        <button type="button" className={`bn-item${tab === 'media' ? ' active' : ''}`} aria-current={tab === 'media' ? 'page' : undefined} onClick={() => { setTab('media'); scrollTop() }}>
           <IconMedia size={22} /><span>{tr('media')}</span>
         </button>
         <button type="button" className="bn-item" onClick={() => setMenuOpen(true)} aria-label={tr('more')}>
@@ -1464,7 +1516,7 @@ export default function App() {
       </nav>
 
       {toast && (
-        <div className={`toast-pill ${toast.kind === 'error' ? 'error' : ''}`} role="status">
+        <div className={`toast-pill ${toast.kind === 'error' ? 'error' : ''}`} role={toast.kind === 'error' ? 'alert' : 'status'}>
           <span>{toast.message}</span>
           {toast.actionLabel && (
             <button type="button" className="toast-action" onClick={() => { const fn = toast.onAction; if (toastTimer.current) clearTimeout(toastTimer.current); setToast(null); if (fn) fn() }}>{toast.actionLabel}</button>
@@ -1474,7 +1526,7 @@ export default function App() {
       )}
 
       {confirmDelete && (
-        <div className="modal-bg" role="dialog" aria-modal="true" aria-label="Confirm delete" onClick={() => setConfirmDelete(null)} onKeyDown={(e) => trapTabKey(e, e.currentTarget.querySelector('.modal'))}>
+        <div className="modal-bg" role="dialog" aria-modal="true" aria-label={tr('ariaConfirmDelete')} onClick={() => setConfirmDelete(null)} onKeyDown={(e) => trapTabKey(e, e.currentTarget.querySelector('.modal'))}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <h2>{confirmDelete.type === 'posts' ? tr('deletePostsTitle').replace('{n}', (confirmDelete.items || []).length) : confirmDelete.type === 'post' ? tr('deletePostTitle') : tr('deleteMediaTitle')}</h2>
             <p className="muted mt">{confirmDelete.type === 'posts' ? tr('deletePostsBody') : confirmDelete.type === 'post' ? (confirmDelete.item.caption || tr('untitledPost')) : (confirmDelete.item.title || confirmDelete.item.url)} — {tr('deleteNoUndo')}</p>

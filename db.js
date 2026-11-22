@@ -1301,6 +1301,31 @@ async function listNotifications(userId, { limit = 50 } = {}) {
     .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
     .slice(0, lim);
 }
+// Every notification in the store, oldest first — used only by the
+// guarded one-time test-broadcast cleanup (server.js), which matches
+// exact records across all users.
+async function listAllNotifications() {
+  await ensureMongo();
+  if (isMongo()) {
+    const docs = await Notification.find({}).sort({ createdAt: 1 }).lean();
+    return stripAll(docs);
+  }
+  return [...jsonList('notifications')].sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
+}
+async function deleteNotificationsByIds(ids) {
+  await ensureMongo();
+  const wanted = new Set((ids || []).map(String));
+  if (!wanted.size) return 0;
+  if (isMongo()) {
+    const r = await Notification.deleteMany({ id: { $in: [...wanted] } });
+    return r.deletedCount || 0;
+  }
+  const list = jsonList('notifications');
+  const kept = list.filter((n) => !wanted.has(String(n.id)));
+  jsonSave('notifications', kept);
+  return list.length - kept.length;
+}
+
 // ---------- admin audit log (batch 2) ----------
 async function addAdminAudit(entry) {
   await ensureMongo();
@@ -1538,6 +1563,7 @@ module.exports = {
   getInstagramAccounts, getInstagramAccount, saveInstagramAccount, removeInstagramAccount, setDefaultInstagramAccount,
   getImportJob, saveImportJob,
   saveNotification, listNotifications, countUnreadNotifications, markNotificationsRead,
+  listAllNotifications, deleteNotificationsByIds,
   createUploadSession, getUploadSession, saveUploadChunk, getUploadChunks, deleteUploadSession, deleteExpiredUploadSessions,
   addAdminAudit, listAdminAudit,
   getGlobalSettings, saveGlobalSettings,
