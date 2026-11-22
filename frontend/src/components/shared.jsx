@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
+import { cloneElement, isValidElement, useEffect, useRef, useState } from 'react'
 import { registerOverlayCloser } from '../overlayRegistry.js'
 import { openExternalUrl } from '../openExternal.js'
 import { fmtDateTime } from '../api.js'
 import { trFor, dictSync } from '../i18n.js'
-import { IconPlay, IconQueue } from './icons.jsx'
+import { IconInstagram, IconPlay, IconQueue, IconWarn, IconYouTube } from './icons.jsx'
+import BottomSheet from './BottomSheet.jsx'
 
 // These shared pieces receive no tr prop (they render inside Queue,
 // Calendar and Dashboard alike), so they translate from the same
@@ -26,14 +27,95 @@ function localTr() {
 
 const STATUS_KEYS = { scheduled: 'scheduled', draft: 'drafts', published: 'published', partial: 'partial', failed: 'failed' }
 
-export function StatusBadge({ status }) {
-  const t = localTr()
-  const s = status || 'draft'
-  return <span className={`badge ${s}`}>{STATUS_KEYS[s] ? t(STATUS_KEYS[s]) : s}</span>
+export function Badge({ tone = 'neutral', icon, children, className = '' }) {
+  return <span className={`badge ${tone}${className ? ` ${className}` : ''}`}>{icon}{children}</span>
 }
 
-export function PlatformBadge({ platform }) {
-  return <span className="badge neutral">{platform || 'Instagram'}</span>
+export function StatusBadge({ status, icon }) {
+  const t = localTr()
+  const s = status || 'draft'
+  return <span className={`badge ${s}`}>{icon}{STATUS_KEYS[s] ? t(STATUS_KEYS[s]) : s}</span>
+}
+
+export function PlatformBadge({ platform, icon }) {
+  return <span className="badge neutral">{icon}{platform || 'Instagram'}</span>
+}
+
+export function StatusChip({ platform = 'instagram', state = 'off', label }) {
+  const t = localTr()
+  const isYt = platform === 'youtube'
+  const PlatformIcon = isYt ? IconYouTube : IconInstagram
+  const stateWord = state === 'connected' ? t('connected') : state === 'checking' ? t('checkingWord') : t('notConnected')
+  const text = label || `${isYt ? 'YouTube' : 'Instagram'} · ${stateWord}`
+  return (
+    <span className={`conn-chip status-chip ${state}`}>
+      <PlatformIcon size={15} />
+      <span>{text}</span>
+      {state !== 'checking' && <span className={`dot${state === 'connected' ? '' : ' off'}`} aria-hidden="true" />}
+    </span>
+  )
+}
+
+export function Button({ variant = 'secondary', size, loading = false, disabled = false, reason, className = '', children, type = 'button', ...rest }) {
+  const variantClass = variant === 'primary' ? ' primary' : variant === 'danger' || variant === 'danger-fill' ? ' danger-fill' : variant === 'tertiary' ? ' tertiary' : variant === 'ghost' ? ' ghost' : ''
+  const btn = (
+    <button type={type} className={`btn${variantClass}${size === 'small' ? ' small' : ''}${className ? ` ${className}` : ''}`} disabled={disabled || loading} aria-busy={loading || undefined} {...rest}>
+      {loading && <span className="btn-spinner" aria-hidden="true" />}
+      {children}
+    </button>
+  )
+  if (disabled && reason) return <span className="btn-wrap">{btn}<span className="btn-reason">{reason}</span></span>
+  return btn
+}
+
+export function Card({ children, className = '', ...rest }) {
+  return <div className={`card${className ? ` ${className}` : ''}`} {...rest}>{children}</div>
+}
+
+export function Field({ id, label, helper, error, children, className = '', ...inputProps }) {
+  const helperId = helper && id ? `${id}-help` : undefined
+  const errorId = error && id ? `${id}-err` : undefined
+  const describedBy = [helperId, errorId].filter(Boolean).join(' ') || undefined
+  const a11y = { id, 'aria-invalid': error ? true : undefined, 'aria-describedby': describedBy }
+  const control = isValidElement(children)
+    ? cloneElement(children, { ...a11y, id: children.props.id || id })
+    : <input {...a11y} {...inputProps} />
+  return (
+    <div className={`field${error ? ' has-error' : ''}${className ? ` ${className}` : ''}`}>
+      {label && <label htmlFor={id}>{label}</label>}
+      {control}
+      {helper && <p className="field-helper" id={helperId}>{helper}</p>}
+      {error && <p className="field-error-msg" id={errorId} role="alert"><IconWarn size={14} /><span>{error}</span></p>}
+    </div>
+  )
+}
+
+export function Segmented({ options = [], value, onChange, ariaLabel }) {
+  return (
+    <div className="segmented" role="radiogroup" aria-label={ariaLabel}>
+      {options.map((o) => (
+        <button key={o.value} type="button" role="radio" aria-checked={value === o.value} className={`seg-btn${value === o.value ? ' active' : ''}`} onClick={() => onChange && onChange(o.value)}>
+          {o.icon}{o.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+export const Sheet = BottomSheet
+
+export function FilterSheet({ open, onClose, title, children, onApply, onClear, applyLabel, clearLabel }) {
+  const t = localTr()
+  if (!open) return null
+  return (
+    <BottomSheet title={title} onClose={onClose}>
+      {children}
+      <div className="filter-sheet-actions">
+        {onClear && <button type="button" className="btn ghost" onClick={onClear}>{clearLabel || t('clearFilters')}</button>}
+        {onApply && <button type="button" className="btn primary" onClick={onApply}>{applyLabel || t('filterApply')}</button>}
+      </div>
+    </BottomSheet>
+  )
 }
 
 /** True when a media URL is served by this app itself (/media/<id>) —
@@ -119,12 +201,13 @@ export function ErrorBox({ error, onRetry }) {
   )
 }
 
-export function Empty({ title, body, action }) {
+export function Empty({ title, body, action, icon }) {
+  const ArtIcon = typeof icon === 'function' ? icon : null
   return (
     <div className="empty">
-      <div className="empty-art" aria-hidden="true"><span style={{ color: 'var(--gold-text)', display: 'grid', placeItems: 'center' }}><IconQueue size={30} /></span></div>
+      <div className="empty-art" aria-hidden="true"><span style={{ color: 'var(--gold-text)', display: 'grid', placeItems: 'center' }}>{ArtIcon ? <ArtIcon size={30} /> : icon || <IconQueue size={30} />}</span></div>
       <b>{title}</b>
-      <p style={{ maxWidth: 420, margin: '0 auto' }}>{body}</p>
+      {body && <p style={{ maxWidth: 420, margin: '0 auto' }}>{body}</p>}
       {action && <div style={{ marginTop: 14 }}>{action}</div>}
     </div>
   )

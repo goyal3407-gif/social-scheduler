@@ -36,3 +36,5 @@ export const IconBell = (p) => <I {...p}><path d="M18 9a6 6 0 1 0-12 0c0 6-2.5 7
 export const IconEye = (p) => <I {...p}><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" /><circle cx="12" cy="12" r="3" /></I>
 export const IconEyeOff = (p) => <I {...p}><path d="m4 4 16 16" /><path d="M10.6 6.1c.5-.1.9-.1 1.4-.1 6.5 0 10 6 10 6a17 17 0 0 1-3.2 3.5M6.6 6.9A16.6 16.6 0 0 0 2 12s3.5 6 10 6c1.5 0 2.9-.3 4.1-.8" /></I>
 export const IconTag = (p) => <I {...p}><path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z" /><circle cx="7.5" cy="7.5" r="1.3" /></I>
+export const IconInstagram = (p) => <I {...p}><rect x="3" y="3" width="18" height="18" rx="5" /><circle cx="12" cy="12" r="4" /><circle cx="17.2" cy="6.8" r="0.6" fill="currentColor" /></I>
+export const IconYouTube = (p) => <I {...p}><rect x="2.5" y="5" width="19" height="14" rx="4" /><path d="m10 9.5 5 2.5-5 2.5z" fill="currentColor" stroke="none" /></I>

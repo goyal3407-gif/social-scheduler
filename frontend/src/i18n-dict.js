@@ -549,7 +549,7 @@ export const DICT = {
     ariaPrimaryNav: 'Primary', ariaConfirmDelete: 'Confirm delete', ariaUnreadSuffix: ' unread',
     authTrustLine: 'Secure login via official OAuth', authBackHome: 'Back to home page',
     studioUrlAdvanced: 'Paste a media link (advanced)', seeAllInLibrary: 'See all in Library',
-    queueFilters: 'Filters', clearFilters: 'Clear filters', scoreExplain: 'What raises it: a fuller caption, a few good hashtags and a clear call-to-action.',
+    queueFilters: 'Filters', clearFilters: 'Clear filters', filterApply: 'Apply filters', scoreExplain: 'What raises it: a fuller caption, a few good hashtags and a clear call-to-action.',
     // Round 2 (D-1): Tools + AI Studio chrome. (Their copyable
     // CONTENT — hooks, scripts, reply drafts, hashtag tags — is
     // post content and, like captions, is never translated.)
@@ -1165,7 +1165,7 @@ export const DICT = {
     ariaPrimaryNav: 'Neeche wali navigation', ariaConfirmDelete: 'Delete pakka karein', ariaUnreadSuffix: ' unread',
     authTrustLine: 'Official OAuth se secure login', authBackHome: 'Home page par wapas',
     studioUrlAdvanced: 'Media link paste karein (advanced)', seeAllInLibrary: 'Library me sab dekhein',
-    queueFilters: 'Filters', clearFilters: 'Filters saaf karein', scoreExplain: 'Score kya badhata hai: poora caption, kuch achhe hashtags aur saaf call-to-action.',
+    queueFilters: 'Filters', clearFilters: 'Filters saaf karein', filterApply: 'Filters lagayein', scoreExplain: 'Score kya badhata hai: poora caption, kuch achhe hashtags aur saaf call-to-action.',
     // Round 2 (D-1): Tools + AI Studio chrome (EN block ke jod).
     toolsSub: 'Scheduling ke aas-paas sab kuch — numbers, ideas aur woh words jo aapka time bachayein.',
     tabAnalytics: 'Analytics', tabHashtags: 'Hashtag vault', tabHooks: 'Hooks', tabBank: 'Content bank', tabBesttime: 'Best time', tabReplies: 'Reply sahayak', tabTemplates: 'Templates',

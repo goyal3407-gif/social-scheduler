@@ -487,10 +487,10 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
         </BottomSheet>
       )}
 
-      <div className="steps composer-steps" aria-label="Composer steps">
+      <div className="stepper" aria-label="Composer steps">
         {[t('stepMedia'), t('stepCaption'), t('stepSchedule')].map((label, i) => (
-          <button key={label} type="button" className={`step ${step === i + 1 ? 'active' : ''}`} aria-current={step === i + 1 ? 'step' : undefined} onClick={() => setStep(i + 1)}>
-            <b><span className="step-num">{i + 1}</span>{label}</b>
+          <button key={label} type="button" className={`stepper-step ${step === i + 1 ? 'active' : ''}`} aria-current={step === i + 1 ? 'step' : undefined} onClick={() => setStep(i + 1)}>
+            <b><span className="stepper-n">{i + 1}</span>{label}</b>
           </button>
         ))}
       </div>

@@ -82,15 +82,19 @@ textarea{resize:vertical;min-height:90px}
 .dot.off{background:var(--red)}
 .dot.amber{background:var(--amber)}
 
-.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;border-radius:var(--r-control);border:1px solid transparent;padding:10px 16px;font-size:14px;font-weight:600;background:var(--ink);color:var(--bg);white-space:nowrap;min-height:48px}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;border-radius:var(--r-control);border:1px solid var(--line);padding:10px 16px;font-size:14px;font-weight:600;background:var(--surface);color:var(--ink);white-space:nowrap;min-height:48px}
 .btn:hover{opacity:.92}
-.btn.primary{background:var(--brand-btn);color:var(--on-brand)}
+.btn.primary{background:var(--brand-btn);color:var(--on-brand);border-color:var(--brand-btn)}
 .btn.ghost{background:var(--surface);color:var(--ink);border-color:var(--line)}
+.btn.tertiary{background:transparent;color:var(--brand-text);border-color:transparent}
 .btn.danger{background:var(--red-soft);color:var(--red-text)}
-.btn.danger-fill{background:var(--red-btn);color:var(--on-brand)}
+.btn.danger-fill{background:var(--red-btn);color:var(--on-brand);border-color:var(--red-btn)}
 .btn.small{padding:8px 12px;font-size:14px;border-radius:var(--r-control);min-height:44px;min-width:44px}
 .btn:disabled{opacity:.55;cursor:not-allowed}
 .btn.block{width:100%}
+.btn-wrap{display:inline-flex;flex-direction:column;gap:4px}
+.btn-reason{color:var(--muted);font-size:12px}
+.btn-spinner{width:16px;height:16px;border-radius:50%;border:2px solid var(--surface-3);border-top-color:currentColor;animation:ptrspin .7s linear infinite;flex:none}
 
 .grid{display:grid;gap:16px}
 .stats{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-top:16px}
@@ -178,15 +182,35 @@ textarea{resize:vertical;min-height:90px}
 
 .steps{display:flex;gap:8px;margin:16px 0;flex-wrap:wrap}
 .step{flex:1;min-width:150px;border:1px solid var(--line);border-radius:var(--r-control);padding:11px 13px;background:var(--surface-2);font-size:14px}
-/* Prompt-4: the COMPOSER steps are a single-row stepper —
-   1 Media · 2 Caption · 3 Schedule on one line at every width
-   (the Landing page's own .steps list keeps the wrapped layout). */
-.composer-steps{flex-wrap:nowrap}
-.composer-steps .step{min-width:0;padding:9px 8px;display:flex;align-items:center;justify-content:center;text-align:center}
+/* Prompt-4 / Round 3 B2: the COMPOSER steps are a single-row
+   stepper — 1 Media · 2 Caption · 3 Schedule on one line at every
+   width. Renamed in B2 to .stepper/
+   .stepper-step/.stepper-n so the rules apply ONLY to the Studio
+   composer: SetupWizard keeps the generic .steps/.step/.step-num
+   rules above, and the Landing page's own .steps/.step-n list
+   (further down) keeps its wrapped layout, untouched. */
+.stepper{display:flex;gap:8px;margin:16px 0;flex-wrap:nowrap}
+.stepper-step{flex:1;min-width:0;border:1px solid var(--line);border-radius:var(--r-control);padding:9px 8px;background:var(--surface-2);font-size:14px;display:flex;align-items:center;justify-content:center;text-align:center;font-family:inherit;cursor:pointer;color:var(--ink)}
+.stepper-step b{display:block;font-family:var(--font-head);font-size:14px}
+.stepper-step.active{border-color:var(--brand);background:var(--brand-soft)}
+.stepper-n{width:22px;height:22px;border-radius:50%;background:var(--ink);color:var(--bg);display:inline-grid;place-items:center;font-size:12px;font-weight:700;margin-right:6px}
+.stepper-step.active .stepper-n{background:var(--brand);color:var(--on-brand)}
 .step b{display:block;font-family:var(--font-head);font-size:14px}
 .step.active{border-color:var(--brand);background:var(--brand-soft)}
 .step-num{width:22px;height:22px;border-radius:50%;background:var(--ink);color:var(--bg);display:inline-grid;place-items:center;font-size:12px;font-weight:700;margin-right:6px}
 .step.active .step-num{background:var(--brand);color:var(--on-brand)}
+/* Round 3 B2 — shared-component styles (Field, Segmented,
+   StatusChip, FilterSheet actions). Tokens only. */
+.field-helper{color:var(--muted);font-size:12px;margin-top:6px}
+.field-error-msg{color:var(--red-text);font-size:12px;margin-top:6px;display:flex;gap:6px;align-items:flex-start}
+.field.has-error input,.field.has-error select,.field.has-error textarea{border-color:var(--red)}
+.badge svg{flex:none}
+.status-chip.checking{color:var(--muted)}
+.segmented{display:flex;gap:4px;background:var(--surface-3);border-radius:var(--r-full);padding:4px}
+.seg-btn{flex:1;border:none;background:transparent;color:var(--ink-2);border-radius:var(--r-full);padding:8px 14px;font-size:14px;font-weight:600;display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:44px;font-family:inherit;cursor:pointer}
+.seg-btn.active{background:var(--surface);color:var(--ink);box-shadow:var(--shadow-sm)}
+.filter-sheet-actions{display:flex;gap:8px;margin-top:18px}
+.filter-sheet-actions .btn{flex:1}
 .sticky-bar{position:sticky;bottom:calc(16px + var(--bn-h, 0px));z-index:30;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-card);box-shadow:var(--shadow);padding:12px 14px;display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-top:18px}
 .score-wrap{display:flex;align-items:center;gap:10px}
 .score-ring{width:46px;height:46px;border-radius:50%;display:grid;place-items:center;font-weight:800;font-size:14px;font-family:var(--font-head);background:conic-gradient(var(--brand) var(--p,0%),var(--line-2) 0)}
@@ -560,7 +584,7 @@ button.pill::after{content:"";position:absolute;inset:-8px 0}
 .update-bar .update-close{background:transparent;border:none;color:inherit;opacity:.75;font-size:14px;line-height:1;padding:5px;cursor:pointer;font-family:inherit;position:relative}
 .update-bar .update-close::after{content:"";position:absolute;inset:-9px}
 .toast-pill{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(18px + var(--bn-h, 0px));z-index:120;max-width:min(520px,calc(100vw - 24px));display:flex;align-items:center;gap:12px;background:var(--ink);color:var(--bg);border-radius:var(--r-full);padding:11px 12px 11px 18px;font-size:14px;font-weight:600;box-shadow:var(--shadow);animation:toast-in .22s ease-out}
-.toast-pill.error{background:var(--red);color:var(--on-brand)}
+.toast-pill.error{background:var(--red-btn);color:var(--on-brand)}
 .toast-pill span{flex:1;min-width:0}
 .toast-action{flex:none;border:none;background:var(--on-brand);color:var(--ink);font-weight:800;font-size:14px;border-radius:var(--r-full);padding:7px 13px;cursor:pointer;font-family:inherit;position:relative}
 .toast-action::after{content:"";position:absolute;inset:-8px -2px}
