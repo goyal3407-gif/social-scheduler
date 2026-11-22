@@ -358,6 +358,11 @@ button,.tab{touch-action:manipulation}
 .auth-divider{display:flex;align-items:center;gap:12px;margin:20px 0 14px;color:var(--muted);font-size:12.5px}
 .auth-divider::before,.auth-divider::after{content:'';flex:1;height:1px;background:var(--line)}
 .auth-google{display:flex;justify-content:center;min-height:44px}
+/* Native-shell Google button: stack the button and its hint —
+   in the shared row layout the hint was squeezed beside the
+   button and ran underneath it (owner screenshot, 22 Nov 2026). */
+.auth-google-app{flex-direction:column;align-items:stretch}
+.auth-google-app p{text-align:center}
 
 /* --- Public landing (logged-out root page, Phase F): the same plain
    off-white, narrow-column language as Auth, widened a little for the

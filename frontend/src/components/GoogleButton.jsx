@@ -80,7 +80,7 @@ export default function GoogleButton({ mode, onCredential, onFailure, appLabel, 
       try { openExternalUrl(new URL('/app-start.html', window.location.origin).href) } catch { /* stay on the form */ }
     }
     return (
-      <div className="auth-google">
+      <div className="auth-google auth-google-app">
         <button type="button" className="btn block google-app-btn" onClick={openAppGoogle}>{appLabel || 'Continue with Google'}</button>
         {appHint ? <p className="muted small" style={{ marginTop: 8 }}>{appHint}</p> : null}
       </div>
