@@ -364,16 +364,18 @@ async function runScenario(scenario, bundleDir) {
       btn.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }))
       await waitFor(() => root.textContent.includes(marker), tab + ' view to render')
     }
-    // Connections page (Phase B addition): Instagram + YouTube cards and
-    // the disabled Facebook/TikTok placeholders must all render.
+    // Connections page (Phase B addition): Instagram + YouTube cards must
+    // render. Round 3 B7b (spec Addendum §4): the disabled Facebook/TikTok
+    // "Coming soon" placeholder cards are gone, replaced by the single
+    // "More platforms later" line — that line is waited for instead.
     const connBtn = await waitFor(() => {
       const els = [...window.document.querySelectorAll('button, a')]
       return els.find((el) => el.textContent.trim() === 'Connections')
     }, 'Connections nav control')
     connBtn.dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }))
     await waitFor(
-      () => root.textContent.includes('Link the accounts KiluaAI publishes to') && root.textContent.includes('Smoke Channel') && root.textContent.includes('Coming soon'),
-      'connections page to render (Instagram + YouTube + Coming soon cards)'
+      () => root.textContent.includes('Link the accounts KiluaAI publishes to') && root.textContent.includes('Smoke Channel') && root.textContent.includes('More platforms later'),
+      'connections page to render (Instagram + YouTube + More platforms later line)'
     )
     // Studio (Create): with a YouTube channel connected (stub), Step 3
     // must show the platform picker — Instagram + YouTube ticks.

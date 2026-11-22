@@ -362,6 +362,7 @@ export const DICT = {
     devErrSchedule: 'Could not schedule that post.',
     // Batch 5: Connections + Instagram/YouTube cards
     connectionsSub: 'Link the accounts KiluaAI publishes to — all in one place.',
+    morePlatformsLater: 'More platforms later',
     comingSoon: 'Coming soon',
     fbBody: 'Facebook Page posting is planned but not available yet. Nothing to connect here for now.',
     connectFacebook: 'Connect Facebook',
@@ -1020,6 +1021,7 @@ export const DICT = {
     devErrSchedule: 'Wo post schedule nahi ho payi.',
     // Batch 5: Connections + Instagram/YouTube cards
     connectionsSub: 'Wo accounts jodein jinpar KiluaAI publish karta hai — sab ek jagah.',
+    morePlatformsLater: 'Aur platforms baad mein',
     comingSoon: 'Jald aa raha hai',
     fbBody: 'Facebook Page posting plan mein hai, abhi uplabdh nahi hai. Abhi yahan kuch connect karna nahi hai.',
     connectFacebook: 'Facebook jodein',

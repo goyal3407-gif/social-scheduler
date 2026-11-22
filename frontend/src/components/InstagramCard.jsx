@@ -137,7 +137,7 @@ export default function InstagramCard({ settings, onInstagramChanged, tr }) {
               {broken
                 ? <span className="small" style={{ color: 'var(--red-text)', fontWeight: 700 }}>{t('accountBrokenNote')}</span>
                 : <span className="muted small">{a.health?.tokenNeverExpires ? t('neverExpires') : t('autoRenews')}</span>}
-              {broken && <button type="button" className="btn primary small" disabled={connectBusy} onClick={startConnect}>{connectBusy ? t('openingShort') : t('reconnect')}</button>}
+              {broken && <button type="button" className="btn small" disabled={connectBusy} onClick={startConnect}>{connectBusy ? t('openingShort') : t('reconnect')}</button>}
               <button type="button" className="btn danger small" disabled={disconnecting} onClick={() => disconnect(a.igUserId, a.username)} style={{ marginLeft: 'auto' }}>
                 {disconnecting ? t('disconnectingWord') : t('disconnectWord')}
               </button>
