@@ -181,6 +181,11 @@ function partB() {
   check('B: CSP allows the GIS script host only', cspLine.includes("script-src 'self' https://accounts.google.com"));
   check('B: CSP allows the GIS frame host', cspLine.includes('frame-src https://accounts.google.com'));
   check('B: CSP allows GIS connect', /connect-src[^;]*https:\/\/accounts\.google\.com/.test(cspLine));
+  // Production serves the SPA document with the vercel.json header
+  // block, NOT the Express one — the two CSPs must never drift, or
+  // the button would be blocked on the real page while APIs pass.
+  const vercelSrc = fs.readFileSync(path.join(root, 'vercel.json'), 'utf8');
+  check('B: vercel.json CSP carries the same GIS allowances', vercelSrc.includes("script-src 'self' https://accounts.google.com") && vercelSrc.includes('frame-src https://accounts.google.com') && /connect-src[^"]*https:\/\/accounts\.google\.com/.test(vercelSrc));
   check('B: button loads the official GIS script', btnSrc.includes('https://accounts.google.com/gsi/client'));
   check('B: button carries the public Client ID', btnSrc.includes('628297569656-dc5stqkpmdogk64e396paagapciai7vj.apps.googleusercontent.com'));
   check('B: button hides in the native shell', btnSrc.includes('isNativeShell'));
