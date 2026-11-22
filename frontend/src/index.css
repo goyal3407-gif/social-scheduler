@@ -173,10 +173,18 @@ textarea{resize:vertical;min-height:90px}
 .cal-chip.published{background:var(--green-soft);color:var(--green-text)}
 .cal-chip.failed{background:var(--red-soft);color:var(--red-text)}
 .cal-chip.draft{background:var(--amber-soft);color:var(--amber-text)}
-@media(max-width:640px){.cal-day{min-height:56px}.cal-chip{display:none}.cal-thumbs{display:none}.cal-day.has::after{content:"";display:block;width:7px;height:7px;border-radius:50%;background:var(--brand);margin:4px auto 0}}
+@media(max-width:640px){.cal-day{min-height:56px}.cal-chip{display:none}.cal-thumbs{display:none}.cal-count{display:none}.cal-dots{display:flex}}
 .cal-thumbs{display:flex;gap:3px;margin:2px 0 1px}
 .cal-thumbs img,.cal-thumbs video{width:26px;height:34px;object-fit:cover;border-radius:var(--r-control);background:var(--surface);border:1px solid var(--line-2);display:block}
 .cal-count{display:block;font-size:12px;color:var(--muted);margin-top:2px;line-height:1.35}
+/* Round 3 (B6): mobile day cells show status dots, never text
+   chips — the dots render at every width but only display under
+   the mobile breakpoint (desktop keeps thumbs/chips/count). */
+.cal-dots{display:none;gap:3px;justify-content:center;margin-top:2px}
+.cal-dot{width:7px;height:7px;border-radius:50%;background:var(--brand);flex:none}
+.cal-dot.published{background:var(--green)}
+.cal-dot.failed{background:var(--red)}
+.cal-dot.draft,.cal-dot.partial{background:var(--amber)}
 .pbar{height:8px;border-radius:var(--r-full);background:var(--surface-3);border:1px solid var(--line);overflow:hidden}
 .pbar span{display:block;height:100%;background:var(--brand);transition:width .2s ease}
 .media-removed{aspect-ratio:4/5;display:flex;flex-direction:column;gap:6px;align-items:center;justify-content:center;text-align:center;padding:14px;background:var(--surface-2);color:var(--muted);font-size:12px;line-height:1.5}
@@ -226,6 +234,13 @@ textarea{resize:vertical;min-height:90px}
 .seg-btn.active{background:var(--surface);color:var(--ink);box-shadow:var(--shadow-sm)}
 .filter-sheet-actions{display:flex;gap:8px;margin-top:18px}
 .filter-sheet-actions .btn{flex:1}
+/* Round 3 B6 — Queue + Media refinements. Tokens only. */
+.queue-check{display:flex;align-items:center;justify-content:center;width:44px;height:44px;flex:none;margin:6px 0 0;cursor:pointer}
+.queue-select-all{display:flex;gap:6px;align-items:center;min-height:44px;padding-bottom:10px;cursor:pointer}
+.toolbar .segmented{flex:none}
+.collapse-toggle{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;border:none;background:transparent;color:var(--ink);font-family:var(--font-head);font-size:var(--type-h2);font-weight:700;padding:0;min-height:44px;cursor:pointer;text-align:left}
+.collapse-toggle svg{flex:none;color:var(--muted);transition:transform var(--motion) ease}
+.collapse-toggle.open svg{transform:rotate(90deg)}
 .sticky-bar{position:sticky;bottom:calc(16px + var(--bn-h, 0px));z-index:30;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-card);box-shadow:var(--shadow);padding:12px 14px;display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-top:18px}
 .score-wrap{display:flex;align-items:center;gap:10px}
 .score-ring{width:46px;height:46px;border-radius:50%;display:grid;place-items:center;font-weight:800;font-size:14px;font-family:var(--font-head);background:conic-gradient(var(--brand) var(--p,0%),var(--line-2) 0)}
@@ -249,10 +264,11 @@ textarea{resize:vertical;min-height:90px}
 .media-card .mc-body{padding:10px 11px;font-size:12px}
 .media-card .mc-body b{display:block;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .drop{border:2px dashed var(--line);border-radius:var(--r-card);padding:22px;text-align:center;color:var(--muted);background:var(--surface-2)}
-/* Prompt-4 #7: on touch-sized screens the dropzone leads with the
-   tap affordance, not drag-and-drop wording. */
-.drop .drop-mobile{display:none}
-@media (max-width:720px){.drop .drop-desktop{display:none}.drop .drop-mobile{display:inline}}
+/* Round 3 (B6): dropzone wording follows the POINTER, not the
+   width — coarse pointers read "Tap to choose files"; the
+   drag-and-drop wording shows only for fine pointers. */
+.drop .drop-coarse{display:none}
+@media (pointer:coarse){.drop .drop-fine{display:none}.drop .drop-coarse{display:inline}}
 .drop.drag{border-color:var(--brand);background:var(--brand-soft);color:var(--brand-text)}
 .chip{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:600;background:var(--surface-2);border:1px solid var(--line);border-radius:var(--r-full);padding:3px 9px}
 /* Icon-only buttons inside chips (the ✕ delete buttons carry an

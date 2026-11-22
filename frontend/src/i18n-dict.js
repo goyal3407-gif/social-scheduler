@@ -135,7 +135,7 @@ export const DICT = {
     stepLabelCaption: 'Caption',
     stepLabelSchedule: 'Schedule',
     // Batch 5: Queue
-    queueSub: 'Everything you\'ve planned — drag-free, but organised. Switch to Kanban to see it by status.',
+    queueSub: 'Everything you\'ve planned, soonest first.',
     queueOverdueTitle: '{n} overdue',
     queueOverdueBody: 'scheduled time passed. Publish them now or move them.',
     listView: 'List', kanbanView: 'Kanban',
@@ -309,6 +309,7 @@ export const DICT = {
     mediaSub: 'Upload videos and images (up to 200 MB per file — big files upload in pieces automatically) or save links. Organise with folders, tags and favourites.',
     uploadTitle: 'Upload', uploadSub: 'Video and images, up to 200 MB each — compressed automatically.',
     uploadingWord: 'Uploading…', dropHere: 'Drop files here, or click to browse', dropTapHere: 'Tap to upload',
+    dropChooseFine: 'Drag & drop files here, or click to browse', dropChooseCoarse: 'Tap to choose files',
     folderNewOption: '+ Create new folder…', folderDefaultOpt: 'Default (Uploads)',
     dropFormats: 'MP4, MOV, JPG, PNG, WebP — up to 200 MB per file (big files upload in pieces)',
     uploadingPct: 'Uploading {name} — {pct}%',
@@ -791,7 +792,7 @@ export const DICT = {
     stepLabelCaption: 'Caption',
     stepLabelSchedule: 'Schedule',
     // Batch 5: Queue
-    queueSub: 'Aapki saari planned posts — Kanban par switch karke status ke hisaab se dekhein.',
+    queueSub: 'Aapki saari planned posts, sabse nazdeek samay pehle.',
     queueOverdueTitle: '{n} posts overdue',
     queueOverdueBody: 'samay nikal gaya. Abhi publish karein ya aage badhayein.',
     listView: 'List', kanbanView: 'Kanban',
@@ -965,6 +966,7 @@ export const DICT = {
     mediaSub: 'Videos aur images upload karein (har file 200 MB tak — badi files apne aap tukdon mein upload hoti hain) ya links save karein. Folders, tags aur favourites se sajayein.',
     uploadTitle: 'Upload', uploadSub: 'Video aur images, har file 200 MB tak — apne aap compress ho jati hai.',
     uploadingWord: 'Upload ho raha hai…', dropHere: 'Files yahan chhodein, ya click karke chunein', dropTapHere: 'Upload karne ke liye tap karein',
+    dropChooseFine: 'Files yahan drag & drop karein, ya click karke chunein', dropChooseCoarse: 'Files chunne ke liye tap karein',
     folderNewOption: '+ Naya folder banayein…', folderDefaultOpt: 'Default (Uploads)',
     dropFormats: 'MP4, MOV, JPG, PNG, WebP — har file 200 MB tak (badi files tukdon mein upload hoti hain)',
     uploadingPct: '{name} upload ho raha hai — {pct}%',

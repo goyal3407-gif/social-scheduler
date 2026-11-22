@@ -1,9 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { fmtDateTime } from '../api.js'
 import { queueOrder } from '../queueOrder.js'
-import { registerOverlayCloser } from '../overlayRegistry.js'
-import { PostRow, Skeleton, Empty, StatusBadge, PlatformBadge, Thumb } from './shared.jsx'
-import BottomSheet from './BottomSheet.jsx'
+import { PostRow, Skeleton, Empty, StatusBadge, PlatformBadge, Thumb, Segmented, FilterSheet } from './shared.jsx'
 
 const STATUSES = ['scheduled', 'draft', 'published', 'partial', 'failed']
 
@@ -17,26 +15,11 @@ export default function Queue({ posts, loading, onEdit, onDelete, onPublish, pub
   const [q, setQ] = useState('')
   const [qDebounced, setQDebounced] = useState('')
   const [selected, setSelected] = useState(new Set())
-  // Prompt-4: the two filter selects live in ONE Filters bottom
-  // sheet; Export CSV lives in the overflow (⋯) menu.
+  // Round 3 (B6): the toolbar carries only the List/Kanban
+  // Segmented, search and ONE Filters button — the status and
+  // platform selects AND Export CSV all live inside the B2
+  // FilterSheet. Filter behaviour/values are unchanged.
   const [filtersOpen, setFiltersOpen] = useState(false)
-  const [menuOpen, setMenuOpen] = useState(false)
-  const menuRef = useRef(null)
-  useEffect(() => {
-    if (!menuOpen) return undefined
-    return registerOverlayCloser(() => setMenuOpen(false))
-  }, [menuOpen])
-  useEffect(() => {
-    if (!menuOpen) return undefined
-    const onKey = (e) => { if (e.key === 'Escape') setMenuOpen(false) }
-    const onDoc = (e) => { if (menuRef.current && !menuRef.current.contains(e.target)) setMenuOpen(false) }
-    document.addEventListener('keydown', onKey)
-    document.addEventListener('mousedown', onDoc)
-    return () => {
-      document.removeEventListener('keydown', onKey)
-      document.removeEventListener('mousedown', onDoc)
-    }
-  }, [menuOpen])
   const filtersActive = filter !== 'all' || platform !== 'all'
 
   useEffect(() => {
@@ -95,6 +78,10 @@ export default function Queue({ posts, loading, onEdit, onDelete, onPublish, pub
   }
   const toggleSelect = (id) => setSelected((prev) => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next })
   const selectedItems = filtered.filter((p) => selected.has(p.id))
+  // Round 3 (B6): while an empty state (with its own single CTA) is
+  // showing, the toolbar's "+ New post" button is hidden so the
+  // screen carries exactly ONE primary CTA.
+  const showEmpty = !loading && filtered.length === 0
 
   return (
     <div>
@@ -116,40 +103,25 @@ export default function Queue({ posts, loading, onEdit, onDelete, onPublish, pub
       )}
 
       <div className="toolbar">
-        <div className="tabs" role="tablist" aria-label="Queue view">
-          <button type="button" className={`tab ${view === 'list' ? 'active' : ''}`} onClick={() => setView('list')}>{t('listView')}</button>
-          <button type="button" className={`tab ${view === 'kanban' ? 'active' : ''}`} onClick={() => setView('kanban')}>{t('kanbanView')}</button>
-        </div>
+        <Segmented ariaLabel="Queue view" value={view} onChange={setView} options={[{ value: 'list', label: t('listView') }, { value: 'kanban', label: t('kanbanView') }]} />
         <input type="search" placeholder={t('searchQueuePh')} value={q} onChange={(e) => setQ(e.target.value)} aria-label={t('ariaSearchPosts')} />
         <button type="button" className={`btn ${filtersActive ? 'primary' : 'ghost'}`} onClick={() => setFiltersOpen(true)}>{t('queueFilters')}{filtersActive ? ' •' : ''}</button>
-        <div className="post-menu-wrap" ref={menuRef}>
-          <button type="button" className="btn ghost" aria-label={t('moreActions')} aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => setMenuOpen((o) => !o)}>⋯</button>
-          {menuOpen && (
-            <div className="post-menu" role="menu">
-              <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); exportCsv() }}>{t('exportCsv')}</button>
-            </div>
-          )}
-        </div>
-        <button type="button" className="btn primary" onClick={onCreate}>{t('newPostBtn')}</button>
+        {!showEmpty && <button type="button" className="btn primary" onClick={onCreate}>{t('newPostBtn')}</button>}
       </div>
 
-      {filtersOpen && (
-        <BottomSheet title={t('queueFilters')} onClose={() => setFiltersOpen(false)}>
-          <label htmlFor="qFilterStatus">{t('statusLabel')}</label>
-          <select id="qFilterStatus" value={filter} onChange={(e) => setFilter(e.target.value)}>
-            <option value="all">{t('allStatuses')}</option>
-            {STATUSES.map((s) => <option key={s} value={s}>{LABELS[s]}</option>)}
-          </select>
-          <label htmlFor="qFilterPlatform" style={{ marginTop: 14 }}>{t('platformLabel')}</label>
-          <select id="qFilterPlatform" value={platform} onChange={(e) => setPlatform(e.target.value)}>
-            <option value="all">{t('allPlatforms')}</option>
-            {['Instagram', 'YouTube', 'Facebook', 'TikTok'].map((p) => <option key={p} value={p}>{p}</option>)}
-          </select>
-          {filtersActive && (
-            <button type="button" className="btn ghost block" style={{ marginTop: 18 }} onClick={() => { setFilter('all'); setPlatform('all') }}>{t('clearFilters')}</button>
-          )}
-        </BottomSheet>
-      )}
+      <FilterSheet open={filtersOpen} title={t('queueFilters')} onClose={() => setFiltersOpen(false)} onClear={filtersActive ? () => { setFilter('all'); setPlatform('all') } : undefined}>
+        <label htmlFor="qFilterStatus">{t('statusLabel')}</label>
+        <select id="qFilterStatus" value={filter} onChange={(e) => setFilter(e.target.value)}>
+          <option value="all">{t('allStatuses')}</option>
+          {STATUSES.map((s) => <option key={s} value={s}>{LABELS[s]}</option>)}
+        </select>
+        <label htmlFor="qFilterPlatform" style={{ marginTop: 14 }}>{t('platformLabel')}</label>
+        <select id="qFilterPlatform" value={platform} onChange={(e) => setPlatform(e.target.value)}>
+          <option value="all">{t('allPlatforms')}</option>
+          {['Instagram', 'YouTube'].map((p) => <option key={p} value={p}>{p}</option>)}
+        </select>
+        <button type="button" className="btn ghost block" style={{ marginTop: 18 }} onClick={exportCsv}>{t('exportCsv')}</button>
+      </FilterSheet>
 
       {selected.size > 0 && (
         <div className="toolbar" role="region" aria-label="Bulk actions">
@@ -168,14 +140,20 @@ export default function Queue({ posts, loading, onEdit, onDelete, onPublish, pub
         )
       ) : view === 'list' ? (
         <div className="card">
-          <label className="small muted" style={{ display: 'flex', gap: 6, alignItems: 'center', paddingBottom: 10, cursor: 'pointer' }}>
+          <label className="small muted queue-select-all">
             <input type="checkbox" style={{ width: 16, height: 16 }} checked={filtered.length > 0 && filtered.every((p) => selected.has(p.id))} onChange={(e) => setSelected(e.target.checked ? new Set(filtered.map((p) => p.id)) : new Set())} />
             {t('selectAllShown').replace('{n}', filtered.length)}
           </label>
           {filtered.map((p) => (
             <div key={p.id} style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}
               onTouchStart={(e) => swipeStart(e, p)} onTouchEnd={(e) => swipeEnd(e, p)}>
-              <input type="checkbox" aria-label={t('selectPostAria').replace('{caption}', (p.caption || t('noCaption')).slice(0, 40))} checked={selected.has(p.id)} onChange={() => toggleSelect(p.id)} style={{ width: 18, height: 18, marginTop: 16, flex: 'none' }} />
+              {/* Round 3 (B6): the label wrapper gives the row
+                  checkbox a 44px hit area; the box itself stays
+                  small. Swipe actions (left = delete, right =
+                  next best time) are also in the row menu. */}
+              <label className="queue-check">
+                <input type="checkbox" aria-label={t('selectPostAria').replace('{caption}', (p.caption || t('noCaption')).slice(0, 40))} checked={selected.has(p.id)} onChange={() => toggleSelect(p.id)} style={{ width: 18, height: 18, flex: 'none' }} />
+              </label>
               <div style={{ flex: 1, minWidth: 0 }}><PostRow post={p} onEdit={onEdit} onDelete={onDelete} onPublish={onPublish} publishing={publishingId === p.id} onDuplicate={onDuplicate} onPostAgain={onPostAgain} onReschedule={onReschedule} onRescheduleNextBest={onRescheduleNextBest} onReconnect={onReconnect} onRetry={onRetry} retrying={retryingId === p.id} /></div>
             </div>
           ))}
@@ -198,8 +176,8 @@ export default function Queue({ posts, loading, onEdit, onDelete, onPublish, pub
                     <p>{p.caption || t('noCaption')}</p>
                     <div className="post-meta"><span>{fmtDateTime(p.scheduleTime)}</span></div>
                     <div style={{ display: 'flex', gap: 6, marginTop: 9, flexWrap: 'wrap' }}>
-                      {p.status !== 'published' && <button type="button" className="btn primary small" disabled={publishingId === p.id} onClick={() => onPublish(p)}>{t('publish')}</button>}
-                      {onRetry && (p.status === 'failed' || p.status === 'partial') && <button type="button" className="btn ghost small" disabled={retryingId === p.id} onClick={() => onRetry(p)} title={t('retryTitle')}>{retryingId === p.id ? t('retrying') : t('retry')}</button>}
+                      {p.status !== 'published' && !(onRetry && (p.status === 'failed' || p.status === 'partial')) && <button type="button" className="btn primary small" disabled={publishingId === p.id} onClick={() => onPublish(p)}>{t('publish')}</button>}
+                      {onRetry && (p.status === 'failed' || p.status === 'partial') && <button type="button" className="btn primary small" disabled={retryingId === p.id} onClick={() => onRetry(p)} title={t('retryTitle')}>{retryingId === p.id ? t('retrying') : t('retry')}</button>}
                       {onPostAgain && <button type="button" className="btn ghost small" onClick={() => onPostAgain(p)}>{t('postAgain')}</button>}
                       {onDuplicate && <button type="button" className="btn ghost small" onClick={() => onDuplicate(p)}>{t('duplicate')}</button>}
                       {onReschedule && p.status !== 'published' && <button type="button" className="btn ghost small" onClick={() => onReschedule(p, { addDays: 1 })}>{t('plusOneDay')}</button>}

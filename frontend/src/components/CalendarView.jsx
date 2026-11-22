@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { fmtDateTime } from '../api.js'
 import { PostRow, Skeleton, Empty, MediaVisual } from './shared.jsx'
+import BottomSheet from './BottomSheet.jsx'
 import { trFor, dictSync } from '../i18n.js'
 
 const DOW = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
@@ -19,6 +20,14 @@ export default function CalendarView({ posts, loading, onEdit, onDelete, onPubli
   const [cursor, setCursor] = useState(new Date(today.getFullYear(), today.getMonth(), 1))
   const [selected, setSelected] = useState(today.toDateString())
   const [dragOverDay, setDragOverDay] = useState('')
+  // Round 3 (B6): on mobile widths a day tap also opens a sheet
+  // listing that day's posts (the grid itself shows dots there,
+  // not text chips); desktop keeps the section below the grid.
+  const [daySheetOpen, setDaySheetOpen] = useState(false)
+  const onDayTap = (k) => {
+    setSelected(k)
+    try { if (window.matchMedia('(max-width: 640px)').matches) setDaySheetOpen(true) } catch { /* matchMedia unavailable */ }
+  }
 
   // D4: drag a scheduled post's chip onto another day to move it
   // (same time of day). Click-to-select-day is untouched; only
@@ -92,12 +101,17 @@ export default function CalendarView({ posts, loading, onEdit, onDelete, onPubli
                 const nPub = dayPosts.filter((p) => p.status === 'published').length
                 const nFail = dayPosts.filter((p) => p.status === 'failed').length
                 return (
-                  <button key={k + d.getDate()} type="button" className={`cal-day ${isOther ? 'other' : ''} ${isToday ? 'today' : ''} ${dayPosts.length ? 'has' : ''}`} onClick={() => setSelected(k)} aria-label={t('calDayAria').replace('{date}', d.toDateString()).replace('{n}', dayPosts.length)}
+                  <button key={k + d.getDate()} type="button" className={`cal-day ${isOther ? 'other' : ''} ${isToday ? 'today' : ''} ${dayPosts.length ? 'has' : ''}`} onClick={() => onDayTap(k)} aria-label={t('calDayAria').replace('{date}', d.toDateString()).replace('{n}', dayPosts.length)}
                     onDragOver={(e) => { e.preventDefault(); if (dragOverDay !== k) setDragOverDay(k) }}
                     onDragLeave={() => { if (dragOverDay === k) setDragOverDay('') }}
                     onDrop={(e) => onDayDrop(e, d)}
-                    style={dragOverDay === k ? { outline: '2px solid var(--gold, #e8c268)', outlineOffset: -2 } : undefined}>
+                    style={dragOverDay === k ? { outline: '2px solid var(--brand)', outlineOffset: -2 } : undefined}>
                     <b>{d.getDate()}</b>
+                    {dayPosts.length > 0 && (
+                      <span className="cal-dots" aria-hidden="true">
+                        {dayPosts.slice(0, 3).map((p) => <span key={p.id} className={`cal-dot ${p.status}`} />)}
+                      </span>
+                    )}
                     {dayPosts.length > 0 && (
                       <span className="cal-thumbs" aria-hidden="true">
                         {dayPosts.slice(0, 3).map((p) => (
@@ -136,6 +150,16 @@ export default function CalendarView({ posts, loading, onEdit, onDelete, onPubli
         ))}
         <p className="muted mt">{t('calTimesNote')} {fmtDateTime(selectedPosts[0]?.scheduleTime)}</p>
       </section>
+
+      {daySheetOpen && (
+        <BottomSheet title={new Date(selected).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })} onClose={() => setDaySheetOpen(false)}>
+          {selectedPosts.length === 0 ? (
+            <Empty title={t('calEmptyTitle')} body={t('calEmptyBody')} />
+          ) : selectedPosts.map((p) => (
+            <PostRow key={p.id} post={p} onEdit={onEdit} onDelete={onDelete} onPublish={onPublish} publishing={publishingId === p.id} onReconnect={onReconnect} />
+          ))}
+        </BottomSheet>
+      )}
     </div>
   )
 }

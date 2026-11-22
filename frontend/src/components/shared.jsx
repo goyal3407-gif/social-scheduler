@@ -3,7 +3,7 @@ import { registerOverlayCloser } from '../overlayRegistry.js'
 import { openExternalUrl } from '../openExternal.js'
 import { fmtDateTime } from '../api.js'
 import { trFor, dictSync } from '../i18n.js'
-import { IconInstagram, IconPlay, IconQueue, IconWarn, IconYouTube } from './icons.jsx'
+import { IconCheck, IconClock, IconDots, IconEdit, IconInstagram, IconPlay, IconQueue, IconWarn, IconYouTube } from './icons.jsx'
 import BottomSheet from './BottomSheet.jsx'
 
 // These shared pieces receive no tr prop (they render inside Queue,
@@ -40,10 +40,16 @@ export function Badge({ tone = 'neutral', icon, children, className = '' }) {
   return <span className={`badge ${tone}${className ? ` ${className}` : ''}`}>{icon}{children}</span>
 }
 
+// Round 3 (B6): every status badge carries an icon + text by
+// default (the B2 `icon` prop still overrides per call site).
+const STATUS_ICONS = { scheduled: IconClock, draft: IconEdit, published: IconCheck, partial: IconWarn, failed: IconWarn }
+
 export function StatusBadge({ status, icon }) {
   const t = localTr()
   const s = status || 'draft'
-  return <span className={`badge ${s}`}>{icon}{STATUS_KEYS[s] ? t(STATUS_KEYS[s]) : s}</span>
+  const DefaultIcon = STATUS_ICONS[s]
+  const shown = icon !== undefined ? icon : (DefaultIcon ? <DefaultIcon size={13} /> : null)
+  return <span className={`badge ${s}`}>{shown}{STATUS_KEYS[s] ? t(STATUS_KEYS[s]) : s}</span>
 }
 
 export function PlatformBadge({ platform, icon }) {
@@ -397,19 +403,23 @@ export function PostRow({ post, onEdit, onDelete, onPublish, publishing, onDupli
         </div>
         <StatusTracker post={post} publishing={publishing} onReconnect={onReconnect} />
         <div className="post-foot">
-          {post.status !== 'published' && (
+          {/* Round 3 (B6): ONE primary action per row state — a
+              failed/partial post's primary is Retry (it re-checks
+              and publishes again); other unpublished posts keep
+              Publish now as the primary. */}
+          {post.status !== 'published' && !(onRetry && (post.status === 'failed' || post.status === 'partial')) && (
             <button type="button" className="btn primary small" disabled={publishing} onClick={() => onPublish && onPublish(post)}>
               {publishing ? t('publishingWord') : t('publishNow')}
             </button>
           )}
           {onRetry && (post.status === 'failed' || post.status === 'partial') && (
-            <button type="button" className="btn ghost small" disabled={retrying} onClick={() => onRetry(post)} title={t('retryTitle')}>
+            <button type="button" className="btn primary small" disabled={retrying} onClick={() => onRetry(post)} title={t('retryTitle')}>
               {retrying ? t('retrying') : t('retry')}
             </button>
           )}
           {hasMenu && (
             <div className="post-menu-wrap" ref={menuRef}>
-              <button type="button" className="btn ghost small post-menu-btn" aria-label={t('moreActions')} aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => setMenuOpen((o) => !o)}>⋯</button>
+              <button type="button" className="btn ghost small post-menu-btn" aria-label={t('moreActions')} aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => setMenuOpen((o) => !o)}><IconDots size={18} /></button>
               {menuOpen && (
                 <div className="post-menu" role="menu">
                   {onPostAgain && <button type="button" role="menuitem" onClick={act(onPostAgain)}>{t('postAgain')}</button>}

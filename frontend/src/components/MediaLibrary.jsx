@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { fmtDate, fromLocalInputValue } from '../api.js'
 import { Skeleton, Empty, ErrorBox, MediaVisual } from './shared.jsx'
-import { IconHeart, IconTrash, IconSearch } from './icons.jsx'
+import { IconHeart, IconTrash, IconSearch, IconChevronRight } from './icons.jsx'
 import { isNativeApp, importDeviceFile, listDeviceLibrary, readDeviceFile, deleteDeviceItem, loadPendingSchedules, removePendingSchedule } from '../localMedia.js'
 import { scheduleFromDevice } from '../autoBridge.js'
 
@@ -205,6 +205,7 @@ function DeviceLibrary({ onUploaded, onUpload, tr }) {
           ))}
         </div>
       )}
+
     </div>
   )
 }
@@ -227,6 +228,8 @@ export default function MediaLibrary({ media, loading, error, onRetry, onAddLink
   // itself — a plain folder string on the item — is unchanged).
   const [folderChoice, setFolderChoice] = useState('')
   const uploadFolder = folderChoice === '__new' ? newFolder.trim() : folderChoice
+  // Round 3 (B6): add-by-link starts collapsed.
+  const [linkOpen, setLinkOpen] = useState(false)
   const [drag, setDrag] = useState(false)
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
@@ -300,55 +303,11 @@ export default function MediaLibrary({ media, loading, error, onRetry, onAddLink
       {err && <div className="alert error">{err}</div>}
       {msg && <div className="alert success">{msg}</div>}
 
-      <div className="two-col" style={{ alignItems: 'start' }}>
-        <div className="card">
-          <h2>{t('uploadTitle')}</h2>
-          <p className="muted small mb">{t('uploadSub')}</p>
-          <div
-            className={`drop ${drag ? 'drag' : ''}`}
-            onDragOver={(e) => { e.preventDefault(); setDrag(true) }}
-            onDragLeave={() => setDrag(false)}
-            onDrop={(e) => { e.preventDefault(); setDrag(false); handleFiles(e.dataTransfer.files) }}
-            onClick={() => fileRef.current?.click()}
-            role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter') fileRef.current?.click() }}
-          >
-            <b>{busy ? t('uploadingWord') : <><span className="drop-desktop">{t('dropHere')}</span><span className="drop-mobile">{t('dropTapHere')}</span></>}</b>
-            <p className="small">{t('dropFormats')}</p>
-            <input ref={fileRef} type="file" multiple accept="video/*,image/*" style={{ display: 'none' }} onChange={(e) => handleFiles(e.target.files)} />
-          </div>
-          {progress && (
-            <div className="mt">
-              <div className="small muted" style={{ marginBottom: 4 }}>{t('uploadingPct').replace('{name}', progress.name).replace('{pct}', Math.round(progress.frac * 100))}</div>
-              <div className="pbar"><span style={{ width: `${Math.round(progress.frac * 100)}%` }} /></div>
-            </div>
-          )}
-          <label htmlFor="upFolder" style={{ marginTop: 14 }}>{t('folderForUploads')}</label>
-          <select id="upFolder" value={folderChoice} onChange={(e) => setFolderChoice(e.target.value)}>
-            <option value="">{t('folderDefaultOpt')}</option>
-            {folders.filter((f) => f !== 'all').map((f) => <option key={f} value={f}>{f}</option>)}
-            <option value="__new">{t('folderNewOption')}</option>
-          </select>
-          {folderChoice === '__new' && (
-            <input aria-label={t('folderForUploads')} placeholder={t('folderPh')} value={newFolder} onChange={(e) => setNewFolder(e.target.value)} style={{ marginTop: 8 }} />
-          )}
-        </div>
-
-        <form className="card" onSubmit={addLink}>
-          <h2>{t('addByLink')}</h2>
-          <p className="muted small mb">{t('addByLinkSub')}</p>
-          <label htmlFor="linkUrl">{t('mediaUrlLabel')}</label>
-          <input id="linkUrl" type="url" placeholder="https://…/video.mp4" value={url} onChange={(e) => setUrl(e.target.value)} />
-          <label htmlFor="linkTitle" style={{ marginTop: 12 }}>{t('titleLabel')}</label>
-          <input id="linkTitle" placeholder={t('linkTitlePh')} value={title} onChange={(e) => setTitle(e.target.value)} />
-          <label htmlFor="linkTags" style={{ marginTop: 12 }}>{t('tagsLabel')} <span className="muted">{t('tagsNote')}</span></label>
-          <input id="linkTags" placeholder={t('tagsPh')} value={tags} onChange={(e) => setTags(e.target.value)} />
-          <button type="submit" className="btn primary mt" disabled={busy}>{busy ? t('addingWord') : t('addToLibrary')}</button>
-        </form>
-      </div>
-
-      {isNativeApp() ? <DeviceLibrary onUploaded={onRetry} onUpload={onUpload} tr={t} /> : null}
-
-      <div className="toolbar mt2">
+      {/* Round 3 (B6): library-first — the library toolbar + grid
+          are the screen's first/main content, with exactly ONE
+          primary Upload button; the upload dropzone and the
+          add-by-link form live below the grid. */}
+      <div className="toolbar">
         <div style={{ position: 'relative', flex: 2, minWidth: 180 }}>
           <input type="search" placeholder={t('searchMediaPh')} value={q} onChange={(e) => setQ(e.target.value)} style={{ paddingLeft: 36 }} aria-label={t('searchMediaAria')} />
           <span style={{ position: 'absolute', left: 11, top: 11, color: 'var(--muted)' }}><IconSearch size={16} /></span>
@@ -358,10 +317,11 @@ export default function MediaLibrary({ media, loading, error, onRetry, onAddLink
         </select>
         <button type="button" className={`tab ${onlyFav ? 'active' : ''}`} onClick={() => setOnlyFav(!onlyFav)} aria-pressed={onlyFav}>{t('favOnly')}</button>
         <span className="pill">{t(filtered.length === 1 ? 'filesCountOne' : 'filesCountMany').replace('{n}', filtered.length)}</span>
+        <button type="button" className="btn primary" disabled={busy} onClick={() => fileRef.current?.click()}>{t('uploadMediaBtn')}</button>
       </div>
 
       {loading ? <div aria-busy="true"><span className="sr-only">{t('loading')}</span><Skeleton variant="media" rows={3} /></div> : filtered.length === 0 ? (
-        <div className="card"><Empty title={t('libraryEmpty')} body={q || folder !== 'all' || onlyFav ? t('libraryNoMatch') : t('libraryEmptyBody')} action={q || folder !== 'all' || onlyFav ? undefined : <button type="button" className="btn primary small" onClick={() => fileRef.current?.click()}>{t('uploadMediaBtn')}</button>} /></div>
+        <div className="card"><Empty title={t('libraryEmpty')} body={q || folder !== 'all' || onlyFav ? t('libraryNoMatch') : t('libraryEmptyBody')} /></div>
       ) : (
         <div>
           <div className="media-grid">
@@ -390,6 +350,63 @@ export default function MediaLibrary({ media, loading, error, onRetry, onAddLink
           )}
         </div>
       )}
+
+      <div className="two-col mt2" style={{ alignItems: 'start' }}>
+        <div className="card">
+          <h2>{t('uploadTitle')}</h2>
+          <p className="muted small mb">{t('uploadSub')}</p>
+          <div
+            className={`drop ${drag ? 'drag' : ''}`}
+            onDragOver={(e) => { e.preventDefault(); setDrag(true) }}
+            onDragLeave={() => setDrag(false)}
+            onDrop={(e) => { e.preventDefault(); setDrag(false); handleFiles(e.dataTransfer.files) }}
+            onClick={() => fileRef.current?.click()}
+            role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter') fileRef.current?.click() }}
+          >
+            <b>{busy ? t('uploadingWord') : <><span className="drop-fine">{t('dropChooseFine')}</span><span className="drop-coarse">{t('dropChooseCoarse')}</span></>}</b>
+            <p className="small">{t('dropFormats')}</p>
+            <input ref={fileRef} type="file" multiple accept="video/*,image/*" style={{ display: 'none' }} onChange={(e) => handleFiles(e.target.files)} />
+          </div>
+          {progress && (
+            <div className="mt">
+              <div className="small muted" style={{ marginBottom: 4 }}>{t('uploadingPct').replace('{name}', progress.name).replace('{pct}', Math.round(progress.frac * 100))}</div>
+              <div className="pbar"><span style={{ width: `${Math.round(progress.frac * 100)}%` }} /></div>
+            </div>
+          )}
+          <label htmlFor="upFolder" style={{ marginTop: 14 }}>{t('folderForUploads')}</label>
+          <select id="upFolder" value={folderChoice} onChange={(e) => setFolderChoice(e.target.value)}>
+            <option value="">{t('folderDefaultOpt')}</option>
+            {folders.filter((f) => f !== 'all').map((f) => <option key={f} value={f}>{f}</option>)}
+            <option value="__new">{t('folderNewOption')}</option>
+          </select>
+          {folderChoice === '__new' && (
+            <input aria-label={t('folderForUploads')} placeholder={t('folderPh')} value={newFolder} onChange={(e) => setNewFolder(e.target.value)} style={{ marginTop: 8 }} />
+          )}
+        </div>
+
+        <div className="card">
+          {/* Round 3 (B6): add-by-link is a collapsible section,
+              not a standing form block. Behaviour is unchanged. */}
+          <button type="button" className={`collapse-toggle${linkOpen ? ' open' : ''}`} aria-expanded={linkOpen} onClick={() => setLinkOpen((o) => !o)}>
+            <span>{t('addByLink')}</span>
+            <IconChevronRight size={18} />
+          </button>
+          {linkOpen && (
+            <form onSubmit={addLink}>
+              <p className="muted small mb">{t('addByLinkSub')}</p>
+              <label htmlFor="linkUrl">{t('mediaUrlLabel')}</label>
+              <input id="linkUrl" type="url" placeholder="https://…/video.mp4" value={url} onChange={(e) => setUrl(e.target.value)} />
+              <label htmlFor="linkTitle" style={{ marginTop: 12 }}>{t('titleLabel')}</label>
+              <input id="linkTitle" placeholder={t('linkTitlePh')} value={title} onChange={(e) => setTitle(e.target.value)} />
+              <label htmlFor="linkTags" style={{ marginTop: 12 }}>{t('tagsLabel')} <span className="muted">{t('tagsNote')}</span></label>
+              <input id="linkTags" placeholder={t('tagsPh')} value={tags} onChange={(e) => setTags(e.target.value)} />
+              <button type="submit" className="btn primary mt" disabled={busy}>{busy ? t('addingWord') : t('addToLibrary')}</button>
+            </form>
+          )}
+        </div>
+      </div>
+
+      {isNativeApp() ? <DeviceLibrary onUploaded={onRetry} onUpload={onUpload} tr={t} /> : null}
     </div>
   )
 }
