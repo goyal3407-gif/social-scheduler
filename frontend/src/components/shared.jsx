@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { registerOverlayCloser } from '../overlayRegistry.js'
 import { fmtDateTime } from '../api.js'
 import { trFor, dictSync } from '../i18n.js'
 import { IconPlay } from './icons.jsx'
@@ -247,6 +248,12 @@ export function PostRow({ post, onEdit, onDelete, onPublish, publishing, onDupli
   const t = localTr()
   const [menuOpen, setMenuOpen] = useState(false)
   const menuRef = useRef(null)
+  // Phase 3 (Batch B): while this menu is open it is the topmost
+  // overlay — the Android back handler closes it before navigating.
+  useEffect(() => {
+    if (!menuOpen) return undefined
+    return registerOverlayCloser(() => setMenuOpen(false))
+  }, [menuOpen])
   useEffect(() => {
     if (!menuOpen) return undefined
     const onKey = (e) => { if (e.key === 'Escape') setMenuOpen(false) }

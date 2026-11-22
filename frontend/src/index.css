@@ -187,7 +187,7 @@ textarea{resize:vertical;min-height:90px}
 .step.active{border-color:var(--brand);background:var(--brand-soft)}
 .step-num{width:22px;height:22px;border-radius:50%;background:var(--ink);color:var(--bg);display:inline-grid;place-items:center;font-size:11px;font-weight:700;margin-right:6px}
 .step.active .step-num{background:var(--brand);color:#fff}
-.sticky-bar{position:sticky;bottom:16px;z-index:30;background:var(--surface);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:12px 14px;display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-top:18px}
+.sticky-bar{position:sticky;bottom:calc(16px + var(--bn-h, 0px));z-index:30;background:var(--surface);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:12px 14px;display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-top:18px}
 .score-wrap{display:flex;align-items:center;gap:10px}
 .score-ring{width:46px;height:46px;border-radius:50%;display:grid;place-items:center;font-weight:800;font-size:13px;font-family:var(--font-head);background:conic-gradient(var(--brand) var(--p,0%),var(--line-2) 0)}
 .score-ring i{width:36px;height:36px;border-radius:50%;background:var(--surface);display:grid;place-items:center;font-style:normal}
@@ -276,7 +276,7 @@ button,.tab{touch-action:manipulation}
 
 @media(max-width:640px){
   .app{padding-bottom:calc(28px + env(safe-area-inset-bottom, 0px))}
-  .sticky-bar{bottom:12px}
+  .sticky-bar{bottom:calc(12px + var(--bn-h, 0px))}
 
   /* Touch targets + no iOS zoom on focus (inputs need >=16px). */
   input,select,textarea{font-size:16px}
@@ -300,7 +300,7 @@ button,.tab{touch-action:manipulation}
   .post-row{gap:9px;padding:8px 0}
   .post-foot .btn.small{min-height:44px;padding-top:6px;padding-bottom:6px}
   .post-foot{margin-top:4px}
-  .post-menu{position:fixed;left:12px;right:12px;top:auto;bottom:calc(12px + env(safe-area-inset-bottom, 0px));min-width:0}
+  .post-menu{position:fixed;left:12px;right:12px;top:auto;bottom:calc(12px + var(--bn-h, 0px));min-width:0}
   .post-menu button{padding:12px}
 
   /* Media grid: two comfortable columns on phones. */
@@ -508,11 +508,11 @@ button.pill::after{content:"";position:absolute;inset:-8px 0}
 
 /* --- Global toast: bottom-centre dark pill --- */
 /* --- Update guard banner (a newer build is live) --- */
-.update-bar{position:sticky;top:0;z-index:130;display:flex;align-items:center;justify-content:center;gap:12px;background:var(--gold);color:#0e1325;padding:8px 14px;font-size:13.5px;font-weight:600;text-align:center}
+.update-bar{position:sticky;top:0;z-index:130;display:flex;align-items:center;justify-content:center;gap:12px;background:var(--gold);color:#0e1325;padding:calc(8px + env(safe-area-inset-top, 0px)) 14px 8px;font-size:13.5px;font-weight:600;text-align:center}
 .update-bar .update-refresh{background:#0e1325;color:#f5f1e6;border:none;border-radius:8px;padding:5px 14px;font-weight:700;font-size:13px;cursor:pointer;font-family:inherit;min-height:44px}
 .update-bar .update-close{background:transparent;border:none;color:inherit;opacity:.75;font-size:13px;line-height:1;padding:5px;cursor:pointer;font-family:inherit;position:relative}
 .update-bar .update-close::after{content:"";position:absolute;inset:-9px}
-.toast-pill{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(18px + env(safe-area-inset-bottom, 0px));z-index:120;max-width:min(520px,calc(100vw - 24px));display:flex;align-items:center;gap:12px;background:var(--ink);color:var(--bg);border-radius:999px;padding:11px 12px 11px 18px;font-size:13.5px;font-weight:600;box-shadow:var(--shadow);animation:toast-in .22s ease-out}
+.toast-pill{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(18px + var(--bn-h, 0px));z-index:120;max-width:min(520px,calc(100vw - 24px));display:flex;align-items:center;gap:12px;background:var(--ink);color:var(--bg);border-radius:999px;padding:11px 12px 11px 18px;font-size:13.5px;font-weight:600;box-shadow:var(--shadow);animation:toast-in .22s ease-out}
 .toast-pill.error{background:var(--red);color:#fff}
 .toast-pill span{flex:1;min-width:0}
 .toast-action{flex:none;border:none;background:var(--gold-bright);color:var(--ink);font-weight:800;font-size:13px;border-radius:999px;padding:7px 13px;cursor:pointer;font-family:inherit;position:relative}
@@ -553,3 +553,29 @@ button.pill::after{content:"";position:absolute;inset:-8px 0}
   .stats-3 .stat span{font-size:11px}
   .stats-3 .stat small{font-size:10.5px}
 }
+
+/* ============================================================
+   PHASE 3 (Batch B) — mobile bottom navigation (design system
+   §4.8) + the --bn-h clearance variable every fixed bottom
+   element (sticky bar, toast, post-menu sheet) offsets by.
+   The bar renders only in the signed-in shell; it is visible at
+   ≤900px and always in the native app (html.is-native). While it
+   is visible the burger is gone — "More" replaces it.
+   ============================================================ */
+:root{--bn-h:0px}
+@media(max-width:900px){:root{--bn-h:calc(60px + env(safe-area-inset-bottom, 0px))}}
+html.is-native{--bn-h:calc(60px + env(safe-area-inset-bottom, 0px))}
+.app.with-bottomnav{padding-bottom:calc(40px + var(--bn-h))}
+@media(max-width:640px){.app.with-bottomnav{padding-bottom:calc(28px + var(--bn-h))}}
+.with-bottomnav .burger-btn{display:none}
+.bottom-nav{display:none;position:fixed;left:0;right:0;bottom:0;z-index:65;height:calc(60px + env(safe-area-inset-bottom, 0px));padding-bottom:env(safe-area-inset-bottom, 0px);background:var(--surface);border-top:1px solid var(--line);box-shadow:var(--shadow-nav);align-items:stretch;transition:transform var(--motion) ease-out}
+@media(max-width:900px){.bottom-nav{display:flex}}
+html.is-native .bottom-nav{display:flex}
+.bottom-nav.bn-hidden{transform:translateY(110%)}
+.bn-item{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;border:none;background:transparent;color:var(--muted);font-size:12px;font-weight:600;font-family:inherit;cursor:pointer;position:relative;min-height:44px;padding:6px 2px 2px;touch-action:manipulation;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
+.bn-item svg{flex:none}
+.bn-item.active{color:var(--brand-text)}
+.bn-item.active::before{content:"";position:absolute;top:0;left:50%;transform:translateX(-50%);width:34px;height:3px;border-radius:0 0 3px 3px;background:var(--brand)}
+.bn-disc{width:44px;height:44px;border-radius:50%;background:var(--brand);color:#fff;display:grid;place-items:center;margin-top:-16px;box-shadow:var(--shadow-sm);border:3px solid var(--surface)}
+.bn-item.active .bn-disc{background:var(--brand-text)}
+.bn-dot{position:absolute;top:8px;right:calc(50% - 21px);width:9px;height:9px;border-radius:50%;background:var(--red);border:2px solid var(--surface)}

@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense } from 'react'
 import { api, nextBestTime, getWorkspaceId, setWorkspaceId } from './api.js'
 import { trFor, loadDict, dictSync } from './i18n.js'
+import { closeTopOverlay } from './overlayRegistry.js'
+// Native-shell check WITHOUT importing localMedia.js: that module
+// pulls @capacitor/filesystem into whatever chunk imports it, and
+// the shell must stay inside the main-chunk budget. The Capacitor
+// bridge injects window.Capacitor before any app code runs.
+function isNativeShell() {
+  try { return !!(window.Capacitor && typeof window.Capacitor.isNativePlatform === 'function' && window.Capacitor.isNativePlatform()) } catch { return false }
+}
 import { ResetPassword } from './components/Auth.jsx'
 import { IconHome, IconCal, IconQueue, IconPlus, IconMedia, IconBulk, IconTools, IconSpark, IconSettings, IconSun, IconMoon, IconMenu, IconX, IconBell, IconLink, IconSearch, IconTag } from './components/icons.jsx'
 import { Skeleton, isOwnMediaUrl } from './components/shared.jsx'
@@ -74,18 +82,49 @@ const NAV = [
   { id: 'settings', label: 'Settings', Icon: IconSettings }
 ]
 
+// Phase 3 (Batch B): tabs are URL-backed. The tab lives in the hash
+// (#/queue, #/studio, …) so refresh, share, deep-links and the
+// browser/Android back button all work off one history stack. The
+// admin console (a separate page) and /reset keep their own routing.
+const TAB_IDS = ['home', 'studio', 'queue', 'calendar', 'media', 'ai', 'bulk', 'tools', 'connections', 'pricing', 'settings']
+function tabFromHash() {
+  try {
+    const id = window.location.hash.replace(/^#\/?/, '')
+    return TAB_IDS.includes(id) ? id : null
+  } catch { return null }
+}
+// Focus trap helper (M-06): keep Tab cycling inside an open overlay.
+function trapTabKey(e, container) {
+  if (e.key !== 'Tab' || !container) return
+  const f = Array.from(container.querySelectorAll('button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'))
+    .filter((el) => el.offsetParent !== null || el === document.activeElement)
+  if (!f.length) return
+  const first = f[0]
+  const last = f[f.length - 1]
+  if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus() }
+  else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus() }
+}
+
 export default function App() {
   // Returning from the Meta "Connect Instagram" login lands on
   // /?ig_oauth=... — open Settings directly so its result banner shows.
   // The same applies to /open-app, the verified Android App Link the
   // connect result pages point at: it means "I just connected", so land
   // on Settings (and clean the path so a refresh doesn't repeat it).
+  // Otherwise a #/<tab> deep link wins over the Home default.
   const [tab, setTab] = useState(() => {
     try {
       if (window.location.pathname.startsWith('/open-app')) return 'settings'
-      return new URLSearchParams(window.location.search).has('ig_oauth') ? 'settings' : 'home'
+      if (new URLSearchParams(window.location.search).has('ig_oauth')) return 'settings'
+      return tabFromHash() || 'home'
     } catch { return 'home' }
   })
+  // Tab-history stack for the hardware/browser back model: mirrors
+  // the entries this session pushed (the popstate handler trims it).
+  const tabStackRef = useRef(null)
+  if (tabStackRef.current === null) tabStackRef.current = [tab]
+  const poppingRef = useRef(false)
+  const hashInitRef = useRef(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const [theme, setTheme] = useState(() => {
     try { return localStorage.getItem('ss-theme') || (window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') } catch { return 'light' }
@@ -164,6 +203,118 @@ export default function App() {
     const label = (NAV.find((n) => n.id === tab) || {}).label || (tab === 'studio' ? 'Studio' : 'Home')
     document.title = tab === 'home' ? 'KiluaAI' : `${label} · KiluaAI`
   }, [tab])
+
+  // --- Phase 3 (Batch B): tab ⇄ hash synchronisation. Tab changes
+  // push a history entry; popstate (browser back/forward, Android
+  // back via the handler below) moves the tab without pushing.
+  useEffect(() => {
+    const want = `#/${tab}`
+    if (poppingRef.current) {
+      poppingRef.current = false
+      const stack = tabStackRef.current
+      while (stack.length > 1 && stack[stack.length - 1] !== tab) stack.pop()
+      if (stack[stack.length - 1] !== tab) tabStackRef.current = [tab]
+      return
+    }
+    if (window.location.hash === want) { hashInitRef.current = true; return }
+    if (!hashInitRef.current) {
+      // First sync: normalise the URL to the opening tab without
+      // adding a history entry of our own.
+      hashInitRef.current = true
+      try { window.history.replaceState({ ssTab: tab }, '', want) } catch { /* hash stays unset */ }
+      return
+    }
+    try { window.history.pushState({ ssTab: tab }, '', want) } catch { /* history unavailable */ }
+    if (tabStackRef.current[tabStackRef.current.length - 1] !== tab) tabStackRef.current.push(tab)
+  }, [tab])
+  useEffect(() => {
+    const onPop = () => {
+      const id = tabFromHash()
+      if (!id) return
+      if (id === shellStateRef.current.tab) { tabStackRef.current = [id]; return }
+      poppingRef.current = true
+      setTab(id)
+    }
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, [])
+
+  // M-07: the document language follows the UI language.
+  useEffect(() => {
+    try { document.documentElement.lang = lang === 'hi' ? 'hi' : 'en' } catch { /* no document */ }
+  }, [lang])
+
+  // App mode marker for CSS (bottom nav at any width, app-only rules).
+  useEffect(() => {
+    try { if (isNativeShell()) document.documentElement.classList.add('is-native') } catch { /* web */ }
+  }, [])
+
+  // Keyboard-open detection (visualViewport): the bottom nav hides
+  // while the keyboard is up so it never covers the form (§6.2).
+  const [kbOpen, setKbOpen] = useState(false)
+  useEffect(() => {
+    const vv = window.visualViewport
+    if (!vv) return undefined
+    const onResize = () => setKbOpen(window.innerHeight - vv.height > 150)
+    vv.addEventListener('resize', onResize)
+    onResize()
+    return () => vv.removeEventListener('resize', onResize)
+  }, [])
+
+  // M-06: overlays return focus to whatever opened them.
+  const overlayReturnFocusRef = useRef(null)
+  const anyOverlayOpen = menuOpen || !!confirmDelete || avatarMenuOpen
+  useEffect(() => {
+    if (anyOverlayOpen) {
+      if (!overlayReturnFocusRef.current && document.activeElement && document.activeElement !== document.body) {
+        overlayReturnFocusRef.current = document.activeElement
+      }
+    } else if (overlayReturnFocusRef.current) {
+      const el = overlayReturnFocusRef.current
+      overlayReturnFocusRef.current = null
+      try { if (el.isConnected) el.focus() } catch { /* element gone */ }
+    }
+  }, [anyOverlayOpen])
+
+  // Avatar menu: Escape closes it too (it was backdrop-only).
+  useEffect(() => {
+    if (!avatarMenuOpen) return undefined
+    const onKey = (e) => { if (e.key === 'Escape') setAvatarMenuOpen(false) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [avatarMenuOpen])
+
+  // --- Android hardware back (C-01) [device-unverified]: close the
+  // topmost overlay first, then walk the tab history, then Home,
+  // and exit only from Home — the design system's back order.
+  const shellStateRef = useRef({})
+  shellStateRef.current = { confirmDelete, menuOpen, avatarMenuOpen, mobileSearchOpen, tab }
+  const capAppRef = useRef(null)
+  useEffect(() => {
+    let remove = null
+    let cancelled = false
+    try {
+      if (!isNativeShell()) return undefined
+      import('@capacitor/app').then(({ App: CapApp }) => {
+        if (cancelled) return
+        capAppRef.current = CapApp
+        CapApp.addListener('backButton', () => {
+          const s = shellStateRef.current
+          if (closeTopOverlay()) return
+          if (s.confirmDelete) { setConfirmDelete(null); return }
+          if (s.avatarMenuOpen) { setAvatarMenuOpen(false); return }
+          if (s.mobileSearchOpen) { setMobileSearchOpen(false); return }
+          if (s.menuOpen) { setMenuOpen(false); return }
+          if (tabStackRef.current.length > 1) { window.history.back(); return }
+          if (s.tab !== 'home') { setTab('home'); window.scrollTo({ top: 0 }); return }
+          if (capAppRef.current) capAppRef.current.exitApp()
+        }).then((handle) => { if (!cancelled) remove = handle; else if (handle && handle.remove) handle.remove() })
+          .catch(() => { /* listener unavailable */ })
+      }).catch(() => { /* plugin not bundled in this context */ })
+    } catch { /* not running in a native shell */ }
+    return () => { cancelled = true; if (remove && remove.remove) remove.remove() }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Escape closes the delete modal.
   useEffect(() => {
@@ -881,7 +1032,7 @@ export default function App() {
   }
 
   return (
-    <div className="app">
+    <div className="app with-bottomnav">
       <a className="skip-link" href="#main">Skip to content</a>
       {updateAvailable && (
         <div className="update-bar" role="status">
@@ -985,7 +1136,7 @@ export default function App() {
       </header>
 
       {menuOpen && (
-        <div className="drawer-bg" onClick={() => setMenuOpen(false)}>
+        <div className="drawer-bg" onClick={() => setMenuOpen(false)} onKeyDown={(e) => trapTabKey(e, e.currentTarget.querySelector('.drawer'))}>
           <aside className="drawer" role="dialog" aria-modal="true" aria-label="Menu" onClick={(e) => e.stopPropagation()}>
             <div className="drawer-head">
               <div className="logo">
@@ -1132,6 +1283,29 @@ export default function App() {
         </footer>
       </main>
 
+      {/* Phase 3 (Batch B): mobile bottom navigation (design system
+          §4.8) — the core loop only; everything else lives in the
+          drawer that "More" opens. Hidden while the keyboard, the
+          drawer or a modal is up. */}
+      <nav className={`bottom-nav${menuOpen || confirmDelete || kbOpen ? ' bn-hidden' : ''}`} aria-label="Primary">
+        <button type="button" className={`bn-item${tab === 'home' ? ' active' : ''}`} aria-current={tab === 'home' ? 'page' : undefined} onClick={() => { setTab('home'); window.scrollTo({ top: 0 }) }}>
+          <IconHome size={22} /><span>{tr('home')}</span>
+        </button>
+        <button type="button" className={`bn-item${tab === 'queue' ? ' active' : ''}`} aria-current={tab === 'queue' ? 'page' : undefined} onClick={() => { setTab('queue'); window.scrollTo({ top: 0 }) }}>
+          <IconQueue size={22} /><span>{tr('queue')}</span>
+          {(visiblePosts || []).some((p) => p.status === 'failed') && <span className="bn-dot" aria-hidden="true" />}
+        </button>
+        <button type="button" className={`bn-item bn-create${tab === 'studio' ? ' active' : ''}`} aria-current={tab === 'studio' ? 'page' : undefined} onClick={() => goStudio(null)}>
+          <span className="bn-disc"><IconPlus size={24} /></span><span>{tr('create')}</span>
+        </button>
+        <button type="button" className={`bn-item${tab === 'media' ? ' active' : ''}`} aria-current={tab === 'media' ? 'page' : undefined} onClick={() => { setTab('media'); window.scrollTo({ top: 0 }) }}>
+          <IconMedia size={22} /><span>{tr('media')}</span>
+        </button>
+        <button type="button" className="bn-item" onClick={() => setMenuOpen(true)} aria-label={tr('more')}>
+          <IconMenu size={22} /><span>{tr('more')}</span>
+        </button>
+      </nav>
+
       {toast && (
         <div className={`toast-pill ${toast.kind === 'error' ? 'error' : ''}`} role="status">
           <span>{toast.message}</span>
@@ -1143,7 +1317,7 @@ export default function App() {
       )}
 
       {confirmDelete && (
-        <div className="modal-bg" role="dialog" aria-modal="true" aria-label="Confirm delete" onClick={() => setConfirmDelete(null)}>
+        <div className="modal-bg" role="dialog" aria-modal="true" aria-label="Confirm delete" onClick={() => setConfirmDelete(null)} onKeyDown={(e) => trapTabKey(e, e.currentTarget.querySelector('.modal'))}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <h2>{confirmDelete.type === 'posts' ? tr('deletePostsTitle').replace('{n}', (confirmDelete.items || []).length) : confirmDelete.type === 'post' ? tr('deletePostTitle') : tr('deleteMediaTitle')}</h2>
             <p className="muted mt">{confirmDelete.type === 'posts' ? tr('deletePostsBody') : confirmDelete.type === 'post' ? (confirmDelete.item.caption || tr('untitledPost')) : (confirmDelete.item.title || confirmDelete.item.url)} — {tr('deleteNoUndo')}</p>

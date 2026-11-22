@@ -13,7 +13,7 @@
 // creator can follow every screen.
 export const CORE = {
   en: {
-    home: 'Home', create: 'Create', queue: 'Queue', calendar: 'Calendar', media: 'Media',
+    home: 'Home', create: 'Create', queue: 'Queue', calendar: 'Calendar', media: 'Media', more: 'More',
     aiStudio: 'AI Studio', bulk: 'Bulk', tools: 'Tools', connections: 'Connections',
     settings: 'Settings', pricing: 'Pricing', contact: 'Contact', logout: 'Log out', switchToAdmin: 'Switch to Admin',
     createPost: 'Create Post', workspace: 'Workspace', myWorkspace: 'My workspace',
@@ -27,7 +27,7 @@ export const CORE = {
     lightTheme: 'Light theme', darkTheme: 'Dark theme',
   },
   hi: {
-    home: 'Home', create: 'Banayein', queue: 'Queue List', calendar: 'Calendar', media: 'Media',
+    home: 'Home', create: 'Banayein', queue: 'Queue List', calendar: 'Calendar', media: 'Media', more: 'Aur',
     aiStudio: 'AI Studio', bulk: 'Bulk', tools: 'Tools', connections: 'Connections',
     settings: 'Settings', pricing: 'Plans ke daam', contact: 'Contact', logout: 'Log out', switchToAdmin: 'Admin par switch karein',
     createPost: 'Post Banayein', workspace: 'Workspace', myWorkspace: 'Mera workspace',
