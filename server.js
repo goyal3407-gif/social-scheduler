@@ -2114,12 +2114,12 @@ function igResultPage(res, status, { ok, title, message }) {
   return res.status(status).type('html').send(`<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(title)} — KiluaAI</title></head>
-<body style="margin:0;font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;background:#0e1325;color:#f5f1e6;display:flex;min-height:100vh;align-items:center;justify-content:center;padding:24px;box-sizing:border-box">
+<body style="--deep:#0e1325;--on-deep:#f5f1e6;--gold:#e8c268;--ok:#7dd87d;margin:0;font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;background:var(--deep);color:var(--on-deep);display:flex;min-height:100vh;align-items:center;justify-content:center;padding:24px;box-sizing:border-box">
 <main style="max-width:430px;text-align:center">
-<div style="font-size:52px;line-height:1;color:${ok ? '#7dd87d' : '#e8c268'}">${ok ? '✓' : '!'}</div>
-<h1 style="font-size:24px;margin:16px 0 10px;color:#e8c268">${esc(title)}</h1>
+<div style="font-size:52px;line-height:1;color:${ok ? 'var(--ok)' : 'var(--gold)'}">${ok ? '✓' : '!'}</div>
+<h1 style="font-size:24px;margin:16px 0 10px;color:var(--gold)">${esc(title)}</h1>
 <p style="font-size:16px;line-height:1.55;margin:0 0 26px">${esc(message)}</p>
-<a href="https://social-scheduler-one-sandy.vercel.app/open-app" style="display:inline-block;background:#e8c268;color:#0e1325;text-decoration:none;font-weight:700;padding:12px 22px;border-radius:10px">Open KiluaAI</a>
+<a href="https://social-scheduler-one-sandy.vercel.app/open-app" style="display:inline-block;background:var(--gold);color:var(--deep);text-decoration:none;font-weight:700;padding:12px 22px;border-radius:10px">Open KiluaAI</a>
 <p style="font-size:13px;opacity:.65;margin-top:18px">You can close this tab — nothing else is needed here.</p>
 </main></body></html>`);
 }
@@ -5498,7 +5498,7 @@ function publicPageShell(title, inner) {
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${escHtml(title)} — KiluaAI</title></head>
-<body style="margin:0;font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;background:#0e1325;color:#f5f1e6;min-height:100vh;padding:32px 20px;box-sizing:border-box">
+<body style="--deep:#0e1325;--on-deep:#f5f1e6;--gold:#e8c268;--surface:#1a2140;--line:#2b3560;margin:0;font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;background:var(--deep);color:var(--on-deep);min-height:100vh;padding:32px 20px;box-sizing:border-box">
 <main style="max-width:520px;margin:0 auto">${inner}
 <p style="text-align:center;font-size:12px;opacity:.55;margin-top:36px">Powered by <b>KiluaAI</b></p>
 </main></body></html>`;
@@ -5516,15 +5516,15 @@ app.get('/bio/:slug', ah(async (req, res) => {
     .filter((p) => p.status === 'published' && p.liveUrl)
     .sort((a, b2) => new Date(b2.scheduleTime || b2.createdAt || 0) - new Date(a.scheduleTime || a.createdAt || 0))
     .slice(0, 6);
-  const linksHtml = (Array.isArray(bio.links) ? bio.links : []).map((l) => `<a href="${escHtml(l.url)}" style="display:block;background:#1a2140;color:#f5f1e6;text-decoration:none;font-weight:600;padding:13px 18px;border-radius:12px;margin:10px 0;text-align:center;border:1px solid #2b3560">${escHtml(l.title)}</a>`).join('');
-  const postsHtml = posts.length ? `<h2 style="font-size:16px;margin:28px 0 10px;color:#e8c268">Latest posts</h2><div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">${posts.map((p) => {
+  const linksHtml = (Array.isArray(bio.links) ? bio.links : []).map((l) => `<a href="${escHtml(l.url)}" style="display:block;background:var(--surface);color:var(--on-deep);text-decoration:none;font-weight:600;padding:13px 18px;border-radius:12px;margin:10px 0;text-align:center;border:1px solid var(--line)">${escHtml(l.title)}</a>`).join('');
+  const postsHtml = posts.length ? `<h2 style="font-size:16px;margin:28px 0 10px;color:var(--gold)">Latest posts</h2><div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">${posts.map((p) => {
     const thumb = p.posterUrl || (p.mediaType === 'image' ? p.mediaUrl : '');
     const img = thumb && /^(https?:\/\/|\/)/i.test(thumb) ? `<img src="${escHtml(thumb)}" alt="" style="width:100%;height:100%;object-fit:cover;display:block">` : '<span style="font-size:11px;opacity:.7;padding:8px;text-align:center">View post</span>';
-    return `<a href="${escHtml(p.liveUrl)}" style="display:flex;align-items:center;justify-content:center;aspect-ratio:4/5;background:#1a2140;border-radius:10px;overflow:hidden;text-decoration:none;color:#f5f1e6">${img}</a>`;
+    return `<a href="${escHtml(p.liveUrl)}" style="display:flex;align-items:center;justify-content:center;aspect-ratio:4/5;background:var(--surface);border-radius:10px;overflow:hidden;text-decoration:none;color:var(--on-deep)">${img}</a>`;
   }).join('')}</div>` : '';
   return res.type('html').send(publicPageShell(displayName, `
 <div style="text-align:center">
-<div style="width:76px;height:76px;border-radius:50%;background:#e8c268;color:#0e1325;font-size:32px;font-weight:800;display:flex;align-items:center;justify-content:center;margin:6px auto 12px">${escHtml(initial)}</div>
+<div style="width:76px;height:76px;border-radius:50%;background:var(--gold);color:var(--deep);font-size:32px;font-weight:800;display:flex;align-items:center;justify-content:center;margin:6px auto 12px">${escHtml(initial)}</div>
 <h1 style="font-size:24px;margin:0 0 6px">${escHtml(displayName)}</h1>
 <p style="opacity:.7;margin:0 0 18px;font-size:14px">Creator on KiluaAI</p>
 </div>
@@ -5543,9 +5543,9 @@ app.get('/preview/:token', ah(async (req, res) => {
     .slice(0, 20);
   const rows = posts.length ? posts.map((p) => {
     const thumb = p.posterUrl || (p.mediaType === 'image' ? p.mediaUrl : '');
-    const img = thumb && /^(https?:\/\/|\/)/i.test(thumb) ? `<img src="${escHtml(thumb)}" alt="" style="width:64px;height:80px;object-fit:cover;border-radius:8px;flex:none">` : '<span style="width:64px;height:80px;background:#1a2140;border-radius:8px;flex:none"></span>';
+    const img = thumb && /^(https?:\/\/|\/)/i.test(thumb) ? `<img src="${escHtml(thumb)}" alt="" style="width:64px;height:80px;object-fit:cover;border-radius:8px;flex:none">` : '<span style="width:64px;height:80px;background:var(--surface);border-radius:8px;flex:none"></span>';
     const when = new Date(p.scheduleTime).toLocaleString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
-    return `<div style="display:flex;gap:12px;align-items:flex-start;background:#1a2140;border:1px solid #2b3560;border-radius:12px;padding:12px;margin:10px 0">${img}<div><div style="font-weight:700;color:#e8c268;font-size:13px">${escHtml(when)} · ${escHtml(p.format || 'REELS')}</div><p style="margin:6px 0 0;font-size:14px;line-height:1.45">${escHtml(p.caption || '(no caption)')}</p>${p.hashtags ? `<p style="margin:4px 0 0;font-size:13px;opacity:.7">${escHtml(p.hashtags)}</p>` : ''}</div></div>`;
+    return `<div style="display:flex;gap:12px;align-items:flex-start;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:12px;margin:10px 0">${img}<div><div style="font-weight:700;color:var(--gold);font-size:13px">${escHtml(when)} · ${escHtml(p.format || 'REELS')}</div><p style="margin:6px 0 0;font-size:14px;line-height:1.45">${escHtml(p.caption || '(no caption)')}</p>${p.hashtags ? `<p style="margin:4px 0 0;font-size:13px;opacity:.7">${escHtml(p.hashtags)}</p>` : ''}</div></div>`;
   }).join('') : '<p style="text-align:center;opacity:.75">Nothing is scheduled right now.</p>';
   return res.type('html').send(publicPageShell('Upcoming posts — preview', `
 <h1 style="font-size:22px;margin:8px 0 4px">Upcoming posts</h1>
@@ -6049,53 +6049,55 @@ const ADMIN_PAGE_HTML = `<!doctype html>
 <meta name="robots" content="noindex">
 <title>Owner Console — KiluaAI</title>
 <style>
-body{margin:0;background:#0e1325;color:#f5f1e6;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
-header{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:14px 18px;padding-top:calc(14px + env(safe-area-inset-top,0px));border-bottom:1px solid #2b3560;background:#1a2140;position:sticky;top:0;z-index:5}
+:root{--deep:#0e1325;--ink:#f5f1e6;--surface:#1a2140;--line:#2b3560;--gold:#e8c268;--on-gold:#191204;--err:#ff9a9a;--ok:#8fe3b0;--bad-line:#a03d3d;--bad-bg:#2a1420}
+body{margin:0;background:var(--deep);color:var(--ink);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+header{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:14px 18px;padding-top:calc(14px + env(safe-area-inset-top,0px));border-bottom:1px solid var(--line);background:var(--surface);position:sticky;top:0;z-index:5}
 #hdrSearch{width:220px;min-height:44px}
-header b{color:#e8c268}
+header b{color:var(--ink)}
 main{max-width:1180px;margin:0 auto;padding:16px}
-.card{background:#1a2140;border:1px solid #2b3560;border-radius:16px;padding:16px;margin:0 0 14px}
-h2{margin:0 0 10px;font-size:17px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:16px;margin:0 0 14px}
+h2{margin:0 0 10px;font-size:22px}
+.pagesub{font-size:13px;opacity:.72;margin:-6px 0 12px}
 .muted{opacity:.72;font-size:13px}
-.err{color:#ff9a9a;font-size:14px;min-height:18px}
-.okmsg{color:#8fe3b0;font-size:14px;min-height:18px}
+.err{color:var(--err);font-size:14px;min-height:18px}
+.okmsg{color:var(--ok);font-size:14px;min-height:18px}
 label{display:block;font-size:13px;opacity:.8;margin:10px 0 4px}
-input,select,textarea{background:#0e1325;border:1px solid #2b3560;border-radius:12px;color:#f5f1e6;padding:10px 11px;font-size:14px;width:100%;box-sizing:border-box;font-family:inherit;min-height:44px}
+input,select,textarea{background:var(--deep);border:1px solid var(--line);border-radius:12px;color:var(--ink);padding:10px 11px;font-size:14px;width:100%;box-sizing:border-box;font-family:inherit;min-height:44px}
 input[type=date]{width:auto}
 input[type=checkbox]{width:auto;min-height:0}
-.btn{background:#1a2140;border:1px solid #2b3560;color:#f5f1e6;border-radius:12px;padding:8px 14px;font-size:14px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;min-height:44px;box-sizing:border-box}
-.btn.primary{background:#e8c268;border-color:#e8c268;color:#191204;font-weight:700}
+.btn{background:var(--surface);border:1px solid var(--line);color:var(--ink);border-radius:12px;padding:8px 14px;font-size:14px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;min-height:44px;box-sizing:border-box}
+.btn.primary{background:var(--gold);border-color:var(--gold);color:var(--on-gold);font-weight:700}
 .btn.small{padding:8px 12px;font-size:13px;min-height:44px}
-.btn.active{background:#e8c268;border-color:#e8c268;color:#191204;font-weight:700}
+.btn.active{background:var(--gold);border-color:var(--gold);color:var(--on-gold);font-weight:700}
 .btn:disabled{opacity:.45;cursor:default}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(128px,1fr));gap:10px}
-.stat{background:#0e1325;border:1px solid #2b3560;border-radius:12px;padding:11px}
-.stat b{display:block;font-size:21px;color:#e8c268}
+.stat{background:var(--deep);border:1px solid var(--line);border-radius:12px;padding:11px}
+.stat b{display:block;font-size:21px;color:var(--ink)}
 .stat span{font-size:12px;opacity:.75}
 .secttl{font-size:12.5px;text-transform:uppercase;letter-spacing:.07em;opacity:.65;margin:16px 0 8px}
 .secttl:first-of-type{margin-top:2px}
 .conseq{font-size:12.5px;opacity:.65;margin:-4px 0 12px 27px}
-.preview{border:1px dashed #2b3560;border-radius:12px;padding:11px 13px;background:#0e1325;margin-top:10px}
-.pfchip{cursor:pointer;background:transparent;color:#f5f1e6;min-height:44px;display:inline-flex;align-items:center}
-.pfchip.active{background:#e8c268;border-color:#e8c268;color:#191204;font-weight:700}
+.preview{border:1px dashed var(--line);border-radius:12px;padding:11px 13px;background:var(--deep);margin-top:10px}
+.pfchip{cursor:pointer;background:transparent;color:var(--ink);min-height:44px;display:inline-flex;align-items:center}
+.pfchip.active{background:var(--gold);border-color:var(--gold);color:var(--on-gold);font-weight:700}
 .chips{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
-.chip{border:1px solid #2b3560;border-radius:999px;padding:5px 12px;font-size:13px}
-.row{border-top:1px solid #2b3560;padding:11px 0;overflow-wrap:anywhere}
+.chip{border:1px solid var(--line);border-radius:999px;padding:5px 12px;font-size:13px}
+.row{border-top:1px solid var(--line);padding:11px 0;overflow-wrap:anywhere}
 .row:first-of-type{border-top:none}
-.bar{height:8px;background:#2b3560;border-radius:99px;overflow:hidden;margin-top:5px}
-.bar i{display:block;height:100%;background:#e8c268}
+.bar{height:8px;background:var(--line);border-radius:99px;overflow:hidden;margin-top:5px}
+.bar i{display:block;height:100%;background:var(--gold)}
 .uhead{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:baseline}
 .uemail{font-weight:700}
-.badge{font-size:12px;border:1px solid #2b3560;border-radius:999px;padding:2px 9px}
-.badge.bad{border-color:#a03d3d;color:#ff9a9a}
+.badge{font-size:12px;border:1px solid var(--line);border-radius:999px;padding:2px 9px}
+.badge.bad{border-color:var(--bad-line);color:var(--err)}
 .controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px}
 .controls input{width:auto}
 .klabel{font-size:12px;opacity:.7;width:100%}
-.layout{display:flex;gap:14px;align-items:flex-start}
-nav.side{flex:0 0 178px;background:#1a2140;border:1px solid #2b3560;border-radius:16px;padding:10px;position:sticky;top:74px}
-nav.side button{display:block;width:100%;text-align:left;background:transparent;border:1px solid transparent;color:#f5f1e6;border-radius:12px;padding:11px;font-size:14px;cursor:pointer;margin:2px 0;min-height:44px}
-nav.side button:hover{border-color:#2b3560}
-nav.side button.active{background:#e8c268;color:#191204;font-weight:700}
+.layout{display:flex;flex-direction:column;gap:14px;align-items:stretch}
+nav.side{display:flex;flex-wrap:nowrap;overflow-x:auto;gap:4px;background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:8px;position:sticky;top:74px;z-index:4}
+nav.side button{flex:0 0 auto;width:auto;text-align:left;background:transparent;border:1px solid transparent;color:var(--ink);border-radius:12px;padding:11px;font-size:14px;cursor:pointer;margin:2px 0;min-height:44px}
+nav.side button:hover{border-color:var(--line)}
+nav.side button.active{background:var(--gold);color:var(--on-gold);font-weight:700}
 .views{flex:1;min-width:0}
 .view{display:none}
 .view.on{display:block}
@@ -6105,14 +6107,14 @@ nav.side button.active{background:#e8c268;color:#191204;font-weight:700}
 .filters label{margin-top:0}
 .toggle{display:flex;gap:9px;align-items:center;cursor:pointer;margin:12px 0;min-height:44px}
 .toggle input{width:18px;height:18px;flex:none}
-.banner{border:1px solid #a03d3d;background:#2a1420;border-radius:12px;padding:11px 13px;margin:0 0 12px;font-size:14px}
-.banner.info{border-color:#2b3560;background:#1a2140}
+.banner{border:1px solid var(--bad-line);background:var(--bad-bg);border-radius:12px;padding:11px 13px;margin:0 0 12px;font-size:14px}
+.banner.info{border-color:var(--line);background:var(--surface)}
 table{width:100%;border-collapse:collapse;font-size:14px}
-td,th{padding:7px 8px;border-top:1px solid #2b3560;text-align:left;vertical-align:top}
+td,th{padding:7px 8px;border-top:1px solid var(--line);text-align:left;vertical-align:top}
 tr:first-child td,tr:first-child th{border-top:none}
-input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid #e8c268;outline-offset:1px}
-.btn:focus-visible,nav.side button:focus-visible{outline:2px solid #e8c268;outline-offset:2px}
-@media (max-width:760px){.layout{flex-direction:column}nav.side{flex:none;width:100%;position:static;display:flex;flex-wrap:nowrap;overflow-x:auto;gap:4px;padding:8px}nav.side button{width:auto;flex:0 0 auto}#hdrSearch{width:100%;margin-bottom:6px}}
+input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--gold);outline-offset:1px}
+.btn:focus-visible,nav.side button:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+@media (max-width:760px){#hdrSearch{width:100%;margin-bottom:6px}}
 </style></head>
 <body>
 <header><b>KiluaAI — Owner Console</b>
@@ -6158,16 +6160,21 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px soli
 <section class="view on" id="view-dashboard">
 <div id="attention"></div>
 <div class="card"><h2>Dashboard</h2>
+<p class="pagesub">Headline numbers first — Show all opens the full breakdown.</p>
+<div class="grid" id="statsHeadline"></div>
+<p style="margin-top:12px"><button class="btn small" id="statsToggle" aria-expanded="false">Show all stats</button></p>
+<div id="statsAll" hidden>
 <h3 class="secttl">Users</h3><div class="grid" id="statsUsers"></div>
 <div class="chips" id="planDist"></div>
 <h3 class="secttl">Posts</h3><div class="grid" id="statsPosts"></div>
-<h3 class="secttl">Reliability</h3><div class="grid" id="statsRel"></div>
-<p class="muted" id="acctHealth" style="margin-top:10px"></p></div>
+<h3 class="secttl">Health</h3><div class="grid" id="statsRel"></div>
+<p class="muted" id="acctHealth" style="margin-top:10px"></p></div></div>
 <div class="card"><h2>Recent signups</h2><div id="signups"></div></div>
 <div class="card"><h2>Most active this month</h2><div id="active"></div></div>
 </section>
 <section class="view" id="view-users">
 <div class="card"><h2>Users</h2>
+<p class="pagesub">Search, filter by plan, and open a user to manage them.</p>
 <input id="search" type="search" placeholder="Search by email or name">
 <div class="chips" id="planFilter" style="margin:10px 0 2px">
 <button class="chip pfchip active" data-pf="all">All plans</button>
@@ -6181,13 +6188,15 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px soli
 </section>
 <section class="view" id="view-userdetail">
 <div class="card"><button class="btn small" data-act="back-users">← Back to Users</button>
-<h2 style="margin-top:12px">User Detail</h2><div id="udetail"></div></div>
+<h2 style="margin-top:12px">User Detail</h2>
+<p class="pagesub">Everything about this one account.</p><div id="udetail"></div></div>
 <div class="card"><h2>Actions</h2><div id="udActions"></div><p class="okmsg" id="udMsg"></p></div>
 <div class="card"><h2>Their posts (latest 50)</h2><div id="udetailPosts"></div></div>
 <div class="card"><h2>Audit entries for this user</h2><div id="udetailAudit"></div></div>
 </section>
 <section class="view" id="view-posts">
 <div class="card"><h2>Posts — all users</h2>
+<p class="pagesub">Every post across all users in one list.</p>
 <div class="filters">
 <div><label for="postStatus">Status</label><select id="postStatus">
 <option value="">All statuses</option><option value="scheduled">Scheduled</option>
@@ -6200,14 +6209,17 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px soli
 <div class="pager" id="postsPager"></div></div>
 </section>
 <section class="view" id="view-plans">
-<div class="card"><h2>Plans</h2><div id="plansNote"></div><div id="plans"></div></div>
+<div class="card"><h2>Plans</h2>
+<p class="pagesub">What each plan includes and how many users are on it.</p><div id="plansNote"></div><div id="plans"></div></div>
 </section>
 <section class="view" id="view-connections">
-<div class="card"><h2>Disconnected accounts</h2><div id="disconnected"></div></div>
+<div class="card"><h2>Disconnected accounts</h2>
+<p class="pagesub">Accounts that need their owner to reconnect.</p><div id="disconnected"></div></div>
 <div class="card"><h2>Connections by user</h2><div id="connections"></div></div>
 </section>
 <section class="view" id="view-failures">
-<div class="card"><h2>Failed posts — newest first</h2><div id="failures"></div>
+<div class="card"><h2>Failed posts — newest first</h2>
+<p class="pagesub">Posts that did not publish — retry them from here.</p><div id="failures"></div>
 <div class="pager" id="failuresPager"></div></div>
 </section>
 <section class="view" id="view-broadcast">
@@ -6224,6 +6236,7 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px soli
 </section>
 <section class="view" id="view-audit">
 <div class="card"><h2>Audit log</h2>
+<p class="pagesub">Every owner action, recorded.</p>
 <div class="filters">
 <div><label for="auditAction">Action</label><select id="auditAction"><option value="">All actions</option></select></div>
 <div><label for="auditTarget">Target user</label><select id="auditTarget"><option value="">All users</option></select></div>
@@ -6234,6 +6247,7 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px soli
 </section>
 <section class="view" id="view-settings">
 <div class="card"><h2>Settings — global toggles</h2>
+<p class="pagesub">Global switches for the whole app.</p>
 <label class="toggle"><input type="checkbox" id="setSignup"> <span><b>Signups open</b> — when off, new accounts cannot be created (existing users log in as usual)</span></label>
 <p class="conseq">Off karne se naye users account nahi bana payenge — jo pehle se hain, woh login karke sab use kar sakte hain.</p>
 <label class="toggle"><input type="checkbox" id="setMaint"> <span><b>Maintenance mode</b> — when on, posting and other changes pause for regular users; reading and login still work, and you (the owner) are never blocked</span></label>
@@ -6343,6 +6357,8 @@ function showView(name, force){
   VIEWS.forEach(function(v){ el('view-' + v).classList.toggle('on', v === name); });
   var btns = el('sideNav').querySelectorAll('[data-nav]');
   btns.forEach(function(b){ b.classList.toggle('active', b.getAttribute('data-nav') === name); });
+  var actBtn = el('sideNav').querySelector('[data-nav="' + name + '"]');
+  if (actBtn && typeof actBtn.scrollIntoView === 'function') { try { actBtn.scrollIntoView({ block: 'nearest', inline: 'center' }); } catch (e) { /* jsdom / older browsers */ } }
   el('navUserDetail').hidden = !currentUserId;
   var want = name === 'userdetail' ? '#/user/' + currentUserId : '#/' + name;
   if (location.hash !== want) { try { history.replaceState(null, '', want); } catch (e) { /* file:// etc. */ } }
@@ -6375,7 +6391,7 @@ function loadingInto(id){ var n = el(id); if (n) n.innerHTML = '<p class="muted"
 
 // ---------- dashboard ----------
 function loadDashboard(){
-  ['statsUsers','statsPosts','statsRel','signups','active','attention'].forEach(loadingInto);
+  ['statsHeadline','statsUsers','statsPosts','statsRel','signups','active','attention'].forEach(loadingInto);
   api('/overview').then(function(o){
     // Needs attention FIRST (owner expansion #2): current failures,
     // partly-published posts and broken connections, with the newest
@@ -6393,6 +6409,9 @@ function loadDashboard(){
     var su = '';
     su += stat('Total users', o.users.total); su += stat('New today', o.users.today); su += stat('New in 7 days', o.users.week); su += stat('New this month', o.users.month);
     el('statsUsers').innerHTML = su;
+    var sh = '';
+    sh += stat('Total users', o.users.total); sh += stat('New today', o.users.today); sh += stat('Posts total', o.posts.total); sh += stat('Published today', o.posts.publishedToday); sh += stat('Failed today', o.posts.failedToday);
+    el('statsHeadline').innerHTML = sh;
     var sp = '';
     sp += stat('Posts total', o.posts.total); sp += stat('Posts today', o.posts.today); sp += stat('Published today', o.posts.publishedToday); sp += stat('Published in 7 days', o.posts.publishedWeek); sp += stat('Scheduled now', o.posts.scheduled);
     el('statsPosts').innerHTML = sp;
@@ -6411,8 +6430,15 @@ function loadDashboard(){
     el('active').innerHTML = (o.mostActive && o.mostActive.length) ? o.mostActive.map(function(x){
       return '<div class="row"><div style="display:flex;justify-content:space-between;gap:10px"><span>' + esc(x.email) + '</span><b>' + esc(x.count) + ' posts</b></div><div class="bar"><i style="width:' + (max ? Math.round(x.count / max * 100) : 0) + '%"></i></div></div>';
     }).join('') : '<p class="muted">No posts yet this month.</p>';
-  }).catch(function(){ el('statsUsers').innerHTML = '<p class="err">Could not load the dashboard — tap Refresh.</p>'; el('attention').innerHTML = ''; });
+  }).catch(function(){ el('statsHeadline').innerHTML = '<p class="err">Could not load the dashboard — tap Refresh.</p>'; el('statsUsers').innerHTML = ''; el('attention').innerHTML = ''; });
 }
+
+el('statsToggle').addEventListener('click', function(){
+  var all = el('statsAll'), open = all.hidden;
+  all.hidden = !open;
+  el('statsToggle').textContent = open ? 'Show fewer stats' : 'Show all stats';
+  el('statsToggle').setAttribute('aria-expanded', open ? 'true' : 'false');
+});
 
 // ---------- header jump-to-user (owner expansion #9) ----------
 // Rides the existing Users search endpoint: an exact email (or the
@@ -6499,7 +6525,7 @@ function openUser(id, stay){
   currentUserId = id;
   if (!stay) { showView('userdetail'); return; }
   el('navUserDetail').hidden = false;
-  loadingInto('udetail'); loadingInto('udetailPosts'); loadingInto('udetailAudit');
+  loadingInto('udetail'); loadingInto('udActions'); loadingInto('udetailPosts'); loadingInto('udetailAudit');
   api('/users/' + id).then(function(d){
     var u = d.user;
     var accts = (u.accounts || []).map(function(a){ return '@' + esc(a.username || '?') + (a.broken ? ' <span class="badge bad">BROKEN</span>' : ''); }).join(', ');
@@ -6539,7 +6565,7 @@ function postRowHtml(r){
     + ' · Created ' + esc(when(r.createdAt)) + (r.scheduleTime ? ' · Scheduled ' + esc(when(r.scheduleTime)) : '')
     + (r.publishedAt ? ' · Published ' + esc(when(r.publishedAt)) : '') + (r.failedAt ? ' · Failed ' + esc(when(r.failedAt)) : '') + '</div>';
   if (r.status === 'failed' || r.status === 'partial') {
-    h += '<div style="color:#ff9a9a">' + esc(r.friendly || r.reason || 'Failed') + '</div>'
+    h += '<div class="err">' + esc(r.friendly || r.reason || 'Failed') + '</div>'
       + (r.reason && r.reason !== r.friendly ? '<div class="muted">' + esc(r.reason) + '</div>' : '')
       + '<div class="controls"><button class="btn small" data-act="retry" data-user="' + esc(r.userId) + '" data-id="' + esc(r.postId) + '">Retry this post</button> <button class="btn small" data-act="open-user" data-id="' + esc(r.userId) + '">Open user</button> <span class="muted" id="retry-' + esc(r.postId) + '"></span></div>';
   }
@@ -6591,7 +6617,7 @@ function loadPlans(){
   loadingInto('plans');
   api('/plans').then(function(d){
     el('plansNote').innerHTML = d.paymentsLive ? '' : '<div class="banner">' + esc(d.paymentsNote || '') + '</div>';
-    el('plans').innerHTML = planCardsHtml(d.plans, d.usersPerPlan);
+    el('plans').innerHTML = (d.plans && d.plans.length) ? planCardsHtml(d.plans, d.usersPerPlan) : '<p class="muted">No plans configured.</p>';
   }).catch(function(){});
 }
 
@@ -6620,6 +6646,7 @@ el('bcTitle').addEventListener('input', renderBcPreview);
 el('bcBody').addEventListener('input', renderBcPreview);
 function loadBroadcast(){
   renderBcPreview();
+  el('bcCount').textContent = '— loading the user count…';
   api('/overview').then(function(o){ el('bcCount').textContent = '— it will go to ' + o.users.total + ' users.'; }).catch(function(){});
 }
 el('bcConfirm').addEventListener('change', function(){ el('bcSend').disabled = !el('bcConfirm').checked; });
@@ -6675,6 +6702,7 @@ function loadAudit(){
 
 // ---------- settings ----------
 function loadSettings(){
+  loadingInto('plansReadonly');
   api('/settings').then(function(d){
     el('setSignup').checked = d.settings.signupOpen !== false;
     el('setMaint').checked = !!d.settings.maintenance;
