@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api.js'
 import { trFor } from '../i18n.js'
-import { isNativeShell } from '../openExternal.js'
 import GoogleButton from './GoogleButton.jsx'
 
 // Login / sign-up screen. Shown on its own — no app content, no queue,
@@ -27,9 +26,10 @@ export default function Auth({ onAuth, bare = false }) {
   // is read the same way the app shell reads it.
   const [lang] = useState(() => { try { return localStorage.getItem('ss-lang') || 'en' } catch { return 'en' } })
   const tr = trFor(lang, null)
-  // Google sign-in is hidden inside the native app (Google blocks
-  // its flow in embedded WebViews) — email + password remains there.
-  const showGoogle = (() => { try { return !isNativeShell() } catch { return true } })()
+  // Google sign-in shows everywhere: on the web it is the GIS button;
+  // inside the native app (where Google blocks WebView sign-in) the
+  // button opens the system-browser flow instead — GoogleButton
+  // decides which one to render.
   const [showPw, setShowPw] = useState(false)
   // Public app status (batch 6): signups paused / maintenance mode,
   // set by the owner in the console. Fails silent — if the status
@@ -165,11 +165,11 @@ export default function Auth({ onAuth, bare = false }) {
           </button>
         </p>
       </form>
-      {showGoogle && !signupsPaused && (
+      {!signupsPaused && (
         <>
           <div className="auth-divider" aria-hidden="true"><span>{tr('authOrDivider')}</span></div>
           {gError && <div className="alert error" style={{ marginBottom: 12 }}>{gError}</div>}
-          <GoogleButton mode={mode} onCredential={onGoogleCredential} onFailure={() => setGError(tr('googleSignInFailed'))} />
+          <GoogleButton mode={mode} onCredential={onGoogleCredential} onFailure={() => setGError(tr('googleSignInFailed'))} appLabel={tr('googleContinueApp')} appHint={tr('googleAppHint')} />
         </>
       )}
       {!bare && (

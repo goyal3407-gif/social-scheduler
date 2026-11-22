@@ -363,11 +363,19 @@ button,.tab{touch-action:manipulation}
    off-white, narrow-column language as Auth, widened a little for the
    feature grid. Only ever rendered for signed-out visitors. --- */
 .landing{max-width:880px;margin:0 auto;padding:0 18px 8px}
-.landing-hero{text-align:center;padding:7vh 0 2px}
-.landing-name{font-size:30px;letter-spacing:-.02em}
-.landing-line{font-size:19px;font-weight:600;line-height:1.35;margin:12px auto 0;max-width:620px}
-.landing-sub{margin:10px auto 0;max-width:560px;font-size:14.5px}
-.landing .auth-wrap{padding-top:30px;padding-bottom:8px}
+/* Compact brand row (owner request, 22 Nov 2026): small logo + name
+   on one line, then the form — no hero block above the fold. */
+.landing-hero{display:flex;align-items:center;justify-content:center;gap:10px;padding:20px 0 0}
+.landing-hero .auth-logo{width:34px;height:34px;border-radius:10px;margin:0}
+.landing-name{font-size:22px;letter-spacing:-.02em;margin:0}
+.landing-line{font-size:15.5px;font-weight:600;line-height:1.4;margin:0 0 8px;max-width:640px}
+.landing-sub{margin:10px 0 0;max-width:640px;font-size:14.5px}
+.landing .auth-wrap{padding-top:12px;padding-bottom:8px}
+/* Marketing below the form: present but visually secondary. */
+.landing-below{margin-top:36px;border-top:1px solid var(--line);padding-top:2px}
+.landing-below .landing-sec{margin-top:28px}
+.landing-below .landing-sec h2{font-size:17px}
+.landing-below .landing-foot{margin-top:36px}
 .landing-sec{max-width:720px;margin:42px auto 0}
 .landing-sec h2{font-size:20px;margin-bottom:10px}
 .landing-sec p{color:var(--ink-2);font-size:14.5px}

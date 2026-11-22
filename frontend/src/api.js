@@ -152,6 +152,9 @@ export const api = {
   signup: (email, password, name, ref) => req('/api/auth/signup', { method: 'POST', body: JSON.stringify({ email, password, ...(name ? { name } : {}), ...(ref ? { ref } : {}) }) }),
   login: (email, password) => req('/api/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
   googleLogin: (idToken, ref) => req('/api/auth/google', { method: 'POST', body: JSON.stringify({ idToken, ...(ref ? { ref } : {}) }) }),
+  // In-app Google sign-in: exchange the one-time return code (issued
+  // after a system-browser Google sign-in) for the WebView session.
+  appExchange: (code) => req('/api/auth/app-exchange', { method: 'POST', body: JSON.stringify({ code }) }),
   me: () => req('/api/auth/me'),
   logout: () => req('/api/auth/logout', { method: 'POST', body: JSON.stringify({}) }),
   changePassword: (currentPassword, newPassword) => req('/api/auth/change-password', { method: 'POST', body: JSON.stringify({ currentPassword, newPassword }) }),

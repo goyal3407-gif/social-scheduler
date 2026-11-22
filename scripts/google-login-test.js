@@ -117,15 +117,18 @@ async function partA() {
     check('A: seed signup -> 200', r.status === 200 && !!r.data.user?.id, `got ${r.status}`);
     const seedId = r.data.user?.id;
     check('A: seed stored canonically', r.data.user?.email === 'personone@gmail.com', `got ${r.data.user?.email}`);
+    check('A: owner SIGNUP response carries isOwner + adminUrl', r.data.user?.isOwner === true && typeof r.data.user?.adminUrl === 'string' && r.data.user.adminUrl.endsWith('/console'), `got ${JSON.stringify(r.data.user).slice(0, 160)}`);
 
     // --- valid token, dotted spelling -> same account, session issued ---
     const G1 = makeClient(base);
     r = await G1.call('POST', '/api/auth/google', { idToken: 'tok-existing' });
     check('A: google login for existing user -> 200', r.status === 200 && !!r.data.user?.id, `got ${r.status} ${JSON.stringify(r.data).slice(0, 160)}`);
     check('A: google login lands on the SAME account', r.data.user?.id === seedId, `got ${r.data.user?.id} vs ${seedId}`);
+    check('A: google LOGIN response carries isOwner + adminUrl (owner)', r.data.user?.isOwner === true && typeof r.data.user?.adminUrl === 'string');
     check('A: no duplicate account created', readJson(dataDir, 'users.json', []).length === 1);
     r = await G1.call('GET', '/api/auth/me');
     check('A: google session works on /me', r.status === 200 && r.data.user?.id === seedId, `got ${r.status}`);
+    check('A: /me carries isOwner + adminUrl (owner)', r.data.user?.isOwner === true && typeof r.data.user?.adminUrl === 'string');
 
     // --- brand-new email -> passwordless account on the Free plan ---
     const G2 = makeClient(base);
@@ -133,12 +136,14 @@ async function partA() {
     check('A: google signup for a new email -> 200', r.status === 200 && r.data.user?.email === 'new.user@example.com', `got ${r.status} ${JSON.stringify(r.data).slice(0, 160)}`);
     check('A: new account carries the Google name', r.data.user?.name === 'New User', `got ${r.data.user?.name}`);
     check('A: new account is on the Free plan', r.data.user?.plan === 'free', `got ${r.data.user?.plan}`);
+    check('A: google SIGNUP response carries NEITHER owner field (non-owner)', !!r.data.user && !('isOwner' in r.data.user) && !('adminUrl' in r.data.user));
     const usersNow = readJson(dataDir, 'users.json', []);
     check('A: user count is now 2', usersNow.length === 2, `got ${usersNow.length}`);
     const stored = usersNow.find((u) => u.email === 'new.user@example.com');
     check('A: stored account is passwordless', !!stored && !('passwordHash' in stored) && !('salt' in stored), stored ? Object.keys(stored).join(',') : 'missing');
     r = await G2.call('GET', '/api/auth/me');
     check('A: new-account session works on /me', r.status === 200 && r.data.user?.email === 'new.user@example.com', `got ${r.status}`);
+    check('A: /me carries NEITHER owner field (non-owner)', !!r.data.user && !('isOwner' in r.data.user) && !('adminUrl' in r.data.user));
 
     // --- passwordless account + password login -> standard error, no crash ---
     r = await ANON.call('POST', '/api/auth/login', { email: 'new.user@example.com', password: 'Whatever-1234' });

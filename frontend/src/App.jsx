@@ -194,6 +194,7 @@ export default function App() {
   const toastSeq = useRef(0)
   const pendingDeleteTimers = useRef(new Map())
   const refreshSettingsRef = useRef(null)
+  const exchangeAppCodeRef = useRef(null)
 
   // Per-tab document title (screen readers + history).
   useEffect(() => {
@@ -395,6 +396,12 @@ export default function App() {
                 setTab('settings')
                 refreshSettingsRef.current && refreshSettingsRef.current()
               }
+              // In-app Google sign-in return: the claimed return URL
+              // carries the one-time code — exchange it for the
+              // session right here (the login gate lifts on success).
+              const appcode = url.searchParams.get('appcode')
+                || (url.pathname.startsWith('/app-return') ? url.searchParams.get('code') : '')
+              if (appcode && exchangeAppCodeRef.current) exchangeAppCodeRef.current(appcode)
             } catch { /* not a URL we route */ }
           }).then((handle) => { if (!cancelled) remove = handle; else handle && handle.remove && handle.remove() })
             .catch(() => { /* listener unavailable — focus refetch still covers us */ })
@@ -457,7 +464,29 @@ export default function App() {
       })
       .finally(() => setAuthChecked(true))
   }, [])
-  useEffect(() => { checkAuth() }, [checkAuth])
+  // In-app Google sign-in (system-browser flow): the app comes back
+  // holding a one-time code — in the boot URL (?appcode=, scrubbed
+  // from the address bar immediately) or via appUrlOpen above.
+  // Exchanging it sets the normal session cookie; the payload is the
+  // same one a password login returns. A stale or already-used code
+  // simply falls through to the normal auth check, which then shows
+  // the login gate exactly as before.
+  const exchangeAppCode = useCallback(async (code) => {
+    try {
+      const res = await api.appExchange(code)
+      if (res && res.user) { setUser(res.user); setAuthBlocked(false); setAuthChecked(true); return true }
+    } catch { /* expired or already used — the check below decides */ }
+    return false
+  }, [])
+  exchangeAppCodeRef.current = exchangeAppCode
+  useEffect(() => {
+    let code = ''
+    try { code = new URLSearchParams(window.location.search).get('appcode') || '' } catch { /* no query string */ }
+    if (code && isNativeShell()) {
+      try { window.history.replaceState(null, '', window.location.pathname + window.location.hash) } catch { /* URL stays — harmless */ }
+      exchangeAppCode(code).then((ok) => { if (!ok) checkAuth() })
+    } else checkAuth()
+  }, [checkAuth, exchangeAppCode])
   // Coming back online while the offline screen is up retries by itself.
   useEffect(() => {
     if (!authBlocked) return undefined

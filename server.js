@@ -454,6 +454,26 @@ function publicUser(u) {
   if (u.planExpiresAt && eff.id !== 'free') out.planExpiresAt = u.planExpiresAt;
   return out;
 }
+// Owner-flagged payload for AUTH SUCCESS responses and /me — ONE
+// shared helper (bug fix, 22 Nov 2026, owner-reported: after a fresh
+// login the "Switch to Admin" button was missing until a full reload,
+// because only /me added the flag while login/signup/Google returned
+// plain publicUser and the client sets its user state directly from
+// the auth response). Batch 6 (owner's final model): the flag and the
+// console URL travel inside the owner's own auth responses and
+// nowhere else — the slug is never a literal in the shipped client
+// bundle (the Batch 2 secrecy invariant still holds; tests grep src +
+// dist for it). Every other account's payload carries NEITHER field.
+async function publicAuthUser(u) {
+  const out = publicUser(u);
+  if (!out) return out;
+  const ownerId = await db.ownerId().catch(() => null);
+  if (ownerId && u.id === ownerId) {
+    out.isOwner = true;
+    out.adminUrl = `/api/${ADMIN_SLUG}/console`;
+  }
+  return out;
+}
 function signSession(sessionId, userId) {
   const exp = Date.now() + SESSION_MAX_AGE_MS;
   const payload = `${sessionId}.${userId}.${exp}`;
@@ -731,7 +751,7 @@ app.post('/api/auth/signup', ah(async (req, res) => {
   const granted = await applyOwnerComp(user);
   await bindTeamInvites(user).catch(() => null);
   await setSessionCookie(req, res, user.id);
-  res.json({ ok: true, user: publicUser(granted || user) });
+  res.json({ ok: true, user: await publicAuthUser(granted || user) });
 }));
 app.post('/api/auth/login', ah(async (req, res) => {
   const email = String(req.body?.email || '').trim().toLowerCase();
@@ -758,7 +778,7 @@ app.post('/api/auth/login', ah(async (req, res) => {
   const granted = await applyOwnerComp(user);
   await bindTeamInvites(user).catch(() => null);
   await setSessionCookie(req, res, user.id);
-  res.json({ ok: true, user: publicUser(granted || user) });
+  res.json({ ok: true, user: await publicAuthUser(granted || user) });
 }));
 // ---------- Sign in with Google (ID-token flow — NO client secret) ----------
 // The client ID is a PUBLIC identifier (it ships in the login page).
@@ -774,25 +794,32 @@ async function fetchGoogleClaims(idToken) {
   if (!r.ok) return null;
   return r.json().catch(() => null);
 }
-app.post('/api/auth/google', ah(async (req, res) => {
-  const GOOGLE_FAIL = 'Google sign-in could not be verified — try again, or use your email and password.';
+const GOOGLE_FAIL = 'Google sign-in could not be verified — try again, or use your email and password.';
+// Shared core of BOTH Google sign-in flows (the web session below and
+// the in-app browser-code flow further down): verifies the ID token
+// and resolves it to an account — an existing one, or a newly created
+// one under the same gates as password signup. Returns { user } on
+// success or { fail: { status, body } } carrying the EXACT responses
+// the web flow has always given, so neither flow can drift apart.
+async function resolveGoogleAccount(req) {
+  const fail = (status, body) => ({ fail: { status, body } });
   const idToken = typeof req.body?.idToken === 'string' ? req.body.idToken : '';
-  if (!idToken || idToken.length > 4096) return res.status(401).json({ ok: false, error: GOOGLE_FAIL });
+  if (!idToken || idToken.length > 4096) return fail(401, { ok: false, error: GOOGLE_FAIL });
   let claims = null;
   try { claims = await fetchGoogleClaims(idToken); } catch { claims = null; }
   const claimEmail = claims && typeof claims.email === 'string' ? claims.email : '';
-  if (!claims || !validEmail(claimEmail)) return res.status(401).json({ ok: false, error: GOOGLE_FAIL });
+  if (!claims || !validEmail(claimEmail)) return fail(401, { ok: false, error: GOOGLE_FAIL });
   // The same per-email throttle as password login, keyed by the
   // canonical identity, so a locked-out address cannot be retried
   // through Google under a different Gmail spelling.
   const throttleKey = canonicalEmail(claimEmail);
-  if (loginBlocked(throttleKey)) return res.status(429).json({ ok: false, error: 'Too many wrong attempts — wait 10 minutes and try again.' });
+  if (loginBlocked(throttleKey)) return fail(429, { ok: false, error: 'Too many wrong attempts — wait 10 minutes and try again.' });
   const issOk = claims.iss === 'accounts.google.com' || claims.iss === 'https://accounts.google.com';
   const expOk = Number.isFinite(Number(claims.exp)) && Number(claims.exp) * 1000 > Date.now();
   const verifiedOk = claims.email_verified === true || claims.email_verified === 'true';
   if (claims.aud !== GOOGLE_CLIENT_ID || !issOk || !expOk || !verifiedOk) {
     recordFailedLogin(throttleKey);
-    return res.status(401).json({ ok: false, error: GOOGLE_FAIL });
+    return fail(401, { ok: false, error: GOOGLE_FAIL });
   }
   loginAttempts.delete(throttleKey);
   // An existing account (any spelling of the one inbox) gets the same
@@ -803,8 +830,7 @@ app.post('/api/auth/google', ah(async (req, res) => {
   if (existing) {
     const granted = await applyOwnerComp(existing);
     await bindTeamInvites(existing).catch(() => null);
-    await setSessionCookie(req, res, existing.id);
-    return res.json({ ok: true, user: publicUser(granted || existing) });
+    return { user: granted || existing };
   }
   // A NEW account faces the same creation gates as password signup:
   // signups paused or maintenance mode refuse CREATION only. The very
@@ -812,8 +838,8 @@ app.post('/api/auth/google', ah(async (req, res) => {
   const users = await db.listUsers();
   if (users.length > 0) {
     const gs = await globalSettings();
-    if (gs.signupOpen === false) return res.status(403).json({ ok: false, error: 'Signups are paused right now — please try again later.' });
-    if (gs.maintenance) return res.status(503).json({ ok: false, maintenance: true, error: String(gs.maintenanceMessage || '').trim() || MAINTENANCE_FALLBACK_MSG });
+    if (gs.signupOpen === false) return fail(403, { ok: false, error: 'Signups are paused right now — please try again later.' });
+    if (gs.maintenance) return fail(503, { ok: false, maintenance: true, error: String(gs.maintenanceMessage || '').trim() || MAINTENANCE_FALLBACK_MSG });
   }
   const email = canonicalEmail(claimEmail);
   const name = typeof claims.name === 'string' ? claims.name.trim().slice(0, 80) : '';
@@ -836,25 +862,73 @@ app.post('/api/auth/google', ah(async (req, res) => {
   await db.saveUser(user);
   const granted = await applyOwnerComp(user);
   await bindTeamInvites(user).catch(() => null);
+  return { user: granted || user };
+}
+app.post('/api/auth/google', ah(async (req, res) => {
+  const r = await resolveGoogleAccount(req);
+  if (r.fail) return res.status(r.fail.status).json(r.fail.body);
+  await setSessionCookie(req, res, r.user.id);
+  res.json({ ok: true, user: await publicAuthUser(r.user) });
+}));
+// ---------- In-app Google sign-in (system-browser flow) ----------
+// Google refuses its sign-in inside embedded WebViews, so the Android
+// app opens /app-start.html in the SYSTEM BROWSER; that page runs the
+// normal GIS flow there and posts the ID token to the app-code route.
+// Instead of a session (that browser is not the app), the route
+// issues a one-time return code: 192-bit random, only its SHA-256
+// hash stored, 5-minute life, single-use, one live code per account,
+// bound to nothing beyond the account it signs in. The browser then
+// lands on the https return page (/app-return.html?code=...) — the
+// URL the next APK claims as an app link (v1.3.6) — and the app
+// exchanges the code at /api/auth/app-exchange for the normal session
+// cookie inside the WebView, with the same payload as a login.
+const APP_CODE_TTL_MS = 5 * 60 * 1000;
+app.post('/api/auth/google/app-code', ah(async (req, res) => {
+  const r = await resolveGoogleAccount(req);
+  if (r.fail) return res.status(r.fail.status).json(r.fail.body);
+  const code = crypto.randomBytes(24).toString('base64url');
+  const codeHash = crypto.createHash('sha256').update(code).digest('hex');
+  await db.deleteAppCodesForUser(r.user.id);
+  await db.createAppCode({
+    id: uid('appcode'), userId: r.user.id, codeHash,
+    expiresAt: new Date(Date.now() + APP_CODE_TTL_MS).toISOString(),
+    createdAt: new Date().toISOString(),
+  });
+  res.json({ ok: true, returnUrl: `/app-return.html?code=${encodeURIComponent(code)}` });
+}));
+app.post('/api/auth/app-exchange', ah(async (req, res) => {
+  const EXCHANGE_FAIL = 'That app sign-in code has expired or already been used — open the app and try Google sign-in again.';
+  // Throttled like login (one shared failure bucket, the same shape
+  // as the console PIN gate): with a 192-bit code, guessing is
+  // hopeless anyway — the bucket only stops scripted abuse.
+  if (loginBlocked('app-exchange')) return res.status(429).json({ ok: false, error: 'Too many wrong attempts — wait 10 minutes and try again.' });
+  const code = typeof req.body?.code === 'string' ? req.body.code : '';
+  const codeHash = code ? crypto.createHash('sha256').update(code).digest('hex') : '';
+  const doc = codeHash ? await db.getAppCodeByHash(codeHash).catch(() => null) : null;
+  if (!doc || !(Date.parse(doc.expiresAt || '') > Date.now())) {
+    recordFailedLogin('app-exchange');
+    return res.status(401).json({ ok: false, error: EXCHANGE_FAIL });
+  }
+  // Consume FIRST: the code can never be replayed, even if anything
+  // below were to fail.
+  await db.deleteAppCodeByHash(codeHash);
+  const user = await db.getUserById(doc.userId).catch(() => null);
+  if (!user) {
+    recordFailedLogin('app-exchange');
+    return res.status(401).json({ ok: false, error: EXCHANGE_FAIL });
+  }
+  loginAttempts.delete('app-exchange');
+  const granted = await applyOwnerComp(user);
   await setSessionCookie(req, res, user.id);
-  res.json({ ok: true, user: publicUser(granted || user) });
+  res.json({ ok: true, user: await publicAuthUser(granted || user) });
 }));
 app.get('/api/auth/me', ah(async (req, res) => {
   const user = await applyOwnerComp(await getAuthUser(req));
   if (!user) return res.status(401).json({ ok: false, error: 'Not logged in. Please log in again.' });
   await bindTeamInvites(user).catch(() => null);
-  const out = publicUser(user);
-  // Batch 6 (owner's final model): the app's "Switch to Admin" entry
-  // exists ONLY for the console's owner account. The flag and the
-  // console URL travel inside the owner's own /me response and
-  // nowhere else — the slug is never a literal in the shipped client
-  // bundle (the Batch 2 secrecy invariant still holds; tests grep
-  // src + dist for it). Every other account's /me carries neither.
-  const ownerId = await db.ownerId().catch(() => null);
-  if (ownerId && user.id === ownerId) {
-    out.isOwner = true;
-    out.adminUrl = `/api/${ADMIN_SLUG}/console`;
-  }
+  // The owner flag + console URL come from the one shared helper
+  // (see publicAuthUser) so /me and every auth success response agree.
+  const out = await publicAuthUser(user);
   res.json({ ok: true, user: out });
 }));
 app.post('/api/auth/logout', ah(async (req, res) => {
@@ -2866,6 +2940,21 @@ function validPostInput(b, { requireMedia = true } = {}) {
   // cast to a string by the database layer and corrupt the saved post.
   const STR_FIELDS = ['mediaUrl', 'mediaType', 'caption', 'hashtags', 'cta', 'platform', 'scheduleTime', 'status', 'format', 'liveUrl', 'posterUrl', 'firstComment'];
   for (const k of STR_FIELDS) if (b[k] !== undefined && typeof b[k] !== 'string') return 'One of the fields in that post is not valid — please try again.';
+  // Length caps (production-ready pass, 22 Nov 2026): every other text
+  // surface already caps its fields (names 80, template text 2,200, AI
+  // topics 600) — post fields were the outlier, accepting a
+  // 100,000-character caption in testing. Caps sit at or above the
+  // platforms' real limits (YouTube description 5,000, Instagram
+  // caption 2,200), so no legitimate post is affected. Link fields are
+  // capped only in their http(s) form: data: media is bounded by the
+  // 15 MB body limit instead.
+  if (b.caption && b.caption.length > 5000) return 'Captions can be at most 5,000 characters — shorten it and try again.';
+  if (b.hashtags && b.hashtags.length > 2000) return 'Hashtags can be at most 2,000 characters — remove some and try again.';
+  if (b.cta && b.cta.length > 500) return 'The call-to-action can be at most 500 characters — shorten it and try again.';
+  if (b.firstComment && b.firstComment.length > 2200) return 'The first comment can be at most 2,200 characters — shorten it and try again.';
+  if (b.mediaUrl && /^https?:\/\//i.test(b.mediaUrl) && b.mediaUrl.length > 4096) return 'That media link is too long — paste a shorter link and try again.';
+  if (b.posterUrl && /^https?:\/\//i.test(b.posterUrl) && b.posterUrl.length > 4096) return 'That poster link is too long — paste a shorter link and try again.';
+  if (b.liveUrl && b.liveUrl.length > 4096) return 'That live link is too long — paste a shorter link and try again.';
   // Drafts are plans: they may be saved without media or a time yet, and
   // the media is added later in Studio. Scheduled posts must have media.
   const needsMedia = requireMedia && (b.status || 'scheduled') !== 'draft';

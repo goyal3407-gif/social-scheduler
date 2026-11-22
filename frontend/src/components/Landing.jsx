@@ -21,6 +21,14 @@ const staticLink = (path) => ({
 // renders it in the signed-out branch. The form is the existing Auth
 // component in `bare` mode (its own branding head would duplicate
 // the hero below).
+//
+// Compact order (owner request, 22 Nov 2026 — "the login page feels
+// too big"): a small brand row (logo + name), then the form FIRST,
+// above the fold; everything marketing — including the two hero
+// paragraphs, which moved into the first section below — lives in
+// the .landing-below block under the form, visually secondary.
+// Nothing was deleted: the copy, sections and footer links are all
+// still here for first-visit info and SEO.
 
 const FEATURES = [
   ['Reels, Posts & Stories', 'Schedule every Instagram format from one composer, with a live Instagram-style preview before anything posts.'],
@@ -52,17 +60,18 @@ export default function Landing({ onAuth }) {
   return (
     <div className="landing">
       <header className="landing-hero">
-        <div className="logo-mark auth-logo" aria-hidden="true"><img src="/icon-192.png" alt="" width="52" height="52" /></div>
+        <div className="logo-mark auth-logo" aria-hidden="true"><img src="/icon-192.png" alt="" width="34" height="34" /></div>
         <h1 className="landing-name">KiluaAI</h1>
-        <p className="landing-line">An Instagram scheduler for Reels, Posts and Stories — with YouTube cross-posting.</p>
-        <p className="landing-sub muted">Plan your posts once, and KiluaAI publishes them for you at the exact time you choose — on the web and in the Android app.</p>
       </header>
 
       <Auth onAuth={onAuth} bare />
 
+      <div className="landing-below">
       <section className="landing-sec">
         <h2>What it does</h2>
+        <p className="landing-line">An Instagram scheduler for Reels, Posts and Stories — with YouTube cross-posting.</p>
         <p>Connect your Instagram account, add your photos and videos, and pick a time. KiluaAI then publishes each post automatically at the exact time you set — no reminders, and no opening Instagram at the right moment. The media library is phone-first: in the Android app your originals stay on your phone, and a copy is uploaded only when you schedule a post, so scheduled posts still go out on time even if the phone is off.</p>
+        <p className="landing-sub muted">Plan your posts once, and KiluaAI publishes them for you at the exact time you choose — on the web and in the Android app.</p>
       </section>
 
       <section className="landing-sec">
@@ -117,6 +126,7 @@ export default function Landing({ onAuth }) {
         </nav>
         <p className="muted small">KiluaAI — schedule once, post on time.</p>
       </footer>
+      </div>
     </div>
   )
 }

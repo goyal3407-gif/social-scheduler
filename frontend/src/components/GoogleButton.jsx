@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { isNativeShell } from '../openExternal.js'
+import { isNativeShell, openExternalUrl } from '../openExternal.js'
 
 // Sign in with Google — the official Google Identity Services button.
 // The Client ID is a PUBLIC identifier (Google's own docs ship it in
@@ -8,8 +8,13 @@ import { isNativeShell } from '../openExternal.js'
 // against Google before issuing a session (POST /api/auth/google).
 //
 // Native shell: Google refuses to run its sign-in inside embedded
-// WebViews, so inside the Capacitor app this renders NOTHING and
-// email + password stays the in-app path. Web is unaffected.
+// WebViews, so inside the Capacitor app the button instead opens
+// /app-start.html in the SYSTEM BROWSER (in-app Google login,
+// 22 Nov 2026). That page runs the same GIS flow there; the server
+// answers with a one-time return code instead of a session, the
+// browser lands on the https return page, and the app exchanges the
+// code for its session (POST /api/auth/app-exchange — see App.jsx).
+// Web behaviour is unchanged.
 export const GOOGLE_CLIENT_ID = '628297569656-dc5stqkpmdogk64e396paagapciai7vj.apps.googleusercontent.com'
 const GIS_SRC = 'https://accounts.google.com/gsi/client'
 
@@ -37,7 +42,7 @@ function loadGis() {
   return gisPromise
 }
 
-export default function GoogleButton({ mode, onCredential, onFailure }) {
+export default function GoogleButton({ mode, onCredential, onFailure, appLabel, appHint }) {
   const ref = useRef(null)
   const cbRef = useRef({ onCredential, onFailure })
   cbRef.current = { onCredential, onFailure }
@@ -70,6 +75,16 @@ export default function GoogleButton({ mode, onCredential, onFailure }) {
     return () => { live = false }
   }, [mode, native])
 
-  if (native) return null
+  if (native) {
+    const openAppGoogle = () => {
+      try { openExternalUrl(new URL('/app-start.html', window.location.origin).href) } catch { /* stay on the form */ }
+    }
+    return (
+      <div className="auth-google">
+        <button type="button" className="btn block google-app-btn" onClick={openAppGoogle}>{appLabel || 'Continue with Google'}</button>
+        {appHint ? <p className="muted small" style={{ marginTop: 8 }}>{appHint}</p> : null}
+      </div>
+    )
+  }
   return <div ref={ref} className="auth-google" />
 }

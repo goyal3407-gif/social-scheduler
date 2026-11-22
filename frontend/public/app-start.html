@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sign in with Google — KiluaAI</title>
+    <link rel="stylesheet" href="/tokens.css" />
+    <style>
+      #gbtn { margin: 24px 0 8px; min-height: 44px; }
+      #err { color: #b3261e; font-weight: 600; }
+      @media (prefers-color-scheme: dark) { #err { color: #f2b8b5; } }
+    </style>
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+  </head>
+  <body>
+    <p class="back"><a href="/">← Back to KiluaAI</a></p>
+    <h1>Sign in with Google</h1>
+    <p>Tap the Google button below and finish signing in here in your
+    browser. When you are done, this page sends you back to the
+    KiluaAI app, signed in.</p>
+    <p class="muted">Neeche Google button dabakar yahin browser me
+    sign in karein. Ho jane par ye page aapko wapas KiluaAI app par
+    bhej dega — wahan aap signed in milenge.</p>
+    <div id="gbtn"></div>
+    <p id="err" role="alert"></p>
+    <script src="/app-start.js"></script>
+  </body>
+</html>

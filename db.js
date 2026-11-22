@@ -42,6 +42,7 @@ const JSON_FILES = {
   media: 'media.json', mediaFiles: 'media-files.json', templates: 'templates.json', settings: 'settings.json',
   hashtagGroups: 'hashtag-groups.json',
   passwordResets: 'password-resets.json',
+  appCodes: 'app-codes.json',
   youtube: 'youtube.json',
   drafts: 'drafts.json',
   bios: 'bios.json',
@@ -134,6 +135,17 @@ const passwordResetSchema = new mongoose.Schema({
   id: { type: String, unique: true, index: true },
   userId: { type: String, index: true },
   tokenHash: { type: String, index: true },
+  expiresAt: String, createdAt: String,
+}, { strict: false });
+// In-app Google sign-in return codes: one-time, short-lived (5 min)
+// codes issued after a verified Google sign-in in the system browser
+// and exchanged by the app for a normal session. Only the SHA-256
+// hash of the code is stored, never the code itself; a successful
+// exchange deletes the doc (single-use).
+const appCodeSchema = new mongoose.Schema({
+  id: { type: String, unique: true, index: true },
+  userId: { type: String, index: true },
+  codeHash: { type: String, index: true },
   expiresAt: String, createdAt: String,
 }, { strict: false });
 // Link-in-bio page (Phase D6): one per user, addressed publicly by a
@@ -263,6 +275,7 @@ const Template = mongoose.models.SsTemplate || mongoose.model('SsTemplate', temp
 const Draft = mongoose.models.SsDraft || mongoose.model('SsDraft', draftSchema, 'drafts');
 const HashtagGroup = mongoose.models.SsHashtagGroup || mongoose.model('SsHashtagGroup', hashtagGroupSchema, 'hashtaggroups');
 const PasswordReset = mongoose.models.SsPasswordReset || mongoose.model('SsPasswordReset', passwordResetSchema, 'passwordresets');
+const AppCode = mongoose.models.SsAppCode || mongoose.model('SsAppCode', appCodeSchema, 'appcodes');
 const YouTube = mongoose.models.SsYouTube || mongoose.model('SsYouTube', youtubeSchema, 'youtube');
 const Bio = mongoose.models.SsBio || mongoose.model('SsBio', bioSchema, 'bios');
 const SettingsDoc = mongoose.models.SsSettings || mongoose.model('SsSettings', settingsSchema, 'settings');
@@ -478,6 +491,7 @@ async function deleteUserData(userId) {
       Draft.deleteMany({ userId }),
       HashtagGroup.deleteMany({ userId }),
       PasswordReset.deleteMany({ userId }),
+      AppCode.deleteMany({ userId }),
       YouTube.deleteOne({ userId }),
       Bio.deleteOne({ userId }),
       SettingsDoc.deleteOne({ userId }),
@@ -500,6 +514,7 @@ async function deleteUserData(userId) {
   jsonSave('drafts', jsonList('drafts').filter((x) => x.userId !== userId));
   jsonSave('hashtagGroups', jsonList('hashtagGroups').filter((x) => x.userId !== userId));
   jsonSave('passwordResets', jsonList('passwordResets').filter((x) => x.userId !== userId));
+  jsonSave('appCodes', jsonList('appCodes').filter((x) => x.userId !== userId));
   const yt = load(JSON_FILES.youtube, {});
   if (yt && typeof yt === 'object') { delete yt[userId]; save(JSON_FILES.youtube, yt); }
   const bioMap = load(JSON_FILES.bios, {});
@@ -813,6 +828,28 @@ async function deletePasswordResetsForUser(userId) {
   await ensureMongo();
   if (isMongo()) { await PasswordReset.deleteMany({ userId }); return; }
   jsonSave('passwordResets', jsonList('passwordResets').filter((x) => x.userId !== userId));
+}
+
+// ---------- app sign-in codes (one live doc per user; see schema) ----------
+async function createAppCode(doc) {
+  await ensureMongo();
+  if (isMongo()) { await AppCode.create(doc); return doc; }
+  const list = jsonList('appCodes'); list.push(doc); jsonSave('appCodes', list); return doc;
+}
+async function getAppCodeByHash(codeHash) {
+  await ensureMongo();
+  if (isMongo()) { const d = await AppCode.findOne({ codeHash }).lean(); return d ? strip(d) : null; }
+  return jsonList('appCodes').find((x) => x.codeHash === codeHash) || null;
+}
+async function deleteAppCodeByHash(codeHash) {
+  await ensureMongo();
+  if (isMongo()) { await AppCode.deleteOne({ codeHash }); return; }
+  jsonSave('appCodes', jsonList('appCodes').filter((x) => x.codeHash !== codeHash));
+}
+async function deleteAppCodesForUser(userId) {
+  await ensureMongo();
+  if (isMongo()) { await AppCode.deleteMany({ userId }); return; }
+  jsonSave('appCodes', jsonList('appCodes').filter((x) => x.userId !== userId));
 }
 
 // ---------- youtube connection (one doc per user; JSON = keyed map) ----------
@@ -1455,6 +1492,7 @@ const JSON_COLLECTION_NAMES = {
   users: 'users', sessions: 'sessions', posts: 'posts', media: 'media',
   mediaFiles: 'mediafiles', templates: 'templates', settings: 'settings',
   hashtagGroups: 'hashtaggroups', passwordResets: 'passwordresets',
+  appCodes: 'appcodes',
   youtube: 'youtube', drafts: 'drafts', bios: 'bios', instagram: 'instagram',
   importJobs: 'importjobs', notifications: 'notifications',
   uploadSessions: 'uploadsessions', adminAudit: 'adminaudits',
@@ -1491,6 +1529,7 @@ module.exports = {
   listDrafts, saveDraft, deleteDraft,
   listHashtagGroups, saveHashtagGroup, deleteHashtagGroup,
   createPasswordReset, getPasswordResetByHash, listPasswordResetsForUser, deletePasswordResetsForUser,
+  createAppCode, getAppCodeByHash, deleteAppCodeByHash, deleteAppCodesForUser,
   getYouTube, saveYouTube, deleteYouTube,
   getBio, getBioBySlug, saveBio,
   getUserByReferralCode, countReferrals,

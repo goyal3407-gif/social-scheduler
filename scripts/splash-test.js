@@ -8,12 +8,21 @@
 //  3. No static (top-level) import of the plugin anywhere in src —
 //     it must stay a lazy chunk, out of the main bundle.
 //  4. The plugin is declared in the frontend package.json.
-//  5. When the sibling Android project is present in this workspace:
-//     capacitor.config.json carries the SplashScreen config
-//     (launchAutoHide=false, bounded launchShowDuration, brand bg),
-//     the synced assets copies match, the plugin is registered in
-//     capacitor.plugins.json, both stub pages attempt a guarded hide,
-//     and build.gradle is bumped to versionCode 7 / 1.3.3.
+//  5. When the sibling Android project is present in this workspace,
+//     the SHIPPED packaging contract (v1.3.5, production-ready pass
+//     22 Nov 2026): the SplashScreen plugin is NOT packaged — the
+//     v1.3.3 hand-merge that added it dropped the compiled bridge
+//     layouts and crashed on launch, so v1.3.4 removed it and v1.3.5
+//     rebuilt on the complete v1.3 resource table. The Android
+//     capacitor.config.json (root + synced assets copy) must carry
+//     NO SplashScreen section, capacitor.plugins.json must register
+//     exactly App + Filesystem, both stub pages keep their guarded
+//     (harmless, no-op) hide attempt, and build.gradle is at
+//     versionCode 9 / 1.3.5. (The plugin stays declared in the
+//     Android project's package.json as a documented leftover —
+//     uninstall before any future `cap sync`; not asserted here.)
+//     These section-5 assertions replaced the v1.3.3-era ones in the
+//     production-ready pass; the web-half checks above are unchanged.
 const fs = require('fs');
 const path = require('path');
 
@@ -75,28 +84,21 @@ function main() {
   // ---- 5. Android project (workspace-sibling; skip when absent) ----
   const andRoot = path.join(root, '..', 'goyal-kumar-scheduler-android');
   if (!fs.existsSync(andRoot)) { skip('android project checks (project not in workspace)'); return done(); }
-  const andPkg = JSON.parse(fs.readFileSync(path.join(andRoot, 'package.json'), 'utf8'));
-  check('android package.json declares @capacitor/splash-screen',
-    !!(andPkg.dependencies && andPkg.dependencies['@capacitor/splash-screen']));
 
   const cfg = JSON.parse(fs.readFileSync(path.join(andRoot, 'capacitor.config.json'), 'utf8'));
-  const ss = (cfg.plugins || {}).SplashScreen || {};
-  check('config: launchAutoHide is false', ss.launchAutoHide === false);
-  check('config: launchShowDuration bounded (0 < d <= 5000)',
-    typeof ss.launchShowDuration === 'number' && ss.launchShowDuration > 0 && ss.launchShowDuration <= 5000,
-    'got ' + ss.launchShowDuration);
-  check('config: backgroundColor is the brand bg', ss.backgroundColor === '#f4f2ee', 'got ' + ss.backgroundColor);
-  check('config: existing splash drawable', ss.androidSplashResourceName === 'splash');
-  check('config: scale type matches launch theme', ss.androidScaleType === 'CENTER_CROP');
+  check('config: NO SplashScreen section (plugin not packaged)',
+    !cfg.plugins || !('SplashScreen' in cfg.plugins));
 
   const assetsCfg = JSON.parse(fs.readFileSync(path.join(andRoot, 'android', 'app', 'src', 'main', 'assets', 'capacitor.config.json'), 'utf8'));
-  const assetsSs = (assetsCfg.plugins || {}).SplashScreen || {};
-  check('assets capacitor.config.json carries the same SplashScreen config',
-    Object.keys(ss).length > 0 && Object.keys(ss).every((k) => assetsSs[k] === ss[k]));
+  check('assets capacitor.config.json also has NO SplashScreen section',
+    !assetsCfg.plugins || !('SplashScreen' in assetsCfg.plugins));
   const pluginsJson = JSON.parse(fs.readFileSync(path.join(andRoot, 'android', 'app', 'src', 'main', 'assets', 'capacitor.plugins.json'), 'utf8'));
-  check('capacitor.plugins.json registers the splash plugin',
-    pluginsJson.some((p) => p.pkg === '@capacitor/splash-screen' &&
-      p.classpath === 'com.capacitorjs.plugins.splashscreen.SplashScreenPlugin'));
+  check('capacitor.plugins.json registers exactly App + Filesystem (no splash plugin)',
+    pluginsJson.length === 2 &&
+    pluginsJson.some((p) => p.pkg === '@capacitor/app') &&
+    pluginsJson.some((p) => p.pkg === '@capacitor/filesystem') &&
+    !pluginsJson.some((p) => p.pkg === '@capacitor/splash-screen'),
+    'got ' + pluginsJson.map((p) => p.pkg).join(','));
 
   for (const rel of ['www/index.html', 'android/app/src/main/assets/public/index.html']) {
     const stub = fs.readFileSync(path.join(andRoot, rel), 'utf8');
@@ -105,8 +107,8 @@ function main() {
   }
 
   const gradle = fs.readFileSync(path.join(andRoot, 'android', 'app', 'build.gradle'), 'utf8');
-  check('build.gradle versionCode 7', /versionCode\s+7\b/.test(gradle));
-  check('build.gradle versionName 1.3.3', gradle.includes('versionName "1.3.3"'));
+  check('build.gradle versionCode 9', /versionCode\s+9\b/.test(gradle));
+  check('build.gradle versionName 1.3.5', gradle.includes('versionName "1.3.5"'));
 
   return done();
 }
