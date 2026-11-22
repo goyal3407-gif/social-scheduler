@@ -456,31 +456,34 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
   const previewAspect = form.format === 'FEED' ? '4 / 5' : '9 / 16'
 
   return (
-    <div style={{ paddingBottom: 28 }}>
-      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, flexWrap: 'wrap' }}>
-        <div style={{ flex: 1, minWidth: 200 }}>
-          <h2 className="section-title">{editing ? t('studioEditTitle') : t('studioTitle')}</h2>
+    <div className="studio-page">
+      <div className="studio-head">
+        <div className="studio-head-main">
+          <h1 className="page-title">{editing ? t('studioEditTitle') : t('studioTitle')}</h1>
           <p className="section-sub">{t('studioSub')}</p>
         </div>
-        {onSaveLibraryDraft && (
-          <button type="button" className="btn ghost" onClick={() => setDraftsOpen(true)}>{t('draftsLibrary')}</button>
-        )}
+        <div className="studio-head-actions">
+          {onCancel && <button type="button" className="btn ghost" onClick={onCancel}>{t('cancel')}</button>}
+          {onSaveLibraryDraft && (
+            <button type="button" className="btn ghost" onClick={() => setDraftsOpen(true)}>{t('draftsLibrary')}</button>
+          )}
+        </div>
       </div>
       {draftsOpen && onSaveLibraryDraft && (
         <BottomSheet title={t('draftsLibrary')} onClose={() => setDraftsOpen(false)}>
-          <p className="muted small" style={{ marginTop: 0 }}>{t('draftsLibrarySub')}</p>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
-            <input placeholder={t('draftNamePh')} value={draftLibName} onChange={(e) => setDraftLibName(e.target.value)} style={{ flex: 1, minWidth: 180 }} aria-label={t('draftNameAria')} />
+          <p className="muted small">{t('draftsLibrarySub')}</p>
+          <div className="flex-row-mt10">
+            <input placeholder={t('draftNamePh')} value={draftLibName} onChange={(e) => setDraftLibName(e.target.value)} className="grow-input" aria-label={t('draftNameAria')} />
             <button type="button" className="btn small" onClick={saveToDraftsLibrary}>{t('saveToDrafts')}</button>
           </div>
           {draftLibMsg && <p className="small mt">{draftLibMsg}</p>}
           {(drafts || []).length > 0 && (
-            <div style={{ marginTop: 10 }}>
+            <div className="draft-list">
               {drafts.map((d) => (
-                <span key={d.id} className="chip" style={{ marginRight: 6, marginBottom: 6 }}>
-                  <button type="button" onClick={() => { loadDraft(d); setDraftsOpen(false) }} style={{ border: 'none', background: 'transparent', fontWeight: 700, padding: 0, color: 'var(--ink)' }} title={d.caption || ''}>{d.name}</button>
-                  {onDeleteLibraryDraft && <button type="button" aria-label={t('deleteDraftAria').replace('{name}', d.name)} onClick={() => onDeleteLibraryDraft(d)} style={{ border: 'none', background: 'transparent', color: 'var(--red-text)', fontWeight: 700, padding: 0, marginLeft: 2 }}>✕</button>}
-                </span>
+                <div key={d.id} className="draft-item">
+                  <button type="button" className="draft-item-name" onClick={() => { loadDraft(d); setDraftsOpen(false) }} title={d.caption || ''}>{d.name}</button>
+                  {onDeleteLibraryDraft && <button type="button" className="draft-item-del" aria-label={t('deleteDraftAria').replace('{name}', d.name)} onClick={() => onDeleteLibraryDraft(d)}>✕</button>}
+                </div>
               ))}
             </div>
           )}
@@ -488,14 +491,16 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
       )}
 
       <div className="stepper" aria-label="Composer steps">
-        {[t('stepMedia'), t('stepCaption'), t('stepSchedule')].map((label, i) => (
+        {[t('stepMedia'), t('stepLabelCaption'), t('stepLabelSchedule')].map((label, i) => (
           <button key={label} type="button" className={`stepper-step ${step === i + 1 ? 'active' : ''}`} aria-current={step === i + 1 ? 'step' : undefined} onClick={() => setStep(i + 1)}>
             <b><span className="stepper-n">{i + 1}</span>{label}</b>
+            {/* Visually-hidden full step name for assistive tech (the visible label stays the short B5 form). */}
+            {i === 2 && <span className="sr-only">{t('stepSchedule')}</span>}
           </button>
         ))}
       </div>
 
-      <div className="two-col" style={{ alignItems: 'start' }}>
+      <div className="two-col two-col-align-start">
         <div className="card">
           {step === 1 && (
             <div>
@@ -503,23 +508,23 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
               <p className="muted small mb">{t('step1Sub')}</p>
               {/* D-2: the library + upload lead Step 1 — the URL paste
                   box is demoted to an advanced row below. */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                <label style={{ margin: 0, flex: 1 }}>{t('fromLibrary')}</label>
+              <div className="flex-row">
+                <label className="from-lib-label">{t('fromLibrary')}</label>
                 <input ref={fileRef} type="file" accept="video/*,image/*" hidden onChange={onPickFile} />
                 <button type="button" className="btn ghost small" disabled={uploading || !onUploadFile} onClick={() => fileRef.current && fileRef.current.click()}>{uploading ? t('uploadingWord') : t('uploadMediaBtn')}</button>
                 {onNavigate && <button type="button" className="btn ghost small" onClick={() => onNavigate('media')}>{t('seeAllInLibrary')}</button>}
               </div>
               {(!media || media.length === 0) ? (
-                <Empty title={t('noMediaYet')} body={t('step1Sub')} action={<button type="button" className="btn primary small" disabled={uploading || !onUploadFile} onClick={() => fileRef.current && fileRef.current.click()}>{t('uploadMediaBtn')}</button>} />
+                <Empty title={t('noMediaYet')} body={t('step1Sub')} action={<button type="button" className="btn small" disabled={uploading || !onUploadFile} onClick={() => fileRef.current && fileRef.current.click()}>{t('uploadMediaBtn')}</button>} />
               ) : (
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', maxHeight: 180, overflow: 'auto', marginTop: 8 }}>
+                <div className="media-strip">
                   {media.slice(0, 24).map((m) => m.serverCopyRemoved ? (
-                    <button key={m.id} type="button" disabled title={t('removedCopyTitle')} style={{ border: '1px dashed var(--line)', borderRadius: 10, padding: 6, width: 72, height: 96, background: 'var(--surface-2)', color: 'var(--muted)', fontSize: 12, lineHeight: 1.4, cursor: 'not-allowed' }}>
+                    <button key={m.id} type="button" disabled title={t('removedCopyTitle')} className="media-thumb-removed">
                       {t('publishedMark')}<br />{t('reuploadReuse')}
                     </button>
                   ) : (
-                    <button key={m.id} type="button" onClick={() => pickMedia(m)} style={{ border: form.mediaUrl === m.url ? '2px solid var(--brand)' : '1px solid var(--line)', borderRadius: 10, padding: 0, overflow: 'hidden', width: 72, height: 96, background: 'var(--surface-2)' }} title={m.title || m.url}>
-                      {m.kind === 'image' ? <img src={m.url} alt={m.title || ''} style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <video src={m.url} muted preload="metadata" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />}
+                    <button key={m.id} type="button" onClick={() => pickMedia(m)} className={`media-thumb${form.mediaUrl === m.url ? ' selected' : ''}`} title={m.title || m.url}>
+                      {m.kind === 'image' ? <img src={m.url} alt={m.title || ''} /> : <video src={m.url} muted preload="metadata" />}
                     </button>
                   ))}
                 </div>
@@ -567,7 +572,6 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
                   </>
                 )}
               </div>
-              <button type="button" className="btn primary mt" onClick={() => setStep(2)}>{t('continueCaption')}</button>
             </div>
           )}
 
@@ -582,11 +586,11 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
                     <option value="">{t('chooseSet')}</option>
                     {templates.map((tpl) => <option key={tpl.id} value={tpl.id}>{tpl.name}{isPackTemplate(tpl) ? t('kiluaaiPack') : ''}</option>)}
                   </select>
-                  <div style={{ marginTop: 8 }}>
+                  <div className="mt8">
                     {templates.filter((tpl) => !isSeedTemplate(tpl)).map((tpl) => (
-                      <span key={tpl.id} className="chip" style={{ marginRight: 6, marginBottom: 6 }}>
-                        <button type="button" onClick={() => applyTemplate(tpl)} style={{ border: 'none', background: 'transparent', fontWeight: 700, padding: 0, color: 'var(--ink)' }} title={t('useSetTitle')}>{tpl.name}</button>
-                        {onDeleteTemplate && <button type="button" aria-label={t('deleteSetAria').replace('{name}', tpl.name)} onClick={() => onDeleteTemplate(tpl)} style={{ border: 'none', background: 'transparent', color: 'var(--red-text)', fontWeight: 700, padding: 0, marginLeft: 2 }}>✕</button>}
+                      <span key={tpl.id} className="chip chip-spaced">
+                        <button type="button" className="chip-btn" onClick={() => applyTemplate(tpl)} title={t('useSetTitle')}>{tpl.name}</button>
+                        {onDeleteTemplate && <button type="button" className="chip-btn-danger" aria-label={t('deleteSetAria').replace('{name}', tpl.name)} onClick={() => onDeleteTemplate(tpl)}>✕</button>}
                       </span>
                     ))}
                   </div>
@@ -594,32 +598,32 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
               )}
               <label htmlFor="caption">{t('captionLabel')}</label>
               <textarea id="caption" rows={5} placeholder={t('captionPh')} value={form.caption} onChange={(e) => set({ caption: e.target.value })} />
-              <p className="muted small" style={{ textAlign: 'right' }}>{t('characters').replace('{n}', form.caption.length)}</p>
+              <p className="muted small char-count">{t('characters').replace('{n}', form.caption.length)}</p>
               {onCreateTemplate && (
                 <div className="mb">
                   {!showTplSave ? (
                     <button type="button" className="btn ghost small" onClick={() => setShowTplSave(true)}>{t('saveCaptionSet')}</button>
                   ) : (
-                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                      <input placeholder={t('setNamePh')} value={tplName} onChange={(e) => setTplName(e.target.value)} style={{ flex: 1, minWidth: 180 }} aria-label={t('setNameAria')} />
+                    <div className="flex-row">
+                      <input placeholder={t('setNamePh')} value={tplName} onChange={(e) => setTplName(e.target.value)} className="grow-input" aria-label={t('setNameAria')} />
                       <button type="button" className="btn small" onClick={saveAsTemplate}>{t('saveSetBtn')}</button>
                       <button type="button" className="btn ghost small" onClick={() => setShowTplSave(false)}>{t('cancel')}</button>
                     </div>
                   )}
                 </div>
               )}
-              <div className="mb" style={{ border: '1px solid var(--line)', borderRadius: 12, padding: 12 }}>
+              <div className="mb ai-box">
                 <label htmlFor="aiTopic">{t('aiAssistant')} <span className="muted">{t('aiBoxNote')}</span></label>
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  <input id="aiTopic" placeholder={t('aiTopicPh')} value={aiTopic} onChange={(e) => setAiTopic(e.target.value)} style={{ flex: 1, minWidth: 200 }} />
+                <div className="flex-row">
+                  <input id="aiTopic" placeholder={t('aiTopicPh')} value={aiTopic} onChange={(e) => setAiTopic(e.target.value)} className="grow-input-lg" />
                   <button type="button" className="btn small" disabled={aiBusy} onClick={runAiSuggest}>{aiBusy ? t('aiThinking') : t('aiSuggest')}</button>
                 </div>
-                {aiRemaining != null && <p className="muted small" style={{ margin: '6px 0 0' }}>{t('aiLeftToday').replace('{n}', aiRemaining)}</p>}
-                {aiMsg && <p className="small" role="status" style={{ margin: '6px 0 0' }}>{aiMsg}</p>}
+                {aiRemaining != null && <p className="muted small ai-note">{t('aiLeftToday').replace('{n}', aiRemaining)}</p>}
+                {aiMsg && <p className="small ai-note" role="status">{aiMsg}</p>}
               </div>
               <label htmlFor="hashtags">{t('hashtagsLabel')} <span className="muted">{t('hashtagsNote')}</span></label>
               <input id="hashtags" placeholder="#social #creator #reels" value={form.hashtags} onChange={(e) => set({ hashtags: e.target.value })} />
-              <p className="small mt" style={{ color: nTags > 30 ? 'var(--red-text)' : 'var(--muted)' }}>{t('hashtagsCount').replace('{n}', nTags)}{nTags > 30 ? ` ${t('hashtagsOver')}` : ''}</p>
+              <p className={`small mt ${nTags > 30 ? 'bad-text' : 'muted'}`}>{t('hashtagsCount').replace('{n}', nTags)}{nTags > 30 ? ` ${t('hashtagsOver')}` : ''}</p>
               {nTags > 30 && <div className="warn red"><IconWarn size={17} /><div><b>{t('hashtagLimitTitle')}</b> {t('hashtagLimitBody').replace('{n}', nTags)}</div></div>}
               <div className="mt">
                 <label>{t('hashtagBank')} <span className="muted">{t('hashtagBankNote')}</span></label>
@@ -628,10 +632,10 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
                 ) : (
                   <div>
                     {hashtagGroups.map((g) => (
-                      <span key={g.id} className="chip" style={{ marginRight: 6, marginBottom: 6 }}>
-                        <button type="button" onClick={() => appendHashtagGroup(g)} style={{ border: 'none', background: 'transparent', fontWeight: 700, padding: 0, color: 'var(--ink)' }} title={g.tags}>{g.name} +</button>
-                        <button type="button" onClick={() => useGroupAsFirstComment(g)} style={{ border: 'none', background: 'transparent', fontWeight: 700, padding: 0, marginLeft: 4, color: 'var(--gold-text)' }} title={t('firstCommentUse')}>{t('firstCommentMark')}</button>
-                        {onDeleteHashtagGroup && <button type="button" aria-label={t('deleteGroupAria').replace('{name}', g.name)} onClick={() => onDeleteHashtagGroup(g)} style={{ border: 'none', background: 'transparent', color: 'var(--red-text)', fontWeight: 700, padding: 0, marginLeft: 2 }}>✕</button>}
+                      <span key={g.id} className="chip chip-spaced">
+                        <button type="button" className="chip-btn" onClick={() => appendHashtagGroup(g)} title={g.tags}>{g.name} +</button>
+                        <button type="button" className="chip-btn-brand" onClick={() => useGroupAsFirstComment(g)} title={t('firstCommentUse')}>{t('firstCommentMark')}</button>
+                        {onDeleteHashtagGroup && <button type="button" className="chip-btn-danger" aria-label={t('deleteGroupAria').replace('{name}', g.name)} onClick={() => onDeleteHashtagGroup(g)}>✕</button>}
                       </span>
                     ))}
                   </div>
@@ -640,8 +644,8 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
                   !showTagSave ? (
                     <button type="button" className="btn ghost small" onClick={() => setShowTagSave(true)}>{t('saveHashtagsGroup')}</button>
                   ) : (
-                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                      <input placeholder={t('groupNamePh')} value={tagName} onChange={(e) => setTagName(e.target.value)} style={{ flex: 1, minWidth: 180 }} aria-label={t('groupNameAria')} />
+                    <div className="flex-row">
+                      <input placeholder={t('groupNamePh')} value={tagName} onChange={(e) => setTagName(e.target.value)} className="grow-input" aria-label={t('groupNameAria')} />
                       <button type="button" className="btn small" onClick={saveAsHashtagGroup}>{t('saveGroupBtn')}</button>
                       <button type="button" className="btn ghost small" onClick={() => setShowTagSave(false)}>{t('cancel')}</button>
                     </div>
@@ -649,23 +653,19 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
                 )}
                 {bankMsg && <p className="small mt" role="status">{bankMsg}</p>}
               </div>
-              <label htmlFor="firstComment" style={{ marginTop: 14 }}>{t('firstCommentLabel')} <span className="muted">{t('firstCommentNote')}</span></label>
+              <label htmlFor="firstComment" className="label-mt">{t('firstCommentLabel')} <span className="muted">{t('firstCommentNote')}</span></label>
               <textarea id="firstComment" rows={2} maxLength={2200} placeholder="#your #hashtags #here" value={form.firstComment} onChange={(e) => set({ firstComment: e.target.value })} />
-              <p className="muted small" style={{ textAlign: 'right' }}>{(form.firstComment || '').length} / 2200 {t('charactersWord')}</p>
-              <label htmlFor="cta" style={{ marginTop: 14 }}>{t('ctaLabel')}</label>
+              <p className="muted small char-count">{(form.firstComment || '').length} / 2200 {t('charactersWord')}</p>
+              <label htmlFor="cta" className="label-mt">{t('ctaLabel')}</label>
               <input id="cta" placeholder={t('ctaPh')} value={form.cta} onChange={(e) => set({ cta: e.target.value })} />
-              <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
-                <button type="button" className="btn ghost" onClick={() => setStep(1)}>{t('backArrow')}</button>
-                <button type="button" className="btn primary" onClick={() => setStep(3)}>{t('continueSchedule')}</button>
-              </div>
+              {/* B5: no action row inside the step card — the sticky bar below is the ONLY action row (Back is the stepper). */}
             </div>
           )}
 
           {step === 3 && (
             <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                <h2 style={{ flex: 1, margin: 0 }}>{t('step3Title')}</h2>
-                <button type="button" className="btn ghost small" onClick={() => setStep(2)}>{t('backArrow')}</button>
+              <div className="step3-head">
+                <h2>{t('step3Title')}</h2>
               </div>
               <p className="muted small mb">{t('step3Sub')}</p>
               <div className="two-col">
@@ -683,30 +683,30 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
                   </select>
                 </div>
               </div>
-              <div style={{ marginTop: 16, borderTop: '1px solid var(--line)', paddingTop: 14 }}>
+              <div className="publish-section">
                 <label>{t('publishToLabel')} <span className="muted">{t('publishToNote')}</span></label>
                 {hasAccounts ? (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
+                  <div className="tick-list">
                     {igAccounts.map((a) => (
-                      <label key={a.igUserId} style={{ display: 'flex', gap: 8, alignItems: 'center', cursor: 'pointer', border: '1px solid var(--line)', borderRadius: 12, padding: '9px 14px' }}>
-                        <input type="checkbox" checked={(form.igTargets || []).includes(a.igUserId)} onChange={() => toggleTarget(a.igUserId)} style={{ width: 'auto' }} />
+                      <label key={a.igUserId} className="tick-row">
+                        <input type="checkbox" checked={(form.igTargets || []).includes(a.igUserId)} onChange={() => toggleTarget(a.igUserId)} className="auto-w" />
                         <b>Instagram</b> <span>@{a.username || a.igUserId}{a.isDefault ? ` ${t('defaultMark')}` : ''}</span>
                       </label>
                     ))}
                     {(form.igTargets || []).filter((id) => !igAccounts.some((a) => a.igUserId === id)).map((id) => (
-                      <label key={id} style={{ display: 'flex', gap: 8, alignItems: 'center', cursor: 'pointer', border: '1px solid var(--line)', borderRadius: 12, padding: '9px 14px' }}>
-                        <input type="checkbox" checked onChange={() => toggleTarget(id)} style={{ width: 'auto' }} />
+                      <label key={id} className="tick-row">
+                        <input type="checkbox" checked onChange={() => toggleTarget(id)} className="auto-w" />
                         <b>Instagram</b> <span>@{id} {t('disconnectedMark')}</span>
                       </label>
                     ))}
                     {ytStatus?.connected ? (
-                      <label style={{ display: 'flex', gap: 8, alignItems: 'center', cursor: 'pointer', border: '1px solid var(--line)', borderRadius: 12, padding: '9px 14px' }}>
-                        <input type="checkbox" checked={Boolean(form.youtubeEnabled)} onChange={(e) => set({ youtubeEnabled: e.target.checked })} style={{ width: 'auto' }} />
+                      <label className="tick-row">
+                        <input type="checkbox" checked={Boolean(form.youtubeEnabled)} onChange={(e) => set({ youtubeEnabled: e.target.checked })} className="auto-w" />
                         <b>YouTube</b> <span className="muted small">{ytStatus.channelTitle || t('yourChannel')}</span>
                       </label>
                     ) : (
-                      <span style={{ display: 'flex', gap: 8, alignItems: 'center', border: '1px solid var(--line)', borderRadius: 12, padding: '9px 14px', opacity: 0.75 }}>
-                        <input type="checkbox" checked={false} disabled readOnly style={{ width: 'auto' }} />
+                      <span className="tick-row-static">
+                        <input type="checkbox" checked={false} disabled readOnly className="auto-w" />
                         <b>YouTube</b>
                         {ytStatus && !ytStatus.configured
                           ? <span className="muted small">{t('ytNotSetup')}</span>
@@ -715,19 +715,19 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
                     )}
                   </div>
                 ) : (
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
-                  <label style={{ display: 'inline-flex', gap: 8, alignItems: 'center', cursor: 'pointer', border: '1px solid var(--line)', borderRadius: 999, padding: '8px 14px' }}>
-                    <input type="checkbox" checked={Boolean(form.igTick)} onChange={(e) => set({ igTick: e.target.checked })} style={{ width: 'auto' }} />
+                <div className="tick-pills">
+                  <label className="tick-pill">
+                    <input type="checkbox" checked={Boolean(form.igTick)} onChange={(e) => set({ igTick: e.target.checked })} className="auto-w" />
                     <b>Instagram</b>
                   </label>
                   {ytStatus?.connected ? (
-                    <label style={{ display: 'inline-flex', gap: 8, alignItems: 'center', cursor: 'pointer', border: '1px solid var(--line)', borderRadius: 999, padding: '8px 14px' }}>
-                      <input type="checkbox" checked={Boolean(form.youtubeEnabled)} onChange={(e) => set({ youtubeEnabled: e.target.checked })} style={{ width: 'auto' }} />
+                    <label className="tick-pill">
+                      <input type="checkbox" checked={Boolean(form.youtubeEnabled)} onChange={(e) => set({ youtubeEnabled: e.target.checked })} className="auto-w" />
                       <b>YouTube</b> <span className="muted small">{ytStatus.channelTitle || t('yourChannel')}</span>
                     </label>
                   ) : (
-                    <span style={{ display: 'inline-flex', gap: 8, alignItems: 'center', border: '1px solid var(--line)', borderRadius: 999, padding: '8px 14px', opacity: 0.75 }}>
-                      <input type="checkbox" checked={false} disabled readOnly style={{ width: 'auto' }} />
+                    <span className="tick-pill-static">
+                      <input type="checkbox" checked={false} disabled readOnly className="auto-w" />
                       <b>YouTube</b>
                       {ytStatus && !ytStatus.configured
                         ? <span className="muted small">{t('ytNotSetup')}</span>
@@ -737,10 +737,10 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
                 </div>
                 )}
                 {form.youtubeEnabled && ytStatus?.connected && (
-                  <div style={{ marginTop: 12 }}>
+                  <div className="yt-fields">
                     <label htmlFor="youtubeTitle">{t('ytTitleLabel')} <span className="muted">{t('ytTitleNote')}</span></label>
                     <input id="youtubeTitle" maxLength={100} placeholder={t('ytTitlePh')} value={form.youtubeTitle} onChange={(e) => set({ youtubeTitle: e.target.value })} />
-                    <div className="two-col" style={{ marginTop: 12 }}>
+                    <div className="two-col mt12">
                       <div>
                         <label htmlFor="ytVisibility">{t('ytVisibilityLabel')}</label>
                         <select id="ytVisibility" value={form.ytVisibility} onChange={(e) => { ytVisTouchedRef.current = true; set({ ytVisibility: e.target.value }) }}>
@@ -751,51 +751,51 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
                       </div>
                       <div>
                         <label>{t('madeForKids')} <span className="muted">{t('madeForKidsNote')}</span></label>
-                        <div style={{ display: 'flex', gap: 8, marginTop: 2 }}>
+                        <div className="kids-row">
                           {[{ v: false, label: t('noWord') }, { v: true, label: t('yesWord') }].map((o) => (
-                            <label key={o.label} style={{ display: 'inline-flex', gap: 6, alignItems: 'center', cursor: 'pointer', border: '1px solid var(--line)', borderRadius: 999, padding: '7px 14px' }}>
-                              <input type="radio" name="ytMadeForKids" checked={Boolean(form.ytMadeForKids) === o.v} onChange={() => set({ ytMadeForKids: o.v })} style={{ width: 'auto' }} />
+                            <label key={o.label} className="kid-pill">
+                              <input type="radio" name="ytMadeForKids" checked={Boolean(form.ytMadeForKids) === o.v} onChange={() => set({ ytMadeForKids: o.v })} className="auto-w" />
                               <b>{o.label}</b>
                             </label>
                           ))}
                         </div>
                       </div>
                     </div>
-                    <p className="muted small" style={{ marginTop: 6 }}>{t('ytApprovalShort')}</p>
+                    <p className="muted small mt6">{t('ytApprovalShort')}</p>
                   </div>
                 )}
                 {!igTicked && form.youtubeEnabled && ytStatus?.connected && (
-                  <p className="muted small" style={{ marginTop: 8 }}>{t('ytOnlyNote')}</p>
+                  <p className="muted small mt8">{t('ytOnlyNote')}</p>
                 )}
                 {!igTicked && !form.youtubeEnabled && (
-                  <p className="small" style={{ marginTop: 8, color: 'var(--red-text)' }}>{t('tickOnePlatform')}</p>
+                  <p className="small mt8 bad-text">{t('tickOnePlatform')}</p>
                 )}
               </div>
-              <label htmlFor="scheduleTime" style={{ marginTop: 14 }}>{t('scheduleTimeLabel')}</label>
+              <label htmlFor="scheduleTime" className="label-mt">{t('scheduleTimeLabel')}</label>
               <input id="scheduleTime" type="datetime-local" value={form.scheduleTime && form.scheduleTime.length > 16 ? toLocalInputValue(form.scheduleTime) : form.scheduleTime} onChange={(e) => set({ scheduleTime: e.target.value })} />
-              <div style={{ marginTop: 10 }}>
-                <div className="small" style={{ fontWeight: 600 }}>{t('bestTimesTitle')}</div>
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 6 }}>
+              <div className="best-times">
+                <div className="small best-times-title">{t('bestTimesTitle')}</div>
+                <div className="best-times-row">
                   {bestTimeSlots(t).map((s) => (
                     <button key={s.key} type="button" className="btn ghost small" onClick={() => set({ scheduleTime: toLocalInputValue(s.date) })}>{s.label}</button>
                   ))}
                 </div>
-                <p className="muted small" style={{ marginTop: 6 }}>{t('bestTimesNote')}</p>
+                <p className="muted small best-times-note">{t('bestTimesNote')}</p>
               </div>
               {suggestion && (
                 <div className="warn blue">
                   <IconCheck size={17} />
                   <div>
                     <b>{t('suggestedTime').replace('{label}', suggestionLabel)}</b> {t('suggestedBody')}
-                    <div style={{ marginTop: 8 }}>
+                    <div className="mt8">
                       <button type="button" className="btn ghost small" onClick={() => set({ scheduleTime: toLocalInputValue(suggestion) })}>{t('useSlot').replace('{label}', suggestionLabel)}</button>
                     </div>
                   </div>
                 </div>
               )}
               <p className="muted small mt">{t('eveningsNote')}</p>
-              <label style={{ display: 'flex', gap: 8, alignItems: 'center', cursor: 'pointer', marginTop: 14 }}>
-                <input type="checkbox" checked={Boolean(form.repeatWeekly)} onChange={(e) => set({ repeatWeekly: e.target.checked })} style={{ width: 'auto' }} />
+              <label className="repeat-row">
+                <input type="checkbox" checked={Boolean(form.repeatWeekly)} onChange={(e) => set({ repeatWeekly: e.target.checked })} className="auto-w" />
                 <span><b>{t('repeatWeeklyLabel')}</b> <span className="muted small">{t('repeatWeeklyNote')}</span></span>
               </label>
               {duplicateOf && <div className="warn amber"><IconWarn size={17} /><div>{t('duplicateWarn').replace('{status}', duplicateOf.status).replace('{time}', duplicateOf.scheduleTime ? new Date(duplicateOf.scheduleTime).toLocaleString() : t('noTimeWord'))}</div></div>}
@@ -803,18 +803,18 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
               {feedVerticalWarn && <div className="warn red"><IconWarn size={17} /><div>{t('feedCropWarn').replace('{ratio}', ratio?.toFixed(2))}</div></div>}
               {error && <div className="alert error">{error}</div>}
               {savedNote && <div className="alert success">{savedNote}</div>}
-              <div style={{ border: '1px solid var(--line)', borderRadius: 12, padding: '12px 14px', marginTop: 16 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <div className="preflight-box">
+                <div className="preflight-head">
                   <b>{t('preflightTitle')}</b>
                   <button type="button" className="btn ghost small" disabled={preflightBusy} onClick={runPreflight}>{preflightBusy ? t('checkingWord') : t('recheckBtn')}</button>
                 </div>
-                <p className="muted small" style={{ margin: '4px 0 6px' }}>{t('preflightSub')}</p>
+                <p className="muted small preflight-sub">{t('preflightSub')}</p>
                 {preflightBusy && !preflight && <p className="muted small">{t('checkingWord')}</p>}
                 {preflight && (preflight.checks || []).map((c) => (
-                  <div key={c.id} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginTop: 6 }}>
+                  <div key={c.id} className="preflight-row">
                     {c.ok ? <IconCheck size={17} /> : <IconWarn size={17} />}
                     <div>
-                      <span style={{ color: c.ok ? 'var(--green-text)' : 'var(--red-text)', fontWeight: 600 }}>{c.ok ? t('goodWord') : t('problemWord')}</span>{c.message}
+                      <span className={`preflight-status ${c.ok ? 'ok-text' : 'bad-text'}`}>{c.ok ? t('goodWord') : t('problemWord')}</span>{c.message}
                       {!c.ok && c.fix && (
                         <div className="muted small">{t('fixWord')}{c.fix}
                           {c.id === 'connection' && onNavigate ? <> <button type="button" className="btn ghost small" onClick={() => onNavigate('connections')}>{t('openConnections')}</button></> : null}
@@ -824,7 +824,7 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
                   </div>
                 ))}
                 {preflight && (
-                  <p className="small" style={{ marginTop: 8, fontWeight: 600, color: preflight.ok ? 'var(--green-text)' : 'var(--red-text)' }}>
+                  <p className={`small preflight-verdict ${preflight.ok ? 'ok-text' : 'bad-text'}`}>
                     {preflight.ok ? t('preflightOk') : t('preflightBad')}
                   </p>
                 )}
@@ -873,20 +873,29 @@ export default function Studio({ editing, seed, media, templates, hashtagGroups,
               </div>
             </div>
             <p className="muted small mt">{t('scoreMeta').replace('{tags}', nTags).replace('{chars}', form.caption.length).replace('{format}', form.format)}{reelSafe ? t('reelSafeMark') : ''}</p>
-            <p className="muted small" style={{ marginTop: 6 }}>{t('scoreExplain')}</p>
+            <p className="muted small mt6">{t('scoreExplain')}</p>
           </div>
         </div>
       </div>
 
-      <div className="sticky-bar">
-        <div>
-          <b>{editing ? t('editingPost') : t('newPostWord')}</b> <span className="muted small">· {form.platform} · {form.format} · {t('scoreOf').replace('{score}', score)}</span>
-          {!canSave && <div className="muted small" style={{ marginTop: 2 }}>{canSaveDraft ? t('canSaveHintDraft') : t('canSaveHintMedia')}</div>}
-        </div>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          {onCancel && <button type="button" className="btn ghost small" onClick={onCancel}>{t('cancel')}</button>}
-          <button type="button" className="btn ghost small" disabled={!canSaveDraft || saving} onClick={() => submit('draft')}>{t('saveDraftBtn')}</button>
-          <button type="button" className="btn primary small" disabled={!canSave || saving} onClick={() => submit('scheduled')}>{saving ? t('savingWord') : editing ? t('saveChangesBtn') : t('schedulePostBtn')}</button>
+      {/* B5: the composer status + save hint live in the content
+          flow, NOT in the sticky bar, so the bar stays one line. */}
+      <p className="studio-status">
+        <b>{editing ? t('editingPost') : t('newPostWord')}</b> <span className="muted small">· {form.platform} · {form.format} · {t('scoreOf').replace('{score}', score)}</span>
+        {!canSave && <span className="muted small studio-status-hint"> · {canSaveDraft ? t('canSaveHintDraft') : t('canSaveHintMedia')}</span>}
+      </p>
+
+      {/* B5: the sticky bar is the ONLY action row — Save draft
+          (secondary) + ONE primary whose label follows the step:
+          Continue on steps 1–2, Schedule post on step 3. */}
+      <div className="sticky-bar studio-bar">
+        <div className="studio-bar-actions">
+          <button type="button" className="btn small" disabled={!canSaveDraft || saving} onClick={() => submit('draft')}>{t('saveDraftBtn')}</button>
+          {step < 3 ? (
+            <button type="button" className="btn primary small" onClick={() => setStep(step + 1)}>{t('continueBtn')}</button>
+          ) : (
+            <button type="button" className="btn primary small" disabled={!canSave || saving} onClick={() => submit('scheduled')}>{saving ? t('savingWord') : editing ? t('saveChangesBtn') : t('schedulePostBtn')}</button>
+          )}
         </div>
       </div>
     </div>

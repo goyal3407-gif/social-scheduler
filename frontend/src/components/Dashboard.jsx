@@ -123,12 +123,21 @@ export default function Dashboard({ posts, media, user, loading, error, onRetry,
     setNudgeDismissed(true)
     try { localStorage.setItem('ss-nudge-day', new Date().toDateString()) } catch { /* stays hidden this session */ }
   }
+  const [showAllNotifs, setShowAllNotifs] = useState(false)
+  // B5: the tomorrow nudge is hidden until at least one account is
+  // connected (Instagram flag, a connected YouTube channel, or any
+  // connected Instagram account row).
+  const anyConnected = Boolean(settings?.instagramConnected || yt?.connected || (settings?.instagramAccounts || []).length > 0)
   const hasTomorrow = useMemo(() => {
     const tm = new Date(); tm.setDate(tm.getDate() + 1)
     const key = tm.toDateString()
     return (posts || []).some((p) => p.status === 'scheduled' && p.scheduleTime && new Date(p.scheduleTime).toDateString() === key)
   }, [posts])
 
+  // B5 (item 1): the greeting header carries the screen's ONE
+  // primary action — this Create Post button. Every other action
+  // on Home is secondary (.btn / .btn ghost).
+  const createBtn = <button type="button" className="btn primary" onClick={onCreate}>{t('createPost')}</button>
   // Prompt-4: with NEITHER platform connected, the checklist is
   // the primary surface (its first step is Connect Instagram) and
   // the composer's Create Post steps back to a secondary button
@@ -140,14 +149,14 @@ export default function Dashboard({ posts, media, user, loading, error, onRetry,
         <div><h2>{t('gettingStarted')}</h2><p>{t('doneOfTotal').replace('{done}', checklist.filter((c) => c.done).length).replace('{total}', checklist.length)}</p></div>
         <button type="button" className="btn ghost small" onClick={onDismissChecklist}>{t('dismiss')}</button>
       </div>
-      <div className="pbar" style={{ marginBottom: 12 }} aria-hidden="true"><span style={{ width: `${(checklist.filter((c) => c.done).length / checklist.length) * 100}%`, background: 'var(--gold)' }} /></div>
+      <div className="pbar dash-check-pbar" aria-hidden="true"><span style={{ width: `${(checklist.filter((c) => c.done).length / checklist.length) * 100}%` }} /></div>
       <div>
         {checklist.map((c, i) => (
-          <div key={c.label} style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '8px 0', borderTop: i ? '1px solid var(--line-2)' : 'none' }}>
-            <span aria-hidden="true" style={{ flex: 'none', width: 22, height: 22, borderRadius: '50%', display: 'grid', placeItems: 'center', fontSize: 12, fontWeight: 700, background: c.done ? 'var(--green-soft)' : 'var(--surface-2)', color: c.done ? 'var(--green)' : 'var(--muted)', border: '1px solid var(--line)' }}>{c.done ? '✓' : i + 1}</span>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <b style={{ color: c.done ? 'var(--muted)' : 'var(--ink)', textDecoration: c.done ? 'line-through' : 'none' }}>{c.label}</b>
-              {!c.done && <span className="muted small" style={{ display: 'block' }}>{c.hint}</span>}
+          <div key={c.label} className="check-row">
+            <span aria-hidden="true" className={`check-badge${c.done ? ' done' : ''}`}>{c.done ? '✓' : i + 1}</span>
+            <div className="check-main">
+              <b className={c.done ? 'check-done-label' : undefined}>{c.label}</b>
+              {!c.done && <span className="muted small check-hint">{c.hint}</span>}
             </div>
             {!c.done && (
               c.tab === 'studio'
@@ -169,22 +178,22 @@ export default function Dashboard({ posts, media, user, loading, error, onRetry,
       <section className="home-head" aria-label="Next scheduled post">
         <h1>{greeting}</h1>
         {loading ? (
-          <div style={{ marginTop: 14 }}><div className="skel" style={{ height: 20, width: '55%' }} /><div className="skel" style={{ height: 16, width: '40%', marginTop: 10 }} /></div>
+          <div className="dash-skel-wrap"><div className="skel skel-line-a" /><div className="skel skel-line-b" /></div>
         ) : next ? (
           <>
-            <p className="muted" style={{ marginTop: 6 }}>{t('nextUpPrefix')}: <b style={{ color: 'var(--ink)' }}>{next.caption ? (next.caption.length > 90 ? `${next.caption.slice(0, 90)}…` : next.caption) : t('untitledPost')}</b></p>
-            <p className="muted small" style={{ marginTop: 4 }}>{next.platform || 'Instagram'} · {next.format || 'REELS'} · {fmtDateTime(next.scheduleTime)} · {t('nextInLabel').replace('{label}', cd.label)}{next.hashtags ? ` · ${next.hashtags}` : ''}</p>
-            <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
-              <button type="button" className={nothingConnected ? 'btn ghost' : 'btn'} onClick={onCreate}>{t('createPost')}</button>
+            <p className="muted home-next-line">{t('nextUpPrefix')}: <b>{next.caption ? (next.caption.length > 90 ? `${next.caption.slice(0, 90)}…` : next.caption) : t('untitledPost')}</b></p>
+            <p className="muted small home-next-meta">{next.platform || 'Instagram'} · {next.format || 'REELS'} · {fmtDateTime(next.scheduleTime)} · {t('nextInLabel').replace('{label}', cd.label)}{next.hashtags ? ` · ${next.hashtags}` : ''}</p>
+            <div className="home-actions">
+              {createBtn}
               <button type="button" className="btn ghost" onClick={() => onPublish && onPublish(next)} disabled={publishingId === next.id}>{t('publishNextNow')}</button>
               <button type="button" className="btn ghost" onClick={onGoQueue}>{t('viewQueue')}</button>
             </div>
           </>
         ) : (
           <>
-            <p className="muted" style={{ marginTop: 6 }}>{t('nothingScheduledYet')}</p>
-            <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
-              <button type="button" className={nothingConnected ? 'btn ghost' : 'btn'} onClick={onCreate}>{t('createPost')}</button>
+            <p className="muted home-next-line">{t('nothingScheduledYet')}</p>
+            <div className="home-actions">
+              {createBtn}
               <button type="button" className="btn ghost" onClick={onGoQueue}>{t('viewQueue')}</button>
             </div>
           </>
@@ -196,11 +205,11 @@ export default function Dashboard({ posts, media, user, loading, error, onRetry,
       {error && <ErrorBox error={error} onRetry={onRetry} />}
 
       {!loading && brokenIg.length > 0 && (
-        <div className="alert error" role="alert" style={{ marginTop: 16 }}>
-          <div style={{ flex: 1 }}>
+        <div className="alert error dash-alert" role="alert">
+          <div className="alert-body">
             <b>{t('brokenTitle')}{brokenIg.length === 1 && brokenIg[0] ? ` ${t('brokenFor').replace('{name}', brokenIg[0])}` : ''}</b> — {brokenIg.length === 1 ? t('brokenBodyOne') : t('brokenBodyMany')}
-            <div style={{ marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <button type="button" className="btn primary small" disabled={reconnectBusy} onClick={startReconnect}>{reconnectBusy ? t('openingIgLogin') : t('reconnectInstagram')}</button>
+            <div className="alert-actions">
+              <button type="button" className="btn small" disabled={reconnectBusy} onClick={startReconnect}>{reconnectBusy ? t('openingIgLogin') : t('reconnectInstagram')}</button>
               <button type="button" className="btn ghost small" onClick={() => onNavigate && onNavigate('connections')}>{t('openConnections')}</button>
             </div>
           </div>
@@ -208,18 +217,22 @@ export default function Dashboard({ posts, media, user, loading, error, onRetry,
       )}
 
       {!loading && (
-        <section className="card" style={{ padding: '14px 16px', marginTop: 16 }} aria-label={t('todayGlance')}>
-          <h2 style={{ margin: 0, fontSize: 17 }}>{t('todayGlance')}</h2>
-          <div className="stats stats-3" style={{ marginTop: 12 }}>
-            <div className="stat"><b>{publishedToday}</b><span>{t('publishedToday')}</span><small>{postedThisWeek} {t('thisWeekSuffix')}{streak > 0 ? ` · ${t('dayStreakSuffix').replace('{n}', streak)}` : ''}</small></div>
-            <div className="stat"><b>{upcoming.length}</b><span>{t('scheduled')}</span><small>{next ? `${new Date(next.scheduleTime).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} · ${new Date(next.scheduleTime).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} · ${t('nextInLabel').replace('{label}', cd.label)}` : t('nothingScheduled')}</small></div>
-            <div className="stat"><b style={problemCount > 0 ? { color: 'var(--red-text)' } : undefined}>{problemCount}</b><span>{t('problems')}</span><small>{problemCount > 0 ? problemBits : t('allGood')}</small></div>
-          </div>
+        <section className="card glance-card" aria-label={t('todayGlance')}>
+          <h2 className="glance-title">{t('todayGlance')}</h2>
+          {publishedToday === 0 && upcoming.length === 0 && problemCount === 0 ? (
+            <p className="muted glance-empty">{t('glanceEmpty')}</p>
+          ) : (
+            <div className="stats stats-3 glance-stats">
+              <div className="stat"><b>{publishedToday}</b><span>{t('publishedToday')}</span><small>{postedThisWeek > 0 || streak > 0 ? `${postedThisWeek} ${t('thisWeekSuffix')}${streak > 0 ? ` · ${t('dayStreakSuffix').replace('{n}', streak)}` : ''}` : t('publishedHint')}</small></div>
+              <div className="stat"><b>{upcoming.length}</b><span>{t('scheduled')}</span><small>{next ? `${new Date(next.scheduleTime).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} · ${new Date(next.scheduleTime).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} · ${t('nextInLabel').replace('{label}', cd.label)}` : t('nothingScheduled')}</small></div>
+              <div className="stat"><b className={problemCount > 0 ? 'stat-num-danger' : undefined}>{problemCount}</b><span>{t('problems')}</span><small>{problemCount > 0 ? problemBits : t('problemsHint')}</small></div>
+            </div>
+          )}
           <div className="conn-strip">
             <span className="conn-chip">
               <span className={`dot ${!settings ? 'amber' : brokenIg.length > 0 || !settings.instagramConnected ? 'off' : ''}`} aria-hidden="true" />
               Instagram · {!settings ? '…' : brokenIg.length > 0 ? t('connectionBroken') : settings.instagramConnected ? `${t('connected')}${settings.instagramHandle ? ` · @${settings.instagramHandle}` : ''}` : t('notConnected')}
-              {!inWorkspace && settings && brokenIg.length > 0 && <button type="button" className="btn primary small" disabled={reconnectBusy} onClick={startReconnect}>{reconnectBusy ? '…' : t('reconnect')}</button>}
+              {!inWorkspace && settings && brokenIg.length > 0 && <button type="button" className="btn small" disabled={reconnectBusy} onClick={startReconnect}>{reconnectBusy ? '…' : t('reconnect')}</button>}
             </span>
             <span className="conn-chip">
               <span className={`dot ${yt == null ? 'amber' : yt.connected ? '' : 'off'}`} aria-hidden="true" />
@@ -229,18 +242,18 @@ export default function Dashboard({ posts, media, user, loading, error, onRetry,
               <button type="button" className="btn ghost small" onClick={() => onNavigate && onNavigate('connections')}>{t('openConnections')}</button>
             )}
             {problemCount > 0 && (
-              <button type="button" className="btn small" onClick={onGoQueue} style={{ marginLeft: 'auto' }}>{t('reviewInQueue')}</button>
+              <button type="button" className="btn small conn-review-btn" onClick={onGoQueue}>{t('reviewInQueue')}</button>
             )}
           </div>
         </section>
       )}
 
       {!loading && overdue && overdue.length > 0 && (
-        <div className="alert error" role="alert" style={{ marginTop: 16 }}>
-          <div style={{ flex: 1 }}>
+        <div className="alert error dash-alert" role="alert">
+          <div className="alert-body">
             <b>{t(overdue.length === 1 ? 'overdueTitleOne' : 'overdueTitleMany').replace('{n}', overdue.length)}</b> — {t('overdueBody')}
-            <div style={{ marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <button type="button" className="btn primary small" disabled={publishingId === 'due'} onClick={onPublishDue}>{publishingId === 'due' ? t('publishingWord') : t('publishDueCount').replace('{n}', overdue.length)}</button>
+            <div className="alert-actions">
+              <button type="button" className="btn small" disabled={publishingId === 'due'} onClick={onPublishDue}>{publishingId === 'due' ? t('publishingWord') : t('publishDueCount').replace('{n}', overdue.length)}</button>
               <button type="button" className="btn ghost small" onClick={onGoQueue}>{t('reviewInQueue')}</button>
             </div>
           </div>
@@ -248,12 +261,12 @@ export default function Dashboard({ posts, media, user, loading, error, onRetry,
       )}
 
       {!loading && failedPosts.length > 0 && (
-        <div className="alert error" role="alert" style={{ marginTop: 16 }}>
-          <div style={{ flex: 1 }}>
+        <div className="alert error dash-alert" role="alert">
+          <div className="alert-body">
             <b>{t(failedPosts.length === 1 ? 'failedTitleOne' : 'failedTitleMany').replace('{n}', failedPosts.length)}</b>
             {failedPosts[0].retryPending ? ` — ${t('failedRetryNote')}` : ` — ${t('failedRetryUsed')}`}
-            {failedPosts[0].lastPublishError && <div className="small" style={{ marginTop: 4 }}>{t('latestReason')} {failedPosts[0].lastPublishError}</div>}
-            <div style={{ marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {failedPosts[0].lastPublishError && <div className="small home-next-meta">{t('latestReason')} {failedPosts[0].lastPublishError}</div>}
+            <div className="alert-actions">
               <button type="button" className="btn ghost small" onClick={onGoQueue}>{t('reviewInQueue')}</button>
             </div>
           </div>
@@ -264,23 +277,26 @@ export default function Dashboard({ posts, media, user, loading, error, onRetry,
         <section className="card section" aria-label={t('notificationsTitle')}>
           <div className="card-head"><div><h2>{t('notificationsTitle')}</h2><p>{t('notificationsSub')}</p></div></div>
           <div>
-            {notifications.slice(0, 5).map((n) => (
-              <p key={n.id} className="small" style={{ padding: '6px 0', color: n.read ? 'var(--muted)' : 'var(--ink)' }}>
+            {(showAllNotifs ? notifications : notifications.slice(0, 3)).map((n) => (
+              <p key={n.id} className={`small notif-item${n.read ? '' : ' unread'}`}>
                 {n.type === 'publish-success' ? '✅ ' : n.type === 'announcement' ? '📣 ' : '⚠️ '}<b>{n.type === 'publish-success' ? t('published') : n.type === 'announcement' ? (n.title || 'KiluaAI') : t('publishProblem')}</b>
                 <span className="muted"> · {fmtDateTime(n.createdAt)}</span>
                 <br /><span>{String(n.message || '').replace(/^Publish (failed|ed)[^:]*: /, '')}</span>
               </p>
             ))}
+            {!showAllNotifs && notifications.length > 3 && (
+              <div className="notif-more"><button type="button" className="btn ghost small" onClick={() => setShowAllNotifs(true)}>{t('viewAll')}</button></div>
+            )}
           </div>
         </section>
       )}
 
       {!nothingConnected ? checklistSection : null}
 
-      {!loading && !hasTomorrow && !nudgeDismissed && (
+      {!loading && anyConnected && !hasTomorrow && !nudgeDismissed && (
         <div className="warn amber nudge" role="status">
           <IconClock size={17} />
-          <div style={{ flex: 1 }}><b>{t('tomorrowTitle')}</b><br />{t('tomorrowBody')}</div>
+          <div className="nudge-text"><b>{t('tomorrowTitle')}</b><br />{t('tomorrowBody')}</div>
           <button type="button" className="btn small" onClick={onCreate}>{t('scheduleAPost')}</button>
           <button type="button" className="nudge-close" aria-label={t('dismissToday')} onClick={dismissNudge}>✕</button>
         </div>

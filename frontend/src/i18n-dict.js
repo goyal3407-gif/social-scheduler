@@ -126,6 +126,14 @@ export const DICT = {
     tomorrowBody: 'Schedule a post now and it will publish itself right on time.',
     scheduleAPost: 'Schedule a post', dismissToday: 'Dismiss for today',
     nextInLabel: 'in {label}',
+    // Round 3 B5: Home + Studio refinement
+    viewAll: 'View all',
+    glanceEmpty: 'Nothing to show yet — schedule your first post and today’s numbers will appear here.',
+    problemsHint: 'Any failed post will show here.',
+    publishedHint: 'Published posts will count here.',
+    continueBtn: 'Continue',
+    stepLabelCaption: 'Caption',
+    stepLabelSchedule: 'Schedule',
     // Batch 5: Queue
     queueSub: 'Everything you\'ve planned — drag-free, but organised. Switch to Kanban to see it by status.',
     queueOverdueTitle: '{n} overdue',
@@ -774,6 +782,14 @@ export const DICT = {
     tomorrowBody: 'Abhi ek post schedule karein, wo samay par apne aap publish ho jayegi.',
     scheduleAPost: 'Post schedule karein', dismissToday: 'Aaj ke liye hatayein',
     nextInLabel: '{label} mein',
+    // Round 3 B5: Home + Studio refinement
+    viewAll: 'Sab dekhein',
+    glanceEmpty: 'Abhi kuch dikhane ko nahi hai — apni pehli post schedule karein, aaj ke numbers yahan dikhenge.',
+    problemsHint: 'Koi bhi fail post yahan dikhega.',
+    publishedHint: 'Publish hue posts yahan gine jayenge.',
+    continueBtn: 'Aage badhein',
+    stepLabelCaption: 'Caption',
+    stepLabelSchedule: 'Schedule',
     // Batch 5: Queue
     queueSub: 'Aapki saari planned posts — Kanban par switch karke status ke hisaab se dekhein.',
     queueOverdueTitle: '{n} posts overdue',
